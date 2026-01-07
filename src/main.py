@@ -10,6 +10,7 @@ import uuid
 import concurrent.futures
 import asyncio
 import threading
+import logging
 from pathlib import Path
 from typing import List, Optional, Literal, Dict, Any
 from datetime import timedelta
@@ -26,6 +27,12 @@ except ImportError:
     openpyxl = None
 
 load_dotenv()
+
+# Set up logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 app = FastAPI()
 
@@ -75,7 +82,6 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
     provider_results: Optional[List[ProviderResult]] = None
-    leaderboard_metrics_path: Optional[str] = None
     leaderboard_summary: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None
 
@@ -101,7 +107,7 @@ def find_available_port(start_port: int = 8000) -> int:
     """Find an available port starting from start_port."""
     port = start_port
     while True:
-        print(f"Checking port {port}")
+        logger.debug(f"Checking port {port}")
         if is_port_in_use(port):
             port += 1
             if port > 65535:
@@ -237,7 +243,7 @@ def evaluate_provider(
             str(port),
         ]
 
-        print(f"Running {run_id} with command: ", " ".join(eval_cmd))
+        logger.info(f"Running {run_id} with command: {' '.join(eval_cmd)}")
 
         subprocess.run(
             eval_cmd,
@@ -314,7 +320,7 @@ def run_evaluation_task(
 ):
     """Run the STT evaluation in the background."""
     try:
-        print(
+        logger.info(
             f"Running evaluation task {task_id} with {len(request.providers)} providers"
         )
         with tasks_lock:
@@ -361,7 +367,7 @@ def run_evaluation_task(
                         local_wav_path = audios_wav_dir / f"{audio_id}.wav"
                         local_pcm16_path = audios_pcm16_dir / f"{audio_id}.wav"
 
-                        print(
+                        logger.info(
                             f"Downloading audio file from {bucket}/{key} to {local_wav_path}"
                         )
                         s3.download_file(bucket, key, str(local_wav_path))
@@ -383,7 +389,9 @@ def run_evaluation_task(
                             str(local_pcm16_path),
                         ]
 
-                        print(f"Converting audio file to pcm16 {local_pcm16_path}")
+                        logger.info(
+                            f"Converting audio file to pcm16 {local_pcm16_path}"
+                        )
                         subprocess.run(cmd, check=True)
 
                         # Write CSV row
@@ -404,7 +412,7 @@ def run_evaluation_task(
                 # Run pense STT eval for all providers in parallel
                 provider_results = []
 
-                print(f"Running {len(request.providers)} providers in parallel")
+                logger.info(f"Running {len(request.providers)} providers in parallel")
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(request.providers)
@@ -426,6 +434,8 @@ def run_evaluation_task(
                     for future in concurrent.futures.as_completed(future_to_provider):
                         result = future.result()
                         provider_results.append(result)
+
+                logger.info("Completed running all providers in parallel")
 
                 # Check if all providers succeeded
                 all_succeeded = all(r.success for r in provider_results)
@@ -457,7 +467,8 @@ def run_evaluation_task(
 
                 leaderboard_prefix = f"stt/evals/{task_id}/leaderboard"
                 leaderboard_summary = None
-                metrics_path = None
+
+                logger.info(f"Running leaderboard command: {' '.join(leaderboard_cmd)}")
 
                 try:
                     subprocess.run(
@@ -467,6 +478,8 @@ def run_evaluation_task(
                         check=True,
                         cwd=temp_path,
                     )
+
+                    logger.info("Leaderboard command completed successfully")
 
                     # Upload leaderboard results
                     for root, dirs, files in os.walk(leaderboard_dir):
@@ -479,6 +492,9 @@ def run_evaluation_task(
 
                             # Read xlsx file and extract summary sheet
                             if file == "stt_leaderboard.xlsx" and openpyxl:
+                                logger.info(
+                                    f"Found leaderboard metrics file: {local_file_path}"
+                                )
                                 try:
                                     wb = openpyxl.load_workbook(
                                         str(local_file_path), data_only=True
@@ -491,8 +507,12 @@ def run_evaluation_task(
                                             for cell in ws[1]
                                             if cell.value is not None
                                         ]
+
+                                        logger.info("Preparing leaderboard summary")
+
                                         # Read all data rows
                                         leaderboard_summary = []
+
                                         for row in ws.iter_rows(
                                             min_row=2, values_only=False
                                         ):
@@ -513,21 +533,14 @@ def run_evaluation_task(
                                                     for v in row_dict.values()
                                                 ):
                                                     leaderboard_summary.append(row_dict)
+
+                                        logger.info(
+                                            f"Prepared leaderboard summary with {len(leaderboard_summary)} rows"
+                                        )
                                 except Exception as e:
                                     traceback.print_exc()
                                     # If reading xlsx fails, continue without summary
                                     pass
-
-                            # Generate presigned URL for metrics image
-                            if file == "all_metrics_by_run.png":
-                                metrics_path = s3.generate_presigned_url(
-                                    "get_object",
-                                    Params={
-                                        "Bucket": s3_bucket,
-                                        "Key": s3_key,
-                                    },
-                                    ExpiresIn=3600,  # 1 hour
-                                )
 
                 except subprocess.CalledProcessError as e:
                     # Leaderboard failure is not critical, continue
@@ -537,7 +550,6 @@ def run_evaluation_task(
                 with tasks_lock:
                     tasks[task_id]["status"] = TaskStatus.DONE.value
                     tasks[task_id]["provider_results"] = provider_results
-                    tasks[task_id]["leaderboard_metrics_path"] = metrics_path
                     tasks[task_id]["leaderboard_summary"] = leaderboard_summary
 
             except Exception as e:
@@ -590,7 +602,6 @@ async def evaluate_stt(request: STTEvaluationRequest):
         tasks[task_id] = {
             "status": TaskStatus.IN_PROGRESS.value,
             "provider_results": None,
-            "leaderboard_metrics_path": None,
             "leaderboard_summary": None,
             "error": None,
         }
@@ -623,7 +634,6 @@ async def get_evaluation_status(task_id: str):
         task_id=task_id,
         status=task["status"],
         provider_results=task["provider_results"],
-        leaderboard_metrics_path=task.get("leaderboard_metrics_path"),
         leaderboard_summary=task.get("leaderboard_summary"),
         error=task["error"],
     )

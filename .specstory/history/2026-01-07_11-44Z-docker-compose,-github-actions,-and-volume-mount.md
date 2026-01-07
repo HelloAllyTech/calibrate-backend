@@ -1527,3 +1527,300 @@ docker exec <container_name> ffmpeg -version
 
 ---
 
+_**User (2026-01-07 03:37Z)**_
+
+@ssh (1-19) 
+
+docker compose pull is doing this instead of fetching docker image 
+
+---
+
+_**Agent (model composer-1, mode Ask)**_
+
+
+
+---
+
+
+`docker compose pull` reads `docker-compose.yml` and tries to resolve variables, but they aren't set in your manual test. Since the workflow already runs `docker pull $IMAGE_NAME:$IMAGE_TAG`, we don't need `docker compose pull`. Checking the workflow to remove it:
+
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy.yml</summary>
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+Since the workflow already runs `docker pull $IMAGE_NAME:$IMAGE_TAG`, `docker compose pull` is redundant and requires variables to be set. Remove `docker compose pull`; docker-compose will use the locally pulled image.
+
+Here's the fix for the workflow:
+
+```yaml:.github/workflows/deploy.yml
+            # Navigate to directory with docker-compose.yml
+            cd /tmp
+
+            # Pull the latest image (force pull to ensure we get the latest)
+            docker pull $IMAGE_NAME:$IMAGE_TAG
+
+            # Stop and remove existing container if it exists
+            docker compose down || true
+
+            # Run new container with docker compose (uses the locally pulled image)
+            docker compose up -d
+```
+
+Remove the `docker compose pull` line. The explicit `docker pull` already fetches the image, and docker-compose will use it when you run `docker compose up -d`.
+
+If you want to ensure docker-compose always uses the latest image, you can use `docker compose up -d --pull always`, but since you're already pulling explicitly, it's redundant. The simpler approach is to remove `docker compose pull`.
+
+---
+
+_**User (2026-01-07 03:37Z)**_
+
+convert prints to logger logs @src/main.py 
+
+---
+
+_**Agent (model composer-1, mode Ask)**_
+
+
+
+---
+
+
+Identifying all `print()` statements and converting them to logger calls:
+
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "print\(" in "/Users/aman/Documents/repos/artpark/pense-backend/src/main.py" • 12 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/main.py` | `print(f"Checking port \{port\}")` | L103 |
+| `src/main.py` | `print(f"Running \{run_id\} with command: ", " ".join(eval_cmd))` | L239 |
+| `src/main.py` | `print(` | L316 |
+| `src/main.py` | `print(` | L363 |
+| `src/main.py` | `print(f"Converting audio file to pcm16 \{local_pcm16_path\}")` | L385 |
+| `src/main.py` | `print(f"Running \{len(request.providers)\} providers in parallel")` | L406 |
+| `src/main.py` | `print("Completed running all providers in parallel")` | L429 |
+| `src/main.py` | `print(f"Running leaderboard command: ", " ".join(leaderboard_cmd))` | L462 |
+| `src/main.py` | `print("Leaderboard command completed successfully")` | L473 |
+| `src/main.py` | `print(` | L486 |
+| `src/main.py` | `print("Preparing leaderboard summary")` | L502 |
+| `src/main.py` | `print(` | L528 |
+
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+Convert all `print()` statements to logger calls. Changes:
+
+1. Add logging import and setup at the top of the file:
+
+```python:src/main.py
+import os
+import csv
+import json
+import subprocess
+import tempfile
+import shutil
+import socket
+import traceback
+import uuid
+import concurrent.futures
+import asyncio
+import threading
+import logging
+from pathlib import Path
+from typing import List, Optional, Literal, Dict, Any
+from datetime import timedelta
+from enum import Enum
+import boto3
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+
+try:
+    import openpyxl
+except ImportError:
+    openpyxl = None
+
+load_dotenv()
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
+// ... existing code ...
+```
+
+2. Replace all print statements with logger calls:
+
+```python:src/main.py
+// ... existing code around line 103 ...
+def find_available_port(start_port: int = 8000) -> int:
+    """Find an available port starting from start_port."""
+    port = start_port
+    while True:
+        logger.debug(f"Checking port {port}")
+        if is_port_in_use(port):
+            port += 1
+            if port > 65535:
+                raise RuntimeError("No available ports found")
+            continue
+
+        return port
+// ... existing code ...
+```
+
+```python:src/main.py
+// ... existing code around line 239 ...
+        print(f"Running {run_id} with command: ", " ".join(eval_cmd))
+```
+Replace with:
+```python
+        logger.info(f"Running {run_id} with command: {' '.join(eval_cmd)}")
+```
+
+```python:src/main.py
+// ... existing code around line 316 ...
+        print(
+            f"Running evaluation task {task_id} with {len(request.providers)} providers"
+        )
+```
+Replace with:
+```python
+        logger.info(
+            f"Running evaluation task {task_id} with {len(request.providers)} providers"
+        )
+```
+
+```python:src/main.py
+// ... existing code around line 363 ...
+                        print(
+                            f"Downloading audio file from {bucket}/{key} to {local_wav_path}"
+                        )
+```
+Replace with:
+```python
+                        logger.info(
+                            f"Downloading audio file from {bucket}/{key} to {local_wav_path}"
+                        )
+```
+
+```python:src/main.py
+// ... existing code around line 385 ...
+                        print(f"Converting audio file to pcm16 {local_pcm16_path}")
+```
+Replace with:
+```python
+                        logger.info(f"Converting audio file to pcm16 {local_pcm16_path}")
+```
+
+```python:src/main.py
+// ... existing code around line 406 ...
+                print(f"Running {len(request.providers)} providers in parallel")
+```
+Replace with:
+```python
+                logger.info(f"Running {len(request.providers)} providers in parallel")
+```
+
+```python:src/main.py
+// ... existing code around line 429 ...
+                print("Completed running all providers in parallel")
+```
+Replace with:
+```python
+                logger.info("Completed running all providers in parallel")
+```
+
+```python:src/main.py
+// ... existing code around line 462 ...
+                print(f"Running leaderboard command: ", " ".join(leaderboard_cmd))
+```
+Replace with:
+```python
+                logger.info(f"Running leaderboard command: {' '.join(leaderboard_cmd)}")
+```
+
+```python:src/main.py
+// ... existing code around line 473 ...
+                    print("Leaderboard command completed successfully")
+```
+Replace with:
+```python
+                    logger.info("Leaderboard command completed successfully")
+```
+
+```python:src/main.py
+// ... existing code around line 486 ...
+                                print(
+                                    "Found leaderboard metrics file: ", local_file_path
+                                )
+```
+Replace with:
+```python
+                                logger.info(
+                                    f"Found leaderboard metrics file: {local_file_path}"
+                                )
+```
+
+```python:src/main.py
+// ... existing code around line 502 ...
+                                        print("Preparing leaderboard summary")
+```
+Replace with:
+```python
+                                        logger.info("Preparing leaderboard summary")
+```
+
+```python:src/main.py
+// ... existing code around line 528 ...
+                                        print(
+                                            f"Prepared leaderboard summary with {len(leaderboard_summary)} rows"
+                                        )
+```
+Replace with:
+```python
+                                        logger.info(
+                                            f"Prepared leaderboard summary with {len(leaderboard_summary)} rows"
+                                        )
+```
+
+Summary:
+- Add `import logging` at the top
+- Add logging configuration after `load_dotenv()`
+- Replace all `print()` calls with `logger.info()` or `logger.debug()` (use `debug` for verbose checks like port checking)
+
+This provides structured logging with timestamps and log levels instead of plain print statements.
+
+---
+
