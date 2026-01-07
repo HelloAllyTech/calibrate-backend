@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     libasound2-dev \
     portaudio19-dev \
     ffmpeg \
+    vim \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv

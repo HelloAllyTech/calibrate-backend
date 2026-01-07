@@ -1267,3 +1267,263 @@ Rebuild the Docker image; `simpleaudio` should compile successfully. The build t
 
 ---
 
+_**User (2026-01-07 03:37Z)**_
+
+@main.py (364-370) 
+
+@ssh (5-21) 
+
+getting this error on production - install ffmpeg in docker file
+
+@Dockerfile 
+
+---
+
+_**Agent (model composer-1, mode Agent)**_
+
+
+
+---
+
+
+Adding `ffmpeg` to the Dockerfile since the code uses it for audio conversion:
+
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/Dockerfile</summary>
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+Adding `ffmpeg` to the Dockerfile:
+
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/Dockerfile</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -2,5 +2,5 @@
+  FROM python:3.11-slim
+  
+- # Install build dependencies and audio libraries
++ # Install build dependencies, audio libraries, and ffmpeg
+  RUN apt-get update &amp;&amp; apt-get install -y \
+      gcc \
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -9,4 +9,5 @@
+      libasound2-dev \
+      portaudio19-dev \
++     ffmpeg \
+      &amp;&amp; rm -rf /var/lib/apt/lists/*
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `Dockerfile`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+Added `ffmpeg` to the Dockerfile. It's installed alongside the other dependencies and will be available when the code runs `ffmpeg` commands for audio conversion.
+
+The Dockerfile now installs:
+- Build tools (gcc, g++, make)
+- Audio libraries (libasound2-dev, portaudio19-dev)
+- **ffmpeg** (for audio conversion)
+
+Rebuild the Docker image and redeploy; the `ffmpeg` error should be resolved.
+
+---
+
+_**User (2026-01-07 03:37Z)**_
+
+@ssh (4-16) 
+still getting this error in production ec2 instance
+
+---
+
+_**Agent (model composer-1, mode Agent)**_
+
+
+
+---
+
+
+The production container is still using the old image without `ffmpeg`. Checking the workflow to ensure it pulls the latest image and restarts the container:
+
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy.yml</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/Dockerfile</summary>
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+The workflow pulls the image, but docker-compose may use a cached version. Updating the workflow to force pulling the latest image:
+
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy.yml</summary>
+
+**Chunk 1**
+Lines added: 5, lines removed: 4
+
+```diff
+@@ -69,15 +69,16 @@
+              export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
+              export S3_OUTPUT_BUCKET="${{ secrets.S3_OUTPUT_BUCKET }}"
+- 
+-             # Pull the latest image
+-             docker pull $IMAGE_NAME:$IMAGE_TAG
+  
+              # Navigate to directory with docker-compose.yml
+              cd /tmp
++ 
++             # Pull the latest image (force pull to ensure we get the latest)
++             docker pull $IMAGE_NAME:$IMAGE_TAG
+  
+              # Stop and remove existing container if it exists
+              docker compose down || true
+  
+-             # Run new container with docker compose
++             # Run new container with docker compose (pull always to ensure latest image)
++             docker compose pull
+              docker compose up -d
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+
+
+---
+
+
+Verifying the workflow and adding a note about updating the image tag:
+
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `.github/workflows/deploy.yml`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+Updated the workflow to force pulling the latest image. To deploy the fix:
+
+1. **Run the GitHub Actions workflow** — The workflow will:
+   - Build a new Docker image with `ffmpeg` included
+   - Push it to Docker Hub
+   - Pull the latest image on EC2
+   - Restart the container with the new image
+
+2. **Important**: If your `IMAGE_TAG` variable hasn't changed, ensure the workflow rebuilds the image. The updated workflow now:
+   - Explicitly pulls the image before starting containers
+   - Uses `docker compose pull` to ensure the latest image is used
+
+After running the workflow, the production container should have `ffmpeg` available.
+
+**Note**: If you're still seeing the error after deployment, verify:
+- The workflow completed successfully
+- The new image was built and pushed
+- The container on EC2 was restarted with the new image
+
+You can verify `ffmpeg` is installed in the container by running:
+```bash
+docker exec <container_name> ffmpeg -version
+```
+
+---
+

@@ -69,16 +69,17 @@ jobs:
             export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
             export S3_OUTPUT_BUCKET="${{ secrets.S3_OUTPUT_BUCKET }}"
 
-            # Pull the latest image
-            docker pull $IMAGE_NAME:$IMAGE_TAG
-
             # Navigate to directory with docker-compose.yml
             cd /tmp
+
+            # Pull the latest image (force pull to ensure we get the latest)
+            docker pull $IMAGE_NAME:$IMAGE_TAG
 
             # Stop and remove existing container if it exists
             docker compose down || true
 
-            # Run new container with docker compose
+            # Run new container with docker compose (pull always to ensure latest image)
+            docker compose pull
             docker compose up -d
 
             # Clean up old images

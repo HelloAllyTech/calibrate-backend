@@ -314,6 +314,9 @@ def run_evaluation_task(
 ):
     """Run the STT evaluation in the background."""
     try:
+        print(
+            f"Running evaluation task {task_id} with {len(request.providers)} providers"
+        )
         with tasks_lock:
             tasks[task_id]["status"] = TaskStatus.IN_PROGRESS.value
 
@@ -358,7 +361,11 @@ def run_evaluation_task(
                         local_wav_path = audios_wav_dir / f"{audio_id}.wav"
                         local_pcm16_path = audios_pcm16_dir / f"{audio_id}.wav"
 
+                        print(
+                            f"Downloading audio file from {bucket}/{key} to {local_wav_path}"
+                        )
                         s3.download_file(bucket, key, str(local_wav_path))
+
                         # Convert to pcm16 (mono, 16KHz, s16le) using ffmpeg instead of copying
                         cmd = [
                             "ffmpeg",
@@ -375,6 +382,8 @@ def run_evaluation_task(
                             "s16",
                             str(local_pcm16_path),
                         ]
+
+                        print(f"Converting audio file to pcm16 {local_pcm16_path}")
                         subprocess.run(cmd, check=True)
 
                         # Write CSV row
