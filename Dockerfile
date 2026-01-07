@@ -6,8 +6,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-COPY pense.whl /tmp/
-RUN pip install --no-cache-dir /tmp/pense.whl
+COPY *.whl /tmp/
+RUN pip install --no-cache-dir /tmp/*.whl
 
 # Copy dependency files
 COPY pyproject.toml uv.lock ./
