@@ -1,0 +1,46 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv
+ENV
+env
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+.cursor
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+
+# Notebooks (not needed in production)
+notebooks/
+*.ipynb
+
+# Knowledge base PDFs (large files, not needed in Docker)
+knowledge_base/
+
+# Documentation
+*.md
+!README.md
+
+# GitHub
+.github/
+
+# Local environment
+.env
+.env.*
+*.local
+
