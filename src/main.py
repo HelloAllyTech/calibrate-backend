@@ -471,7 +471,7 @@ def run_evaluation_task(
                 logger.info(f"Running leaderboard command: {' '.join(leaderboard_cmd)}")
 
                 try:
-                    subprocess.run(
+                    result = subprocess.run(
                         leaderboard_cmd,
                         capture_output=True,
                         text=True,
@@ -480,6 +480,11 @@ def run_evaluation_task(
                     )
 
                     logger.info("Leaderboard command completed successfully")
+
+                    if result.stdout:
+                        logger.info(f"Leaderboard stdout: {result.stdout}")
+                    if result.stderr:
+                        logger.info(f"Leaderboard stderr: {result.stderr}")
 
                     # Upload leaderboard results
                     for root, dirs, files in os.walk(leaderboard_dir):
