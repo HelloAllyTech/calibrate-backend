@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
-# Install build dependencies and audio libraries
+# Install build dependencies, audio libraries, and ffmpeg
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     make \
     libasound2-dev \
     portaudio19-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv

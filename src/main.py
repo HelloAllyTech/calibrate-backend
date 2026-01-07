@@ -394,6 +394,9 @@ def run_evaluation_task(
 
                 # Run pense STT eval for all providers in parallel
                 provider_results = []
+
+                print(f"Running {len(request.providers)} providers in parallel")
+
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(request.providers)
                 ) as executor:
@@ -502,6 +505,7 @@ def run_evaluation_task(
                                                 ):
                                                     leaderboard_summary.append(row_dict)
                                 except Exception as e:
+                                    traceback.print_exc()
                                     # If reading xlsx fails, continue without summary
                                     pass
 
@@ -528,6 +532,7 @@ def run_evaluation_task(
                     tasks[task_id]["leaderboard_summary"] = leaderboard_summary
 
             except Exception as e:
+                traceback.print_exc()
                 with tasks_lock:
                     tasks[task_id]["status"] = TaskStatus.DONE.value
                     tasks[task_id][
@@ -535,6 +540,7 @@ def run_evaluation_task(
                     ] = f"Unexpected error during STT evaluation: {str(e)}"
 
     except Exception as e:
+        traceback.print_exc()
         with tasks_lock:
             if task_id in tasks:
                 tasks[task_id]["status"] = TaskStatus.DONE.value
