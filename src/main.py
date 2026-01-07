@@ -20,11 +20,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-
-try:
-    import openpyxl
-except ImportError:
-    openpyxl = None
+import openpyxl
 
 load_dotenv()
 
@@ -496,7 +492,7 @@ def run_evaluation_task(
                             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
 
                             # Read xlsx file and extract summary sheet
-                            if file == "stt_leaderboard.xlsx" and openpyxl:
+                            if file == "stt_leaderboard.xlsx":
                                 logger.info(
                                     f"Found leaderboard metrics file: {local_file_path}"
                                 )
