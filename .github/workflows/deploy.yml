@@ -76,10 +76,10 @@ jobs:
             cd /tmp
 
             # Stop and remove existing container if it exists
-            docker-compose down || true
+            docker compose down || true
 
-            # Run new container with docker-compose
-            docker-compose up -d
+            # Run new container with docker compose
+            docker compose up -d
 
             # Clean up old images
             docker image prune -f
