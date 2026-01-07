@@ -92,18 +92,23 @@ class PresignedURLResponse(BaseModel):
     expires_in: int  # expiration time in seconds
 
 
+def is_port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("localhost", port)) == 0
+
+
 def find_available_port(start_port: int = 8000) -> int:
     """Find an available port starting from start_port."""
     port = start_port
     while True:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("", port))
-                return port
-            except OSError:
-                port += 1
-                if port > 65535:
-                    raise RuntimeError("No available ports found")
+        print(f"Checking port {port}")
+        if is_port_in_use(port):
+            port += 1
+            if port > 65535:
+                raise RuntimeError("No available ports found")
+            continue
+
+        return port
 
 
 def get_s3_client():
@@ -228,7 +233,11 @@ def evaluate_provider(
             str(input_dir),
             "-o",
             str(output_dir),
+            "--port",
+            str(port),
         ]
+
+        print(f"Running {run_id} with command: ", " ".join(eval_cmd))
 
         subprocess.run(
             eval_cmd,
@@ -283,12 +292,14 @@ def evaluate_provider(
         )
 
     except subprocess.CalledProcessError as e:
+        traceback.print_exc()
         return ProviderResult(
             provider=provider,
             success=False,
             message=f"STT eval failed: {e.stderr}",
         )
     except Exception as e:
+        traceback.print_exc()
         return ProviderResult(
             provider=provider,
             success=False,
