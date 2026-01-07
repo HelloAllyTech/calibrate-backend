@@ -1,6 +1,15 @@
 # syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
+# Install build dependencies and audio libraries
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    make \
+    libasound2-dev \
+    portaudio19-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
