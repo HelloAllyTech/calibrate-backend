@@ -356,7 +356,7 @@ wheels = [
 ]
 
 [[package]]
-name = "zola-backend"
+name = "pense-backend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
