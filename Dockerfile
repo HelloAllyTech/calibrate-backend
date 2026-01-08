@@ -27,9 +27,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application code
-COPY pense/ ./pense/
+COPY src/ ./src/
 
-WORKDIR /app/pense
+WORKDIR /app/src
 
 # Expose the port
 EXPOSE 8000
