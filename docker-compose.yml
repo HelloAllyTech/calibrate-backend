@@ -19,5 +19,6 @@ services:
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - S3_OUTPUT_BUCKET=${S3_OUTPUT_BUCKET}
+      - DB_ROOT_DIR=${DB_ROOT_DIR}
     volumes:
       - /appdata:/appdata
