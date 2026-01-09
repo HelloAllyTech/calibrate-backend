@@ -1328,3 +1328,561 @@ Done! I've implemented soft delete for all tables. Here's a summary of the chang
 
 ---
 
+_**User (2026-01-09 03:27Z)**_
+
+remove the evaluation criteria tables and data extraction fields tables and their routes
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to remove:
+1. The evaluation_criteria table and all its related functions from db.py
+2. The data_extraction_fields table and all its related functions from db.py
+3. The routes for evaluation_criteria
+4. The routes for data_extraction_fields
+5. The imports and router registrations from main.py
+
+Let me read the current state of db.py and main.py, then make the changes.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to:
+1. Remove the evaluation_criteria and data_extraction_fields tables from init_db()
+2. Remove them from the migration list
+3. Remove the cascade delete for these tables in delete_agent()
+4. Remove all the evaluation_criteria functions
+5. Remove all the data_extraction_fields functions
+6. Remove the imports and router registrations from main.py
+7. Delete the router files
+
+Let me start with db.py.</details></think>
+
+---
+
+I'll remove the evaluation_criteria and data_extraction_fields tables, their functions, and routes.
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: undefined, lines removed: 33
+
+```diff
+@@ -78,37 +78,4 @@
+          """
+          )
+- 
+-         cursor.execute(
+-             """
+-             CREATE TABLE IF NOT EXISTS evaluation_criteria (
+-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+-                 uuid TEXT NOT NULL UNIQUE,
+-                 name TEXT NOT NULL,
+-                 description TEXT,
+-                 agent_id TEXT NOT NULL,
+-                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+-                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+-                 deleted_at TIMESTAMP DEFAULT NULL,
+-                 FOREIGN KEY (agent_id) REFERENCES agents(uuid)
+-             )
+-         """
+-         )
+- 
+-         cursor.execute(
+-             """
+-             CREATE TABLE IF NOT EXISTS data_extraction_fields (
+-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+-                 uuid TEXT NOT NULL UNIQUE,
+-                 type TEXT NOT NULL,
+-                 name TEXT NOT NULL,
+-                 description TEXT,
+-                 agent_id TEXT NOT NULL,
+-                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+-                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+-                 deleted_at TIMESTAMP DEFAULT NULL,
+-                 FOREIGN KEY (agent_id) REFERENCES agents(uuid)
+-             )
+-         """
+-         )
+  
+          cursor.execute(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me remove them from the migration list.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: undefined, lines removed: 2
+
+```diff
+@@ -99,6 +99,4 @@
+              "tools",
+              "agent_tools",
+-             "evaluation_criteria",
+-             "data_extraction_fields",
+              "tests",
+          ]
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the delete_agent function to remove the cascade deletes for evaluation_criteria and data_extraction_fields.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -208,5 +208,5 @@
+  def delete_agent(agent_uuid: str) -&gt; bool:
+      """Soft delete an agent. Returns True if the agent was found and deleted.
+-     Also soft deletes related agent_tools, evaluation_criteria, and data_extraction_fields.
++     Also soft deletes related agent_tools.
+      """
+      with get_db_connection() as conn:
+```
+
+**Chunk 2**
+Lines added: undefined, lines removed: 10
+
+```diff
+@@ -224,14 +224,4 @@
+                  (agent_uuid,),
+              )
+-             # Soft delete related evaluation_criteria
+-             cursor.execute(
+-                 "UPDATE evaluation_criteria SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
+-                 (agent_uuid,),
+-             )
+-             # Soft delete related data_extraction_fields
+-             cursor.execute(
+-                 "UPDATE data_extraction_fields SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
+-                 (agent_uuid,),
+-             )
+              logger.info(f"Soft deleted agent with UUID: {agent_uuid}")
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me remove the evaluation_criteria and data_extraction_fields functions.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: undefined, lines removed: 207
+
+```diff
+@@ -446,211 +446,4 @@
+          return [dict(row) for row in rows]
+  
+- 
+- # ============ Evaluation Criteria Functions ============
+- 
+- 
+- def create_evaluation_criteria(
+-     name: str,
+-     agent_id: str,
+-     description: Optional[str] = None,
+- ) -&gt; str:
+-     """Create a new evaluation criteria and return its UUID."""
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         criteria_uuid = str(uuid.uuid4())
+-         cursor.execute(
+-             """
+-             INSERT INTO evaluation_criteria (uuid, name, description, agent_id)
+-             VALUES (?, ?, ?, ?)
+-             """,
+-             (criteria_uuid, name, description, agent_id),
+-         )
+-         conn.commit()
+-         logger.info(f"Created evaluation criteria with UUID: {criteria_uuid}")
+-         return criteria_uuid
+- 
+- 
+- def get_evaluation_criteria(criteria_uuid: str) -&gt; Optional[Dict[str, Any]]:
+-     """Get an evaluation criteria by UUID."""
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         cursor.execute(
+-             "SELECT * FROM evaluation_criteria WHERE uuid = ? AND deleted_at IS NULL",
+-             (criteria_uuid,),
+-         )
+-         row = cursor.fetchone()
+-         if row:
+-             return dict(row)
+-         return None
+- 
+- 
+- def get_evaluation_criteria_for_agent(agent_id: str) -&gt; List[Dict[str, Any]]:
+-     """Get all evaluation criteria for an agent."""
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         cursor.execute(
+-             "SELECT * FROM evaluation_criteria WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
+-             (agent_id,),
+-         )
+-         rows = cursor.fetchall()
+-         return [dict(row) for row in rows]
+- 
+- 
+- def update_evaluation_criteria(
+-     criteria_uuid: str,
+-     name: Optional[str] = None,
+-     description: Optional[str] = None,
+- ) -&gt; bool:
+-     """Update an evaluation criteria. Returns True if found and updated."""
+-     updates = []
+-     params = []
+- 
+-     if name is not None:
+-         updates.append("name = ?")
+-         params.append(name)
+-     if description is not None:
+-         updates.append("description = ?")
+-         params.append(description)
+- 
+-     if not updates:
+-         return False
+- 
+-     updates.append("updated_at = CURRENT_TIMESTAMP")
+-     params.append(criteria_uuid)
+- 
+-     query = f"UPDATE evaluation_criteria SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+- 
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         cursor.execute(query, params)
+-         conn.commit()
+-         updated = cursor.rowcount &gt; 0
+-         if updated:
+-             logger.info(f"Updated evaluation criteria with UUID: {criteria_uuid}")
+-         return updated
+- 
+- 
+- def delete_evaluation_criteria(criteria_uuid: str) -&gt; bool:
+-     """Soft delete an evaluation criteria. Returns True if found and deleted."""
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         cursor.execute(
+-             "UPDATE evaluation_criteria SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
+-             (criteria_uuid,),
+-         )
+-         conn.commit()
+-         deleted = cursor.rowcount &gt; 0
+- 
+-         if deleted:
+-             logger.info(f"Soft deleted evaluation criteria with UUID: {criteria_uuid}")
+- 
+-         return deleted
+- 
+- 
+- # ============ Data Extraction Fields Functions ============
+- 
+- 
+- def create_data_extraction_field(
+-     type: str,
+-     name: str,
+-     agent_id: str,
+-     description: Optional[str] = None,
+- ) -&gt; str:
+-     """Create a new data extraction field and return its UUID."""
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         field_uuid = str(uuid.uuid4())
+-         cursor.execute(
+-             """
+-             INSERT INTO data_extraction_fields (uuid, type, name, description, agent_id)
+-             VALUES (?, ?, ?, ?, ?)
+-             """,
+-             (field_uuid, type, name, description, agent_id),
+-         )
+-         conn.commit()
+-         logger.info(f"Created data extraction field with UUID: {field_uuid}")
+-         return field_uuid
+- 
+- 
+- def get_data_extraction_field(field_uuid: str) -&gt; Optional[Dict[str, Any]]:
+-     """Get a data extraction field by UUID."""
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         cursor.execute(
+-             "SELECT * FROM data_extraction_fields WHERE uuid = ? AND deleted_at IS NULL",
+-             (field_uuid,),
+-         )
+-         row = cursor.fetchone()
+-         if row:
+-             return dict(row)
+-         return None
+- 
+- 
+- def get_data_extraction_fields_for_agent(agent_id: str) -&gt; List[Dict[str, Any]]:
+-     """Get all data extraction fields for an agent."""
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         cursor.execute(
+-             "SELECT * FROM data_extraction_fields WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
+-             (agent_id,),
+-         )
+-         rows = cursor.fetchall()
+-         return [dict(row) for row in rows]
+- 
+- 
+- def update_data_extraction_field(
+-     field_uuid: str,
+-     type: Optional[str] = None,
+-     name: Optional[str] = None,
+-     description: Optional[str] = None,
+- ) -&gt; bool:
+-     """Update a data extraction field. Returns True if found and updated."""
+-     updates = []
+-     params = []
+- 
+-     if type is not None:
+-         updates.append("type = ?")
+-         params.append(type)
+-     if name is not None:
+-         updates.append("name = ?")
+-         params.append(name)
+-     if description is not None:
+-         updates.append("description = ?")
+-         params.append(description)
+- 
+-     if not updates:
+-         return False
+- 
+-     updates.append("updated_at = CURRENT_TIMESTAMP")
+-     params.append(field_uuid)
+- 
+-     query = f"UPDATE data_extraction_fields SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+- 
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         cursor.execute(query, params)
+-         conn.commit()
+-         updated = cursor.rowcount &gt; 0
+-         if updated:
+-             logger.info(f"Updated data extraction field with UUID: {field_uuid}")
+-         return updated
+- 
+- 
+- def delete_data_extraction_field(field_uuid: str) -&gt; bool:
+-     """Soft delete a data extraction field. Returns True if found and deleted."""
+-     with get_db_connection() as conn:
+-         cursor = conn.cursor()
+-         cursor.execute(
+-             "UPDATE data_extraction_fields SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
+-             (field_uuid,),
+-         )
+-         conn.commit()
+-         deleted = cursor.rowcount &gt; 0
+- 
+-         if deleted:
+-             logger.info(f"Soft deleted data extraction field with UUID: {field_uuid}")
+- 
+-         return deleted
+- 
+  
+  # ============ Tests Functions ============
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update main.py to remove the imports and router registrations.</details></think>
+
+---
+
+Now let me update `main.py`:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: undefined, lines removed: 2
+
+```diff
+@@ -15,6 +15,4 @@
+  from routers.stt import router as stt_router
+  from routers.tts import router as tts_router
+- from routers.evaluation_criteria import router as evaluation_criteria_router
+- from routers.data_extraction_fields import router as data_extraction_fields_router
+  from routers.tests import router as tests_router
+  from utils import get_s3_client
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me remove the router registrations.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: undefined, lines removed: 2
+
+```diff
+@@ -37,6 +37,4 @@
+  app.include_router(stt_router)
+  app.include_router(tts_router)
+- app.include_router(evaluation_criteria_router)
+- app.include_router(data_extraction_fields_router)
+  app.include_router(tests_router)
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me delete the router files.</details></think>
+
+---
+
+Now let me delete the router files:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="delete_file">
+<details><summary>Tool use: **delete_file**</summary>
+
+Explanation: Removing the evaluation_criteria router file as requested.
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="delete_file">
+<details><summary>Tool use: **delete_file**</summary>
+
+Explanation: Removing the data_extraction_fields router file as requested.
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check for any linting errors.</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 2 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done! Let me summarize the changes.</details></think>
+
+---
+
+Done! I've removed the evaluation_criteria and data_extraction_fields tables and their routes. Here's a summary:
+
+**Removed from `db.py`:**
+- `evaluation_criteria` table creation
+- `data_extraction_fields` table creation
+- Removed from migration list
+- Removed cascade soft delete for these tables in `delete_agent()`
+- Removed all evaluation_criteria functions: `create_evaluation_criteria`, `get_evaluation_criteria`, `get_evaluation_criteria_for_agent`, `update_evaluation_criteria`, `delete_evaluation_criteria`
+- Removed all data_extraction_fields functions: `create_data_extraction_field`, `get_data_extraction_field`, `get_data_extraction_fields_for_agent`, `update_data_extraction_field`, `delete_data_extraction_field`
+
+**Removed from `main.py`:**
+- Import for `evaluation_criteria_router`
+- Import for `data_extraction_fields_router`
+- Router registrations for both
+
+**Deleted files:**
+- `src/routers/evaluation_criteria.py`
+- `src/routers/data_extraction_fields.py`
+
+---
+

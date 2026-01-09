@@ -80,39 +80,6 @@ def init_db():
 
         cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS evaluation_criteria (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                uuid TEXT NOT NULL UNIQUE,
-                name TEXT NOT NULL,
-                description TEXT,
-                agent_id TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                deleted_at TIMESTAMP DEFAULT NULL,
-                FOREIGN KEY (agent_id) REFERENCES agents(uuid)
-            )
-        """
-        )
-
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS data_extraction_fields (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                uuid TEXT NOT NULL UNIQUE,
-                type TEXT NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT,
-                agent_id TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                deleted_at TIMESTAMP DEFAULT NULL,
-                FOREIGN KEY (agent_id) REFERENCES agents(uuid)
-            )
-        """
-        )
-
-        cursor.execute(
-            """
             CREATE TABLE IF NOT EXISTS tests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT NOT NULL UNIQUE,
@@ -131,8 +98,6 @@ def init_db():
             "agents",
             "tools",
             "agent_tools",
-            "evaluation_criteria",
-            "data_extraction_fields",
             "tests",
         ]
         for table in tables_to_migrate:
@@ -242,7 +207,7 @@ def update_agent(
 
 def delete_agent(agent_uuid: str) -> bool:
     """Soft delete an agent. Returns True if the agent was found and deleted.
-    Also soft deletes related agent_tools, evaluation_criteria, and data_extraction_fields.
+    Also soft deletes related agent_tools.
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -256,16 +221,6 @@ def delete_agent(agent_uuid: str) -> bool:
             # Soft delete related agent_tools
             cursor.execute(
                 "UPDATE agent_tools SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
-                (agent_uuid,),
-            )
-            # Soft delete related evaluation_criteria
-            cursor.execute(
-                "UPDATE evaluation_criteria SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
-                (agent_uuid,),
-            )
-            # Soft delete related data_extraction_fields
-            cursor.execute(
-                "UPDATE data_extraction_fields SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
                 (agent_uuid,),
             )
             logger.info(f"Soft deleted agent with UUID: {agent_uuid}")
@@ -489,213 +444,6 @@ def get_all_agent_tools() -> List[Dict[str, Any]]:
         )
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
-
-
-# ============ Evaluation Criteria Functions ============
-
-
-def create_evaluation_criteria(
-    name: str,
-    agent_id: str,
-    description: Optional[str] = None,
-) -> str:
-    """Create a new evaluation criteria and return its UUID."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        criteria_uuid = str(uuid.uuid4())
-        cursor.execute(
-            """
-            INSERT INTO evaluation_criteria (uuid, name, description, agent_id)
-            VALUES (?, ?, ?, ?)
-            """,
-            (criteria_uuid, name, description, agent_id),
-        )
-        conn.commit()
-        logger.info(f"Created evaluation criteria with UUID: {criteria_uuid}")
-        return criteria_uuid
-
-
-def get_evaluation_criteria(criteria_uuid: str) -> Optional[Dict[str, Any]]:
-    """Get an evaluation criteria by UUID."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM evaluation_criteria WHERE uuid = ? AND deleted_at IS NULL",
-            (criteria_uuid,),
-        )
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
-        return None
-
-
-def get_evaluation_criteria_for_agent(agent_id: str) -> List[Dict[str, Any]]:
-    """Get all evaluation criteria for an agent."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM evaluation_criteria WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
-            (agent_id,),
-        )
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-
-
-def update_evaluation_criteria(
-    criteria_uuid: str,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-) -> bool:
-    """Update an evaluation criteria. Returns True if found and updated."""
-    updates = []
-    params = []
-
-    if name is not None:
-        updates.append("name = ?")
-        params.append(name)
-    if description is not None:
-        updates.append("description = ?")
-        params.append(description)
-
-    if not updates:
-        return False
-
-    updates.append("updated_at = CURRENT_TIMESTAMP")
-    params.append(criteria_uuid)
-
-    query = f"UPDATE evaluation_criteria SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
-
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        conn.commit()
-        updated = cursor.rowcount > 0
-        if updated:
-            logger.info(f"Updated evaluation criteria with UUID: {criteria_uuid}")
-        return updated
-
-
-def delete_evaluation_criteria(criteria_uuid: str) -> bool:
-    """Soft delete an evaluation criteria. Returns True if found and deleted."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE evaluation_criteria SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
-            (criteria_uuid,),
-        )
-        conn.commit()
-        deleted = cursor.rowcount > 0
-
-        if deleted:
-            logger.info(f"Soft deleted evaluation criteria with UUID: {criteria_uuid}")
-
-        return deleted
-
-
-# ============ Data Extraction Fields Functions ============
-
-
-def create_data_extraction_field(
-    type: str,
-    name: str,
-    agent_id: str,
-    description: Optional[str] = None,
-) -> str:
-    """Create a new data extraction field and return its UUID."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        field_uuid = str(uuid.uuid4())
-        cursor.execute(
-            """
-            INSERT INTO data_extraction_fields (uuid, type, name, description, agent_id)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (field_uuid, type, name, description, agent_id),
-        )
-        conn.commit()
-        logger.info(f"Created data extraction field with UUID: {field_uuid}")
-        return field_uuid
-
-
-def get_data_extraction_field(field_uuid: str) -> Optional[Dict[str, Any]]:
-    """Get a data extraction field by UUID."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM data_extraction_fields WHERE uuid = ? AND deleted_at IS NULL",
-            (field_uuid,),
-        )
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
-        return None
-
-
-def get_data_extraction_fields_for_agent(agent_id: str) -> List[Dict[str, Any]]:
-    """Get all data extraction fields for an agent."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM data_extraction_fields WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
-            (agent_id,),
-        )
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-
-
-def update_data_extraction_field(
-    field_uuid: str,
-    type: Optional[str] = None,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-) -> bool:
-    """Update a data extraction field. Returns True if found and updated."""
-    updates = []
-    params = []
-
-    if type is not None:
-        updates.append("type = ?")
-        params.append(type)
-    if name is not None:
-        updates.append("name = ?")
-        params.append(name)
-    if description is not None:
-        updates.append("description = ?")
-        params.append(description)
-
-    if not updates:
-        return False
-
-    updates.append("updated_at = CURRENT_TIMESTAMP")
-    params.append(field_uuid)
-
-    query = f"UPDATE data_extraction_fields SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
-
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        conn.commit()
-        updated = cursor.rowcount > 0
-        if updated:
-            logger.info(f"Updated data extraction field with UUID: {field_uuid}")
-        return updated
-
-
-def delete_data_extraction_field(field_uuid: str) -> bool:
-    """Soft delete a data extraction field. Returns True if found and deleted."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE data_extraction_fields SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
-            (field_uuid,),
-        )
-        conn.commit()
-        deleted = cursor.rowcount > 0
-
-        if deleted:
-            logger.info(f"Soft deleted data extraction field with UUID: {field_uuid}")
-
-        return deleted
 
 
 # ============ Tests Functions ============

@@ -14,8 +14,6 @@ from routers.tools import router as tools_router
 from routers.agent_tools import router as agent_tools_router
 from routers.stt import router as stt_router
 from routers.tts import router as tts_router
-from routers.evaluation_criteria import router as evaluation_criteria_router
-from routers.data_extraction_fields import router as data_extraction_fields_router
 from routers.tests import router as tests_router
 from utils import get_s3_client
 
@@ -38,8 +36,6 @@ app.include_router(tools_router)
 app.include_router(agent_tools_router)
 app.include_router(stt_router)
 app.include_router(tts_router)
-app.include_router(evaluation_criteria_router)
-app.include_router(data_extraction_fields_router)
 app.include_router(tests_router)
 
 app.add_middleware(
