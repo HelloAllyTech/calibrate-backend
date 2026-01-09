@@ -482,3 +482,849 @@ Done! I've added the new "tests" table and CRUD routers. Here's a summary of the
 
 ---
 
+_**User (2026-01-09 03:27Z)**_
+
+implement soft delete for all the fields and when a agent or tool is deleted,  (soft) delete the corresponding entries from agent_tools tables and
+
+same when agent is deleted, soft delete the entries from the data extraction and evaluation criteria fields
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to implement soft delete for all tables. This means:
+
+1. Add a `deleted_at` column to all tables (agents, tools, agent_tools, evaluation_criteria, data_extraction_fields, tests)
+2. Instead of actually deleting rows, set the `deleted_at` timestamp
+3. When querying, filter out rows where `deleted_at` is not null
+4. When an agent is deleted:
+   - Soft delete corresponding entries from agent_tools
+   - Soft delete corresponding entries from evaluation_criteria
+   - Soft delete corresponding entries from data_extraction_fields
+5. When a tool is deleted:
+   - Soft delete corresponding entries from agent_tools
+
+Let me read the current db.py to understand the full structure and implement these changes.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to implement soft delete for all tables. This involves:
+
+1. Adding `deleted_at` column to all tables (agents, tools, agent_tools, evaluation_criteria, data_extraction_fields, tests)
+2. Adding migration logic to add the column if it doesn't exist
+3. Updating all get/list queries to filter out deleted rows (WHERE deleted_at IS NULL)
+4. Changing delete functions to SET deleted_at = CURRENT_TIMESTAMP instead of DELETE
+5. When agent is deleted: soft delete agent_tools, evaluation_criteria, data_extraction_fields
+6. When tool is deleted: soft delete agent_tools
+
+Let me start making the changes.</details></think>
+
+---
+
+I'll implement soft delete for all tables. This involves:
+1. Adding `deleted_at` column to all tables
+2. Updating queries to filter out soft-deleted rows
+3. Changing delete functions to set `deleted_at` instead of hard delete
+4. Cascading soft deletes for related records
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 1
+
+```diff
+@@ -44,5 +44,6 @@
+                  config TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+-                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
++                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL
+              )
+          """
+```
+
+**Chunk 2**
+Lines added: 2, lines removed: 1
+
+```diff
+@@ -57,5 +58,6 @@
+                  config TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+-                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
++                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL
+              )
+          """
+```
+
+**Chunk 3**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -69,4 +71,5 @@
+                  tool_id TEXT NOT NULL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL,
+                  UNIQUE(agent_id, tool_id),
+                  FOREIGN KEY (agent_id) REFERENCES agents(uuid),
+```
+
+**Chunk 4**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -86,4 +89,5 @@
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL,
+                  FOREIGN KEY (agent_id) REFERENCES agents(uuid)
+              )
+```
+
+**Chunk 5**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -102,4 +106,5 @@
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL,
+                  FOREIGN KEY (agent_id) REFERENCES agents(uuid)
+              )
+```
+
+**Chunk 6**
+Lines added: 19, lines removed: 1
+
+```diff
+@@ -116,8 +121,26 @@
+                  config TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+-                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
++                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL
+              )
+          """
+          )
++ 
++         # Add deleted_at column to existing tables if not present (migration)
++         tables_to_migrate = [
++             "agents",
++             "tools",
++             "agent_tools",
++             "evaluation_criteria",
++             "data_extraction_fields",
++             "tests",
++         ]
++         for table in tables_to_migrate:
++             try:
++                 cursor.execute(f"ALTER TABLE {table} ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL")
++             except sqlite3.OperationalError:
++                 # Column already exists
++                 pass
++ 
+          conn.commit()
+          logger.info("Database initialized successfully")
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to update all the get/list queries and delete functions. Let me update them one by one.</details></think>
+
+---
+
+Now let me update the agent functions to use soft delete:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -181,5 +181,5 @@
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("SELECT * FROM agents WHERE uuid = ?", (agent_uuid,))
++         cursor.execute("SELECT * FROM agents WHERE uuid = ? AND deleted_at IS NULL", (agent_uuid,))
+          row = cursor.fetchone()
+          if row:
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -192,5 +192,5 @@
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("SELECT * FROM agents ORDER BY created_at DESC")
++         cursor.execute("SELECT * FROM agents WHERE deleted_at IS NULL ORDER BY created_at DESC")
+          rows = cursor.fetchall()
+          return [_parse_agent_row(row) for row in rows]
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to update the update_agent function and delete_agent function.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -221,5 +221,5 @@
+      params.append(agent_uuid)
+  
+-     query = f"UPDATE agents SET {', '.join(updates)} WHERE uuid = ?"
++     query = f"UPDATE agents SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+  
+      with get_db_connection() as conn:
+```
+
+**Chunk 2**
+Lines added: 24, lines removed: 4
+
+```diff
+@@ -234,14 +234,34 @@
+  
+  def delete_agent(agent_uuid: str) -&gt; bool:
+-     """Delete an agent. Returns True if the agent was found and deleted."""
++     """Soft delete an agent. Returns True if the agent was found and deleted.
++     Also soft deletes related agent_tools, evaluation_criteria, and data_extraction_fields.
++     """
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("DELETE FROM agents WHERE uuid = ?", (agent_uuid,))
+-         conn.commit()
++         cursor.execute(
++             "UPDATE agents SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
++             (agent_uuid,),
++         )
+          deleted = cursor.rowcount &gt; 0
+  
+          if deleted:
+-             logger.info(f"Deleted agent with UUID: {agent_uuid}")
++             # Soft delete related agent_tools
++             cursor.execute(
++                 "UPDATE agent_tools SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
++                 (agent_uuid,),
++             )
++             # Soft delete related evaluation_criteria
++             cursor.execute(
++                 "UPDATE evaluation_criteria SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
++                 (agent_uuid,),
++             )
++             # Soft delete related data_extraction_fields
++             cursor.execute(
++                 "UPDATE data_extraction_fields SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
++                 (agent_uuid,),
++             )
++             logger.info(f"Soft deleted agent with UUID: {agent_uuid}")
+  
++         conn.commit()
+          return deleted
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the tool functions for soft delete.</details></think>
+
+---
+
+Now let me update the tool functions:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -305,5 +305,5 @@
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("SELECT * FROM tools WHERE uuid = ?", (tool_uuid,))
++         cursor.execute("SELECT * FROM tools WHERE uuid = ? AND deleted_at IS NULL", (tool_uuid,))
+          row = cursor.fetchone()
+          if row:
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -316,5 +316,5 @@
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("SELECT * FROM tools ORDER BY created_at DESC")
++         cursor.execute("SELECT * FROM tools WHERE deleted_at IS NULL ORDER BY created_at DESC")
+          rows = cursor.fetchall()
+          return [_parse_tool_row(row) for row in rows]
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the update_tool and delete_tool functions.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -349,5 +349,5 @@
+      params.append(tool_uuid)
+  
+-     query = f"UPDATE tools SET {', '.join(updates)} WHERE uuid = ?"
++     query = f"UPDATE tools SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+  
+      with get_db_connection() as conn:
+```
+
+**Chunk 2**
+Lines added: 14, lines removed: 4
+
+```diff
+@@ -362,14 +362,24 @@
+  
+  def delete_tool(tool_uuid: str) -&gt; bool:
+-     """Delete a tool. Returns True if the tool was found and deleted."""
++     """Soft delete a tool. Returns True if the tool was found and deleted.
++     Also soft deletes related agent_tools entries.
++     """
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("DELETE FROM tools WHERE uuid = ?", (tool_uuid,))
+-         conn.commit()
++         cursor.execute(
++             "UPDATE tools SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
++             (tool_uuid,),
++         )
+          deleted = cursor.rowcount &gt; 0
+  
+          if deleted:
+-             logger.info(f"Deleted tool with UUID: {tool_uuid}")
++             # Soft delete related agent_tools
++             cursor.execute(
++                 "UPDATE agent_tools SET deleted_at = CURRENT_TIMESTAMP WHERE tool_id = ? AND deleted_at IS NULL",
++                 (tool_uuid,),
++             )
++             logger.info(f"Soft deleted tool with UUID: {tool_uuid}")
+  
++         conn.commit()
+          return deleted
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the agent_tools functions.</details></think>
+
+---
+
+Now let me update the agent_tools functions:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 2
+
+```diff
+@@ -403,9 +403,9 @@
+  
+  def remove_tool_from_agent(agent_id: str, tool_id: str) -&gt; bool:
+-     """Remove a tool from an agent. Returns True if the link was found and deleted."""
++     """Soft delete a tool from an agent. Returns True if the link was found and deleted."""
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+          cursor.execute(
+-             "DELETE FROM agent_tools WHERE agent_id = ? AND tool_id = ?",
++             "UPDATE agent_tools SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND tool_id = ? AND deleted_at IS NULL",
+              (agent_id, tool_id),
+          )
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -414,5 +414,5 @@
+  
+          if deleted:
+-             logger.info(f"Removed tool {tool_id} from agent {agent_id}")
++             logger.info(f"Soft deleted tool {tool_id} from agent {agent_id}")
+  
+          return deleted
+```
+
+**Chunk 3**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -427,5 +427,5 @@
+              SELECT t.* FROM tools t
+              INNER JOIN agent_tools at ON t.uuid = at.tool_id
+-             WHERE at.agent_id = ?
++             WHERE at.agent_id = ? AND at.deleted_at IS NULL AND t.deleted_at IS NULL
+              ORDER BY at.created_at DESC
+              """,
+```
+
+**Chunk 4**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -444,5 +444,5 @@
+              SELECT a.* FROM agents a
+              INNER JOIN agent_tools at ON a.uuid = at.agent_id
+-             WHERE at.tool_id = ?
++             WHERE at.tool_id = ? AND at.deleted_at IS NULL AND a.deleted_at IS NULL
+              ORDER BY at.created_at DESC
+              """,
+```
+
+**Chunk 5**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -458,5 +458,5 @@
+          cursor = conn.cursor()
+          cursor.execute(
+-             "SELECT * FROM agent_tools WHERE agent_id = ? AND tool_id = ?",
++             "SELECT * FROM agent_tools WHERE agent_id = ? AND tool_id = ? AND deleted_at IS NULL",
+              (agent_id, tool_id),
+          )
+```
+
+**Chunk 6**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -471,5 +471,5 @@
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("SELECT * FROM agent_tools ORDER BY created_at DESC")
++         cursor.execute("SELECT * FROM agent_tools WHERE deleted_at IS NULL ORDER BY created_at DESC")
+          rows = cursor.fetchall()
+          return [dict(row) for row in rows]
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the evaluation_criteria functions.</details></think>
+
+---
+
+Now let me update the evaluation_criteria functions:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -505,5 +505,5 @@
+          cursor = conn.cursor()
+          cursor.execute(
+-             "SELECT * FROM evaluation_criteria WHERE uuid = ?", (criteria_uuid,)
++             "SELECT * FROM evaluation_criteria WHERE uuid = ? AND deleted_at IS NULL", (criteria_uuid,)
+          )
+          row = cursor.fetchone()
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -518,5 +518,5 @@
+          cursor = conn.cursor()
+          cursor.execute(
+-             "SELECT * FROM evaluation_criteria WHERE agent_id = ? ORDER BY created_at DESC",
++             "SELECT * FROM evaluation_criteria WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
+              (agent_id,),
+          )
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the update_evaluation_criteria and delete_evaluation_criteria functions.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -547,5 +547,5 @@
+      params.append(criteria_uuid)
+  
+-     query = f"UPDATE evaluation_criteria SET {', '.join(updates)} WHERE uuid = ?"
++     query = f"UPDATE evaluation_criteria SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+  
+      with get_db_connection() as conn:
+```
+
+**Chunk 2**
+Lines added: 4, lines removed: 3
+
+```diff
+@@ -560,15 +560,16 @@
+  
+  def delete_evaluation_criteria(criteria_uuid: str) -&gt; bool:
+-     """Delete an evaluation criteria. Returns True if found and deleted."""
++     """Soft delete an evaluation criteria. Returns True if found and deleted."""
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+          cursor.execute(
+-             "DELETE FROM evaluation_criteria WHERE uuid = ?", (criteria_uuid,)
++             "UPDATE evaluation_criteria SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
++             (criteria_uuid,),
+          )
+          conn.commit()
+          deleted = cursor.rowcount &gt; 0
+  
+          if deleted:
+-             logger.info(f"Deleted evaluation criteria with UUID: {criteria_uuid}")
++             logger.info(f"Soft deleted evaluation criteria with UUID: {criteria_uuid}")
+  
+          return deleted
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the data_extraction_fields functions.</details></think>
+
+---
+
+Now let me update the data_extraction_fields functions:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -606,5 +606,5 @@
+          cursor = conn.cursor()
+          cursor.execute(
+-             "SELECT * FROM data_extraction_fields WHERE uuid = ?", (field_uuid,)
++             "SELECT * FROM data_extraction_fields WHERE uuid = ? AND deleted_at IS NULL", (field_uuid,)
+          )
+          row = cursor.fetchone()
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -619,5 +619,5 @@
+          cursor = conn.cursor()
+          cursor.execute(
+-             "SELECT * FROM data_extraction_fields WHERE agent_id = ? ORDER BY created_at DESC",
++             "SELECT * FROM data_extraction_fields WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
+              (agent_id,),
+          )
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the update_data_extraction_field and delete_data_extraction_field functions.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -652,5 +652,5 @@
+      params.append(field_uuid)
+  
+-     query = f"UPDATE data_extraction_fields SET {', '.join(updates)} WHERE uuid = ?"
++     query = f"UPDATE data_extraction_fields SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+  
+      with get_db_connection() as conn:
+```
+
+**Chunk 2**
+Lines added: 4, lines removed: 3
+
+```diff
+@@ -665,15 +665,16 @@
+  
+  def delete_data_extraction_field(field_uuid: str) -&gt; bool:
+-     """Delete a data extraction field. Returns True if found and deleted."""
++     """Soft delete a data extraction field. Returns True if found and deleted."""
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+          cursor.execute(
+-             "DELETE FROM data_extraction_fields WHERE uuid = ?", (field_uuid,)
++             "UPDATE data_extraction_fields SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
++             (field_uuid,),
+          )
+          conn.commit()
+          deleted = cursor.rowcount &gt; 0
+  
+          if deleted:
+-             logger.info(f"Deleted data extraction field with UUID: {field_uuid}")
++             logger.info(f"Soft deleted data extraction field with UUID: {field_uuid}")
+  
+          return deleted
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the tests functions for soft delete.</details></think>
+
+---
+
+Now let me update the tests functions:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -718,5 +718,5 @@
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("SELECT * FROM tests WHERE uuid = ?", (test_uuid,))
++         cursor.execute("SELECT * FROM tests WHERE uuid = ? AND deleted_at IS NULL", (test_uuid,))
+          row = cursor.fetchone()
+          if row:
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -729,5 +729,5 @@
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("SELECT * FROM tests ORDER BY created_at DESC")
++         cursor.execute("SELECT * FROM tests WHERE deleted_at IS NULL ORDER BY created_at DESC")
+          rows = cursor.fetchall()
+          return [_parse_test_row(row) for row in rows]
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the update_test and delete_test functions.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -760,5 +760,5 @@
+      params.append(test_uuid)
+  
+-     query = f"UPDATE tests SET {', '.join(updates)} WHERE uuid = ?"
++     query = f"UPDATE tests SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+  
+      with get_db_connection() as conn:
+```
+
+**Chunk 2**
+Lines added: 6, lines removed: 3
+
+```diff
+@@ -773,13 +773,16 @@
+  
+  def delete_test(test_uuid: str) -&gt; bool:
+-     """Delete a test. Returns True if the test was found and deleted."""
++     """Soft delete a test. Returns True if the test was found and deleted."""
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("DELETE FROM tests WHERE uuid = ?", (test_uuid,))
++         cursor.execute(
++             "UPDATE tests SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
++             (test_uuid,),
++         )
+          conn.commit()
+          deleted = cursor.rowcount &gt; 0
+  
+          if deleted:
+-             logger.info(f"Deleted test with UUID: {test_uuid}")
++             logger.info(f"Soft deleted test with UUID: {test_uuid}")
+  
+          return deleted
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check for any linting errors.</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done! Let me provide a summary of the changes made.</details></think>
+
+---
+
+Done! I've implemented soft delete for all tables. Here's a summary of the changes:
+
+**1. Schema changes** - Added `deleted_at TIMESTAMP DEFAULT NULL` column to all tables:
+- `agents`
+- `tools`
+- `agent_tools`
+- `evaluation_criteria`
+- `data_extraction_fields`
+- `tests`
+
+**2. Migration logic** - Added automatic migration in `init_db()` to add `deleted_at` column to existing tables.
+
+**3. All queries updated** to filter out soft-deleted rows (`WHERE deleted_at IS NULL`):
+- `get_*` functions
+- `get_all_*` functions
+- `update_*` functions
+
+**4. Delete functions changed** to set `deleted_at = CURRENT_TIMESTAMP` instead of hard delete:
+- `delete_agent()` - also soft deletes related `agent_tools`, `evaluation_criteria`, and `data_extraction_fields`
+- `delete_tool()` - also soft deletes related `agent_tools`
+- `delete_evaluation_criteria()`
+- `delete_data_extraction_field()`
+- `delete_test()`
+- `remove_tool_from_agent()`
+
+**5. Join queries updated** (`get_tools_for_agent`, `get_agents_for_tool`) to check `deleted_at IS NULL` on both the link table and the entity tables.
+
+---
+

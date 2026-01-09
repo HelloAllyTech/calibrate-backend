@@ -43,7 +43,8 @@ def init_db():
                 name TEXT NOT NULL,
                 config TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL
             )
         """
         )
@@ -56,7 +57,8 @@ def init_db():
                 description TEXT,
                 config TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL
             )
         """
         )
@@ -68,6 +70,7 @@ def init_db():
                 agent_id TEXT NOT NULL,
                 tool_id TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL,
                 UNIQUE(agent_id, tool_id),
                 FOREIGN KEY (agent_id) REFERENCES agents(uuid),
                 FOREIGN KEY (tool_id) REFERENCES tools(uuid)
@@ -85,6 +88,7 @@ def init_db():
                 agent_id TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL,
                 FOREIGN KEY (agent_id) REFERENCES agents(uuid)
             )
         """
@@ -101,6 +105,7 @@ def init_db():
                 agent_id TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL,
                 FOREIGN KEY (agent_id) REFERENCES agents(uuid)
             )
         """
@@ -115,10 +120,30 @@ def init_db():
                 type TEXT NOT NULL,
                 config TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL
             )
         """
         )
+
+        # Add deleted_at column to existing tables if not present (migration)
+        tables_to_migrate = [
+            "agents",
+            "tools",
+            "agent_tools",
+            "evaluation_criteria",
+            "data_extraction_fields",
+            "tests",
+        ]
+        for table in tables_to_migrate:
+            try:
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL"
+                )
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
+
         conn.commit()
         logger.info("Database initialized successfully")
 
@@ -157,7 +182,9 @@ def get_agent(agent_uuid: str) -> Optional[Dict[str, Any]]:
     """Get an agent by UUID."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM agents WHERE uuid = ?", (agent_uuid,))
+        cursor.execute(
+            "SELECT * FROM agents WHERE uuid = ? AND deleted_at IS NULL", (agent_uuid,)
+        )
         row = cursor.fetchone()
         if row:
             return _parse_agent_row(row)
@@ -168,7 +195,9 @@ def get_all_agents() -> List[Dict[str, Any]]:
     """Get all agents."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM agents ORDER BY created_at DESC")
+        cursor.execute(
+            "SELECT * FROM agents WHERE deleted_at IS NULL ORDER BY created_at DESC"
+        )
         rows = cursor.fetchall()
         return [_parse_agent_row(row) for row in rows]
 
@@ -197,7 +226,9 @@ def update_agent(
     updates.append("updated_at = CURRENT_TIMESTAMP")
     params.append(agent_uuid)
 
-    query = f"UPDATE agents SET {', '.join(updates)} WHERE uuid = ?"
+    query = (
+        f"UPDATE agents SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+    )
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -210,16 +241,36 @@ def update_agent(
 
 
 def delete_agent(agent_uuid: str) -> bool:
-    """Delete an agent. Returns True if the agent was found and deleted."""
+    """Soft delete an agent. Returns True if the agent was found and deleted.
+    Also soft deletes related agent_tools, evaluation_criteria, and data_extraction_fields.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM agents WHERE uuid = ?", (agent_uuid,))
-        conn.commit()
+        cursor.execute(
+            "UPDATE agents SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
+            (agent_uuid,),
+        )
         deleted = cursor.rowcount > 0
 
         if deleted:
-            logger.info(f"Deleted agent with UUID: {agent_uuid}")
+            # Soft delete related agent_tools
+            cursor.execute(
+                "UPDATE agent_tools SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
+                (agent_uuid,),
+            )
+            # Soft delete related evaluation_criteria
+            cursor.execute(
+                "UPDATE evaluation_criteria SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
+                (agent_uuid,),
+            )
+            # Soft delete related data_extraction_fields
+            cursor.execute(
+                "UPDATE data_extraction_fields SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
+                (agent_uuid,),
+            )
+            logger.info(f"Soft deleted agent with UUID: {agent_uuid}")
 
+        conn.commit()
         return deleted
 
 
@@ -261,7 +312,9 @@ def get_tool(tool_uuid: str) -> Optional[Dict[str, Any]]:
     """Get a tool by UUID."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM tools WHERE uuid = ?", (tool_uuid,))
+        cursor.execute(
+            "SELECT * FROM tools WHERE uuid = ? AND deleted_at IS NULL", (tool_uuid,)
+        )
         row = cursor.fetchone()
         if row:
             return _parse_tool_row(row)
@@ -272,7 +325,9 @@ def get_all_tools() -> List[Dict[str, Any]]:
     """Get all tools."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM tools ORDER BY created_at DESC")
+        cursor.execute(
+            "SELECT * FROM tools WHERE deleted_at IS NULL ORDER BY created_at DESC"
+        )
         rows = cursor.fetchall()
         return [_parse_tool_row(row) for row in rows]
 
@@ -305,7 +360,9 @@ def update_tool(
     updates.append("updated_at = CURRENT_TIMESTAMP")
     params.append(tool_uuid)
 
-    query = f"UPDATE tools SET {', '.join(updates)} WHERE uuid = ?"
+    query = (
+        f"UPDATE tools SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+    )
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -318,16 +375,26 @@ def update_tool(
 
 
 def delete_tool(tool_uuid: str) -> bool:
-    """Delete a tool. Returns True if the tool was found and deleted."""
+    """Soft delete a tool. Returns True if the tool was found and deleted.
+    Also soft deletes related agent_tools entries.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM tools WHERE uuid = ?", (tool_uuid,))
-        conn.commit()
+        cursor.execute(
+            "UPDATE tools SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
+            (tool_uuid,),
+        )
         deleted = cursor.rowcount > 0
 
         if deleted:
-            logger.info(f"Deleted tool with UUID: {tool_uuid}")
+            # Soft delete related agent_tools
+            cursor.execute(
+                "UPDATE agent_tools SET deleted_at = CURRENT_TIMESTAMP WHERE tool_id = ? AND deleted_at IS NULL",
+                (tool_uuid,),
+            )
+            logger.info(f"Soft deleted tool with UUID: {tool_uuid}")
 
+        conn.commit()
         return deleted
 
 
@@ -349,18 +416,18 @@ def add_tool_to_agent(agent_id: str, tool_id: str) -> int:
 
 
 def remove_tool_from_agent(agent_id: str, tool_id: str) -> bool:
-    """Remove a tool from an agent. Returns True if the link was found and deleted."""
+    """Soft delete a tool from an agent. Returns True if the link was found and deleted."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "DELETE FROM agent_tools WHERE agent_id = ? AND tool_id = ?",
+            "UPDATE agent_tools SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND tool_id = ? AND deleted_at IS NULL",
             (agent_id, tool_id),
         )
         conn.commit()
         deleted = cursor.rowcount > 0
 
         if deleted:
-            logger.info(f"Removed tool {tool_id} from agent {agent_id}")
+            logger.info(f"Soft deleted tool {tool_id} from agent {agent_id}")
 
         return deleted
 
@@ -373,7 +440,7 @@ def get_tools_for_agent(agent_id: str) -> List[Dict[str, Any]]:
             """
             SELECT t.* FROM tools t
             INNER JOIN agent_tools at ON t.uuid = at.tool_id
-            WHERE at.agent_id = ?
+            WHERE at.agent_id = ? AND at.deleted_at IS NULL AND t.deleted_at IS NULL
             ORDER BY at.created_at DESC
             """,
             (agent_id,),
@@ -390,7 +457,7 @@ def get_agents_for_tool(tool_id: str) -> List[Dict[str, Any]]:
             """
             SELECT a.* FROM agents a
             INNER JOIN agent_tools at ON a.uuid = at.agent_id
-            WHERE at.tool_id = ?
+            WHERE at.tool_id = ? AND at.deleted_at IS NULL AND a.deleted_at IS NULL
             ORDER BY at.created_at DESC
             """,
             (tool_id,),
@@ -404,7 +471,7 @@ def get_agent_tool_link(agent_id: str, tool_id: str) -> Optional[Dict[str, Any]]
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM agent_tools WHERE agent_id = ? AND tool_id = ?",
+            "SELECT * FROM agent_tools WHERE agent_id = ? AND tool_id = ? AND deleted_at IS NULL",
             (agent_id, tool_id),
         )
         row = cursor.fetchone()
@@ -417,7 +484,9 @@ def get_all_agent_tools() -> List[Dict[str, Any]]:
     """Get all agent-tool links."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM agent_tools ORDER BY created_at DESC")
+        cursor.execute(
+            "SELECT * FROM agent_tools WHERE deleted_at IS NULL ORDER BY created_at DESC"
+        )
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
@@ -451,7 +520,8 @@ def get_evaluation_criteria(criteria_uuid: str) -> Optional[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM evaluation_criteria WHERE uuid = ?", (criteria_uuid,)
+            "SELECT * FROM evaluation_criteria WHERE uuid = ? AND deleted_at IS NULL",
+            (criteria_uuid,),
         )
         row = cursor.fetchone()
         if row:
@@ -464,7 +534,7 @@ def get_evaluation_criteria_for_agent(agent_id: str) -> List[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM evaluation_criteria WHERE agent_id = ? ORDER BY created_at DESC",
+            "SELECT * FROM evaluation_criteria WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
             (agent_id,),
         )
         rows = cursor.fetchall()
@@ -493,7 +563,7 @@ def update_evaluation_criteria(
     updates.append("updated_at = CURRENT_TIMESTAMP")
     params.append(criteria_uuid)
 
-    query = f"UPDATE evaluation_criteria SET {', '.join(updates)} WHERE uuid = ?"
+    query = f"UPDATE evaluation_criteria SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -506,17 +576,18 @@ def update_evaluation_criteria(
 
 
 def delete_evaluation_criteria(criteria_uuid: str) -> bool:
-    """Delete an evaluation criteria. Returns True if found and deleted."""
+    """Soft delete an evaluation criteria. Returns True if found and deleted."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "DELETE FROM evaluation_criteria WHERE uuid = ?", (criteria_uuid,)
+            "UPDATE evaluation_criteria SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
+            (criteria_uuid,),
         )
         conn.commit()
         deleted = cursor.rowcount > 0
 
         if deleted:
-            logger.info(f"Deleted evaluation criteria with UUID: {criteria_uuid}")
+            logger.info(f"Soft deleted evaluation criteria with UUID: {criteria_uuid}")
 
         return deleted
 
@@ -551,7 +622,8 @@ def get_data_extraction_field(field_uuid: str) -> Optional[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM data_extraction_fields WHERE uuid = ?", (field_uuid,)
+            "SELECT * FROM data_extraction_fields WHERE uuid = ? AND deleted_at IS NULL",
+            (field_uuid,),
         )
         row = cursor.fetchone()
         if row:
@@ -564,7 +636,7 @@ def get_data_extraction_fields_for_agent(agent_id: str) -> List[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM data_extraction_fields WHERE agent_id = ? ORDER BY created_at DESC",
+            "SELECT * FROM data_extraction_fields WHERE agent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
             (agent_id,),
         )
         rows = cursor.fetchall()
@@ -597,7 +669,7 @@ def update_data_extraction_field(
     updates.append("updated_at = CURRENT_TIMESTAMP")
     params.append(field_uuid)
 
-    query = f"UPDATE data_extraction_fields SET {', '.join(updates)} WHERE uuid = ?"
+    query = f"UPDATE data_extraction_fields SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -610,17 +682,18 @@ def update_data_extraction_field(
 
 
 def delete_data_extraction_field(field_uuid: str) -> bool:
-    """Delete a data extraction field. Returns True if found and deleted."""
+    """Soft delete a data extraction field. Returns True if found and deleted."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "DELETE FROM data_extraction_fields WHERE uuid = ?", (field_uuid,)
+            "UPDATE data_extraction_fields SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
+            (field_uuid,),
         )
         conn.commit()
         deleted = cursor.rowcount > 0
 
         if deleted:
-            logger.info(f"Deleted data extraction field with UUID: {field_uuid}")
+            logger.info(f"Soft deleted data extraction field with UUID: {field_uuid}")
 
         return deleted
 
@@ -662,7 +735,9 @@ def get_test(test_uuid: str) -> Optional[Dict[str, Any]]:
     """Get a test by UUID."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM tests WHERE uuid = ?", (test_uuid,))
+        cursor.execute(
+            "SELECT * FROM tests WHERE uuid = ? AND deleted_at IS NULL", (test_uuid,)
+        )
         row = cursor.fetchone()
         if row:
             return _parse_test_row(row)
@@ -673,7 +748,9 @@ def get_all_tests() -> List[Dict[str, Any]]:
     """Get all tests."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM tests ORDER BY created_at DESC")
+        cursor.execute(
+            "SELECT * FROM tests WHERE deleted_at IS NULL ORDER BY created_at DESC"
+        )
         rows = cursor.fetchall()
         return [_parse_test_row(row) for row in rows]
 
@@ -704,7 +781,9 @@ def update_test(
     updates.append("updated_at = CURRENT_TIMESTAMP")
     params.append(test_uuid)
 
-    query = f"UPDATE tests SET {', '.join(updates)} WHERE uuid = ?"
+    query = (
+        f"UPDATE tests SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
+    )
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -717,14 +796,17 @@ def update_test(
 
 
 def delete_test(test_uuid: str) -> bool:
-    """Delete a test. Returns True if the test was found and deleted."""
+    """Soft delete a test. Returns True if the test was found and deleted."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM tests WHERE uuid = ?", (test_uuid,))
+        cursor.execute(
+            "UPDATE tests SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
+            (test_uuid,),
+        )
         conn.commit()
         deleted = cursor.rowcount > 0
 
         if deleted:
-            logger.info(f"Deleted test with UUID: {test_uuid}")
+            logger.info(f"Soft deleted test with UUID: {test_uuid}")
 
         return deleted
