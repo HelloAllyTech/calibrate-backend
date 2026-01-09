@@ -1886,3 +1886,615 @@ Done! I've removed the evaluation_criteria and data_extraction_fields tables and
 
 ---
 
+_**User (2026-01-09 03:30Z)**_
+
+create an agent_tests table similar to the agent_tools table and make the routes for it
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to create an agent_tests table similar to agent_tools table, which links agents to tests. I need to:
+
+1. Add the agent_tests table in db.py (similar structure to agent_tools)
+2. Add CRUD functions for agent_tests in db.py
+3. Create a router file for agent_tests
+4. Register the router in main.py
+
+Let me first look at the current db.py to see the agent_tools structure and follow the same pattern.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tools.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I have a clear picture. I need to:
+
+1. Add agent_tests table in init_db() similar to agent_tools
+2. Add it to the migration list
+3. Add CRUD functions for agent_tests similar to agent_tools
+4. Update delete_agent() to also soft delete agent_tests
+5. Update delete_test() to also soft delete agent_tests
+6. Create agent_tests.py router
+7. Register the router in main.py
+
+Let me start.</details></think>
+
+---
+
+I'll create the `agent_tests` table and routes following the same pattern as `agent_tools`.
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 15, lines removed: undefined
+
+```diff
+@@ -93,4 +93,19 @@
+          """
+          )
++ 
++         cursor.execute(
++             """
++             CREATE TABLE IF NOT EXISTS agent_tests (
++                 id INTEGER PRIMARY KEY AUTOINCREMENT,
++                 agent_id TEXT NOT NULL,
++                 test_id TEXT NOT NULL,
++                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL,
++                 UNIQUE(agent_id, test_id),
++                 FOREIGN KEY (agent_id) REFERENCES agents(uuid),
++                 FOREIGN KEY (test_id) REFERENCES tests(uuid)
++             )
++         """
++         )
+  
+          # Add deleted_at column to existing tables if not present (migration)
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -100,4 +115,5 @@
+              "agent_tools",
+              "tests",
++             "agent_tests",
+          ]
+          for table in tables_to_migrate:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update delete_agent to also soft delete agent_tests.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -224,5 +224,5 @@
+  def delete_agent(agent_uuid: str) -&gt; bool:
+      """Soft delete an agent. Returns True if the agent was found and deleted.
+-     Also soft deletes related agent_tools.
++     Also soft deletes related agent_tools and agent_tests.
+      """
+      with get_db_connection() as conn:
+```
+
+**Chunk 2**
+Lines added: 5, lines removed: undefined
+
+```diff
+@@ -240,4 +240,9 @@
+                  (agent_uuid,),
+              )
++             # Soft delete related agent_tests
++             cursor.execute(
++                 "UPDATE agent_tests SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
++                 (agent_uuid,),
++             )
+              logger.info(f"Soft deleted agent with UUID: {agent_uuid}")
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update delete_test to also soft delete agent_tests.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 3, lines removed: 1
+
+```diff
+@@ -566,5 +566,7 @@
+  
+  def delete_test(test_uuid: str) -&gt; bool:
+-     """Soft delete a test. Returns True if the test was found and deleted."""
++     """Soft delete a test. Returns True if the test was found and deleted.
++     Also soft deletes related agent_tests entries.
++     """
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+```
+
+**Chunk 2**
+Lines added: 6, lines removed: 1
+
+```diff
+@@ -573,10 +575,15 @@
+              (test_uuid,),
+          )
+-         conn.commit()
+          deleted = cursor.rowcount &gt; 0
+  
+          if deleted:
++             # Soft delete related agent_tests
++             cursor.execute(
++                 "UPDATE agent_tests SET deleted_at = CURRENT_TIMESTAMP WHERE test_id = ? AND deleted_at IS NULL",
++                 (test_uuid,),
++             )
+              logger.info(f"Soft deleted test with UUID: {test_uuid}")
+  
++         conn.commit()
+          return deleted
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me add the CRUD functions for agent_tests at the end of db.py (after the Tests functions).</details></think>
+
+---
+
+Now let me add the agent_tests CRUD functions at the end of db.py:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 96, lines removed: undefined
+
+```diff
+@@ -587,3 +587,99 @@
+          conn.commit()
+          return deleted
++ 
++ 
++ # ============ Agent Tests Functions ============
++ 
++ 
++ def add_test_to_agent(agent_id: str, test_id: str) -&gt; int:
++     """Add a test to an agent. Returns the id of the created link."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             """
++             INSERT INTO agent_tests (agent_id, test_id)
++             VALUES (?, ?)
++             """,
++             (agent_id, test_id),
++         )
++         conn.commit()
++         link_id = cursor.lastrowid
++         logger.info(f"Added test {test_id} to agent {agent_id}")
++         return link_id
++ 
++ 
++ def remove_test_from_agent(agent_id: str, test_id: str) -&gt; bool:
++     """Soft delete a test from an agent. Returns True if the link was found and deleted."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "UPDATE agent_tests SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND test_id = ? AND deleted_at IS NULL",
++             (agent_id, test_id),
++         )
++         conn.commit()
++         deleted = cursor.rowcount &gt; 0
++ 
++         if deleted:
++             logger.info(f"Soft deleted test {test_id} from agent {agent_id}")
++ 
++         return deleted
++ 
++ 
++ def get_tests_for_agent(agent_id: str) -&gt; List[Dict[str, Any]]:
++     """Get all tests associated with an agent."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             """
++             SELECT t.* FROM tests t
++             INNER JOIN agent_tests at ON t.uuid = at.test_id
++             WHERE at.agent_id = ? AND at.deleted_at IS NULL AND t.deleted_at IS NULL
++             ORDER BY at.created_at DESC
++             """,
++             (agent_id,),
++         )
++         rows = cursor.fetchall()
++         return [_parse_test_row(row) for row in rows]
++ 
++ 
++ def get_agents_for_test(test_id: str) -&gt; List[Dict[str, Any]]:
++     """Get all agents associated with a test."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             """
++             SELECT a.* FROM agents a
++             INNER JOIN agent_tests at ON a.uuid = at.agent_id
++             WHERE at.test_id = ? AND at.deleted_at IS NULL AND a.deleted_at IS NULL
++             ORDER BY at.created_at DESC
++             """,
++             (test_id,),
++         )
++         rows = cursor.fetchall()
++         return [_parse_agent_row(row) for row in rows]
++ 
++ 
++ def get_agent_test_link(agent_id: str, test_id: str) -&gt; Optional[Dict[str, Any]]:
++     """Check if a specific agent-test link exists."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM agent_tests WHERE agent_id = ? AND test_id = ? AND deleted_at IS NULL",
++             (agent_id, test_id),
++         )
++         row = cursor.fetchone()
++         if row:
++             return dict(row)
++         return None
++ 
++ 
++ def get_all_agent_tests() -&gt; List[Dict[str, Any]]:
++     """Get all agent-test links."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM agent_tests WHERE deleted_at IS NULL ORDER BY created_at DESC"
++         )
++         rows = cursor.fetchall()
++         return [dict(row) for row in rows]
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me create the router file for agent_tests.</details></think>
+
+---
+
+Now let me create the router file:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 133, lines removed: 1
+
+```diff
+@@ -1,1 +1,133 @@
+- 
++ from typing import List, Dict, Any
++ from fastapi import APIRouter, HTTPException
++ from pydantic import BaseModel
++ from sqlite3 import IntegrityError
++ 
++ from db import (
++     add_test_to_agent,
++     remove_test_from_agent,
++     get_tests_for_agent,
++     get_agents_for_test,
++     get_agent_test_link,
++     get_all_agent_tests,
++     get_agent,
++     get_test,
++ )
++ 
++ 
++ router = APIRouter(prefix="/agent-tests", tags=["agent-tests"])
++ 
++ 
++ class AgentTestsCreate(BaseModel):
++     agent_uuid: str
++     test_uuids: List[str]
++ 
++ 
++ class AgentTestDelete(BaseModel):
++     agent_uuid: str
++     test_uuid: str
++ 
++ 
++ class AgentTestResponse(BaseModel):
++     id: int
++     agent_id: str
++     test_id: str
++     created_at: str
++ 
++ 
++ class AgentTestsCreateResponse(BaseModel):
++     ids: List[int]
++     message: str
++ 
++ 
++ class TestResponse(BaseModel):
++     uuid: str
++     name: str
++     type: str
++     config: Dict[str, Any] | None = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ class AgentResponse(BaseModel):
++     uuid: str
++     name: str
++     config: Dict[str, Any] | None = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ @router.post("", response_model=AgentTestsCreateResponse)
++ async def create_agent_test_links(agent_tests: AgentTestsCreate):
++     """Add tests to an agent."""
++     # Verify agent exists
++     agent = get_agent(agent_tests.agent_uuid)
++     if not agent:
++         raise HTTPException(status_code=404, detail="Agent not found")
++ 
++     # Verify all tests exist
++     for test_uuid in agent_tests.test_uuids:
++         test = get_test(test_uuid)
++         if not test:
++             raise HTTPException(status_code=404, detail=f"Test {test_uuid} not found")
++ 
++     link_ids = []
++     for test_uuid in agent_tests.test_uuids:
++         # Check if link already exists
++         existing = get_agent_test_link(agent_tests.agent_uuid, test_uuid)
++         if existing:
++             continue  # Skip already linked tests
++ 
++         try:
++             link_id = add_test_to_agent(
++                 agent_id=agent_tests.agent_uuid,
++                 test_id=test_uuid,
++             )
++             link_ids.append(link_id)
++         except IntegrityError:
++             continue  # Skip if already linked
++ 
++     return AgentTestsCreateResponse(
++         ids=link_ids, message="Tests added to agent successfully"
++     )
++ 
++ 
++ @router.get("", response_model=List[AgentTestResponse])
++ async def list_agent_tests():
++     """List all agent-test links."""
++     links = get_all_agent_tests()
++     return links
++ 
++ 
++ @router.get("/agent/{agent_uuid}/tests", response_model=List[TestResponse])
++ async def get_agent_tests_endpoint(agent_uuid: str):
++     """Get all tests for a specific agent."""
++     # Verify agent exists
++     agent = get_agent(agent_uuid)
++     if not agent:
++         raise HTTPException(status_code=404, detail="Agent not found")
++ 
++     tests = get_tests_for_agent(agent_uuid)
++     return tests
++ 
++ 
++ @router.get("/test/{test_uuid}/agents", response_model=List[AgentResponse])
++ async def get_test_agents(test_uuid: str):
++     """Get all agents for a specific test."""
++     # Verify test exists
++     test = get_test(test_uuid)
++     if not test:
++         raise HTTPException(status_code=404, detail="Test not found")
++ 
++     agents = get_agents_for_test(test_uuid)
++     return agents
++ 
++ 
++ @router.delete("")
++ async def delete_agent_test_link(agent_test: AgentTestDelete):
++     """Remove a test from an agent."""
++     deleted = remove_test_from_agent(agent_test.agent_uuid, agent_test.test_uuid)
++     if not deleted:
++         raise HTTPException(status_code=404, detail="Agent-test link not found")
++     return {"message": "Test removed from agent successfully"}
++ 
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update main.py to include the agent_tests router.</details></think>
+
+---
+
+Now let me register the router in `main.py`:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update main.py to add the agent_tests router.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -16,4 +16,5 @@
+  from routers.tts import router as tts_router
+  from routers.tests import router as tests_router
++ from routers.agent_tests import router as agent_tests_router
+  from utils import get_s3_client
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me add the router to the app.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -39,4 +39,5 @@
+  app.include_router(tts_router)
+  app.include_router(tests_router)
++ app.include_router(agent_tests_router)
+  
+  app.add_middleware(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for any linting errors.</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done! Let me summarize the changes.</details></think>
+
+---
+
+Done! I've created the `agent_tests` table and routes. Here's a summary:
+
+**1. Database table** (`db.py`):
+- Added `agent_tests` table with columns: `id`, `agent_id`, `test_id`, `created_at`, `deleted_at`
+- Added to migration list
+
+**2. Cascade soft deletes** (`db.py`):
+- `delete_agent()` now also soft deletes related `agent_tests`
+- `delete_test()` now also soft deletes related `agent_tests`
+
+**3. Database functions** (`db.py`):
+- `add_test_to_agent(agent_id, test_id)` - Link a test to an agent
+- `remove_test_from_agent(agent_id, test_id)` - Soft delete a link
+- `get_tests_for_agent(agent_id)` - Get all tests for an agent
+- `get_agents_for_test(test_id)` - Get all agents for a test
+- `get_agent_test_link(agent_id, test_id)` - Check if link exists
+- `get_all_agent_tests()` - Get all links
+
+**4. Router endpoints** (`src/routers/agent_tests.py`):
+- `POST /agent-tests` - Add tests to an agent (accepts `agent_uuid` and `test_uuids[]`)
+- `GET /agent-tests` - List all agent-test links
+- `GET /agent-tests/agent/{agent_uuid}/tests` - Get all tests for an agent
+- `GET /agent-tests/test/{test_uuid}/agents` - Get all agents for a test
+- `DELETE /agent-tests` - Remove a test from an agent
+
+---
+

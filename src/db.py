@@ -93,12 +93,28 @@ def init_db():
         """
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_tests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL,
+                test_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL,
+                UNIQUE(agent_id, test_id),
+                FOREIGN KEY (agent_id) REFERENCES agents(uuid),
+                FOREIGN KEY (test_id) REFERENCES tests(uuid)
+            )
+        """
+        )
+
         # Add deleted_at column to existing tables if not present (migration)
         tables_to_migrate = [
             "agents",
             "tools",
             "agent_tools",
             "tests",
+            "agent_tests",
         ]
         for table in tables_to_migrate:
             try:
@@ -207,7 +223,7 @@ def update_agent(
 
 def delete_agent(agent_uuid: str) -> bool:
     """Soft delete an agent. Returns True if the agent was found and deleted.
-    Also soft deletes related agent_tools.
+    Also soft deletes related agent_tools and agent_tests.
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -221,6 +237,11 @@ def delete_agent(agent_uuid: str) -> bool:
             # Soft delete related agent_tools
             cursor.execute(
                 "UPDATE agent_tools SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
+                (agent_uuid,),
+            )
+            # Soft delete related agent_tests
+            cursor.execute(
+                "UPDATE agent_tests SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND deleted_at IS NULL",
                 (agent_uuid,),
             )
             logger.info(f"Soft deleted agent with UUID: {agent_uuid}")
@@ -544,17 +565,120 @@ def update_test(
 
 
 def delete_test(test_uuid: str) -> bool:
-    """Soft delete a test. Returns True if the test was found and deleted."""
+    """Soft delete a test. Returns True if the test was found and deleted.
+    Also soft deletes related agent_tests entries.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE tests SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
             (test_uuid,),
         )
+        deleted = cursor.rowcount > 0
+
+        if deleted:
+            # Soft delete related agent_tests
+            cursor.execute(
+                "UPDATE agent_tests SET deleted_at = CURRENT_TIMESTAMP WHERE test_id = ? AND deleted_at IS NULL",
+                (test_uuid,),
+            )
+            logger.info(f"Soft deleted test with UUID: {test_uuid}")
+
+        conn.commit()
+        return deleted
+
+
+# ============ Agent Tests Functions ============
+
+
+def add_test_to_agent(agent_id: str, test_id: str) -> int:
+    """Add a test to an agent. Returns the id of the created link."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO agent_tests (agent_id, test_id)
+            VALUES (?, ?)
+            """,
+            (agent_id, test_id),
+        )
+        conn.commit()
+        link_id = cursor.lastrowid
+        logger.info(f"Added test {test_id} to agent {agent_id}")
+        return link_id
+
+
+def remove_test_from_agent(agent_id: str, test_id: str) -> bool:
+    """Soft delete a test from an agent. Returns True if the link was found and deleted."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE agent_tests SET deleted_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND test_id = ? AND deleted_at IS NULL",
+            (agent_id, test_id),
+        )
         conn.commit()
         deleted = cursor.rowcount > 0
 
         if deleted:
-            logger.info(f"Soft deleted test with UUID: {test_uuid}")
+            logger.info(f"Soft deleted test {test_id} from agent {agent_id}")
 
         return deleted
+
+
+def get_tests_for_agent(agent_id: str) -> List[Dict[str, Any]]:
+    """Get all tests associated with an agent."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT t.* FROM tests t
+            INNER JOIN agent_tests at ON t.uuid = at.test_id
+            WHERE at.agent_id = ? AND at.deleted_at IS NULL AND t.deleted_at IS NULL
+            ORDER BY at.created_at DESC
+            """,
+            (agent_id,),
+        )
+        rows = cursor.fetchall()
+        return [_parse_test_row(row) for row in rows]
+
+
+def get_agents_for_test(test_id: str) -> List[Dict[str, Any]]:
+    """Get all agents associated with a test."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT a.* FROM agents a
+            INNER JOIN agent_tests at ON a.uuid = at.agent_id
+            WHERE at.test_id = ? AND at.deleted_at IS NULL AND a.deleted_at IS NULL
+            ORDER BY at.created_at DESC
+            """,
+            (test_id,),
+        )
+        rows = cursor.fetchall()
+        return [_parse_agent_row(row) for row in rows]
+
+
+def get_agent_test_link(agent_id: str, test_id: str) -> Optional[Dict[str, Any]]:
+    """Check if a specific agent-test link exists."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM agent_tests WHERE agent_id = ? AND test_id = ? AND deleted_at IS NULL",
+            (agent_id, test_id),
+        )
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+
+def get_all_agent_tests() -> List[Dict[str, Any]]:
+    """Get all agent-test links."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM agent_tests WHERE deleted_at IS NULL ORDER BY created_at DESC"
+        )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
