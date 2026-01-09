@@ -105,6 +105,20 @@ def init_db():
             )
         """
         )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                config TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        )
         conn.commit()
         logger.info("Database initialized successfully")
 
@@ -607,5 +621,110 @@ def delete_data_extraction_field(field_uuid: str) -> bool:
 
         if deleted:
             logger.info(f"Deleted data extraction field with UUID: {field_uuid}")
+
+        return deleted
+
+
+# ============ Tests Functions ============
+
+
+def create_test(
+    name: str,
+    type: str,
+    config: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Create a new test and return its UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        test_uuid = str(uuid.uuid4())
+        config_json = json.dumps(config) if config is not None else None
+        cursor.execute(
+            """
+            INSERT INTO tests (uuid, name, type, config)
+            VALUES (?, ?, ?, ?)
+            """,
+            (test_uuid, name, type, config_json),
+        )
+        conn.commit()
+        logger.info(f"Created test with UUID: {test_uuid}")
+        return test_uuid
+
+
+def _parse_test_row(row: sqlite3.Row) -> Dict[str, Any]:
+    """Parse a database row and deserialize JSON fields."""
+    test = dict(row)
+    if test.get("config"):
+        test["config"] = json.loads(test["config"])
+    return test
+
+
+def get_test(test_uuid: str) -> Optional[Dict[str, Any]]:
+    """Get a test by UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tests WHERE uuid = ?", (test_uuid,))
+        row = cursor.fetchone()
+        if row:
+            return _parse_test_row(row)
+        return None
+
+
+def get_all_tests() -> List[Dict[str, Any]]:
+    """Get all tests."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tests ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        return [_parse_test_row(row) for row in rows]
+
+
+def update_test(
+    test_uuid: str,
+    name: Optional[str] = None,
+    type: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Update a test. Returns True if the test was found and updated."""
+    updates = []
+    params = []
+
+    if name is not None:
+        updates.append("name = ?")
+        params.append(name)
+    if type is not None:
+        updates.append("type = ?")
+        params.append(type)
+    if config is not None:
+        updates.append("config = ?")
+        params.append(json.dumps(config))
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(test_uuid)
+
+    query = f"UPDATE tests SET {', '.join(updates)} WHERE uuid = ?"
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        conn.commit()
+        updated = cursor.rowcount > 0
+        if updated:
+            logger.info(f"Updated test with UUID: {test_uuid}")
+        return updated
+
+
+def delete_test(test_uuid: str) -> bool:
+    """Delete a test. Returns True if the test was found and deleted."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tests WHERE uuid = ?", (test_uuid,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+
+        if deleted:
+            logger.info(f"Deleted test with UUID: {test_uuid}")
 
         return deleted
