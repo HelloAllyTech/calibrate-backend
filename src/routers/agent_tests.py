@@ -560,11 +560,10 @@ def run_model_benchmark(
         config["params"] = {"model": model}
 
         # Create model-specific output directory
-        model_output_dir = output_dir / model.replace("/", "_")
-        model_output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         # Write config to temp file
-        config_file = model_output_dir / "test_config.json"
+        config_file = output_dir / "test_config.json"
         with open(config_file, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
@@ -577,7 +576,7 @@ def run_model_benchmark(
             "-c",
             str(config_file),
             "-o",
-            str(model_output_dir),
+            str(output_dir),
             "-m",
             model,
             "-p",
@@ -592,7 +591,7 @@ def run_model_benchmark(
             run_cmd,
             capture_output=True,
             text=True,
-            cwd=str(model_output_dir),
+            cwd=str(output_dir),
         )
 
         if result.stdout:
@@ -604,7 +603,7 @@ def run_model_benchmark(
         results_data = None
         metrics_data = None
 
-        for root, dirs, files in os.walk(model_output_dir):
+        for root, dirs, files in os.walk(output_dir):
             for file in files:
                 file_path = Path(root) / file
                 if file == "results.json":
@@ -619,10 +618,10 @@ def run_model_benchmark(
             f"agent-tests/benchmarks/{task_id}/outputs/{model.replace('/', '_')}"
         )
 
-        for root, dirs, files in os.walk(model_output_dir):
+        for root, dirs, files in os.walk(output_dir):
             for file in files:
                 local_file_path = Path(root) / file
-                relative_path = local_file_path.relative_to(model_output_dir)
+                relative_path = local_file_path.relative_to(output_dir)
                 s3_key = f"{results_prefix}/{relative_path}"
                 s3.upload_file(str(local_file_path), s3_bucket, s3_key)
 
