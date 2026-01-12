@@ -452,10 +452,16 @@ async def evaluate_tts(request: TTSEvaluationRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Create job in database
+    # Create job in database with details for recovery
     job_id = create_job(
         job_type="tts-eval",
         status=TaskStatus.IN_PROGRESS.value,
+        details={
+            "texts": request.texts,
+            "providers": request.providers,
+            "language": request.language,
+            "s3_bucket": s3_bucket,
+        },
         results=None,
     )
 

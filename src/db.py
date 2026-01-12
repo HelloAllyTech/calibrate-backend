@@ -114,13 +114,21 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT NOT NULL UNIQUE,
                 type TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
+                status TEXT NOT NULL DEFAULT 'in_progress',
+                details TEXT,
                 results TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """
         )
+
+        # Add details column to jobs table if not present (migration)
+        try:
+            cursor.execute("ALTER TABLE jobs ADD COLUMN details TEXT")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
 
         # Add deleted_at column to existing tables if not present (migration)
         tables_to_migrate = [
@@ -740,19 +748,30 @@ def get_all_agent_tests() -> List[Dict[str, Any]]:
 
 
 def create_job(
-    job_type: str, status: str = "pending", results: Optional[Dict[str, Any]] = None
+    job_type: str,
+    status: str = "in_progress",
+    details: Optional[Dict[str, Any]] = None,
+    results: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Create a new job and return its UUID."""
+    """Create a new job and return its UUID.
+
+    Args:
+        job_type: Type of job (stt-eval, tts-eval, llm-unit-test, llm-benchmark)
+        status: Initial status (defaults to 'in_progress')
+        details: JSON config needed to re-trigger the job if interrupted
+        results: Initial results (usually None)
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         job_uuid = str(uuid.uuid4())
+        details_json = json.dumps(details) if details is not None else None
         results_json = json.dumps(results) if results is not None else None
         cursor.execute(
             """
-            INSERT INTO jobs (uuid, type, status, results)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO jobs (uuid, type, status, details, results)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (job_uuid, job_type, status, results_json),
+            (job_uuid, job_type, status, details_json, results_json),
         )
         conn.commit()
         logger.info(f"Created job with UUID: {job_uuid}, type: {job_type}")
@@ -762,6 +781,8 @@ def create_job(
 def _parse_job_row(row: sqlite3.Row) -> Dict[str, Any]:
     """Parse a job database row and deserialize JSON fields."""
     job = dict(row)
+    if job.get("details"):
+        job["details"] = json.loads(job["details"])
     if job.get("results"):
         job["results"] = json.loads(job["results"])
     return job
@@ -789,6 +810,17 @@ def get_all_jobs(job_type: Optional[str] = None) -> List[Dict[str, Any]]:
             )
         else:
             cursor.execute("SELECT * FROM jobs ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        return [_parse_job_row(row) for row in rows]
+
+
+def get_pending_jobs() -> List[Dict[str, Any]]:
+    """Get all jobs with status 'in_progress' (for recovery on restart)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM jobs WHERE status = 'in_progress' ORDER BY created_at ASC"
+        )
         rows = cursor.fetchall()
         return [_parse_job_row(row) for row in rows]
 

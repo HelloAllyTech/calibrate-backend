@@ -474,10 +474,15 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Create job in database
+    # Create job in database with details for recovery
     job_id = create_job(
         job_type="llm-unit-test",
         status=TaskStatus.IN_PROGRESS.value,
+        details={
+            "agent_uuid": agent_uuid,
+            "test_uuids": request.test_uuids,
+            "s3_bucket": s3_bucket,
+        },
         results=None,
     )
 
@@ -941,10 +946,16 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Create job in database
+    # Create job in database with details for recovery
     job_id = create_job(
         job_type="llm-benchmark",
         status=TaskStatus.IN_PROGRESS.value,
+        details={
+            "agent_uuid": agent_uuid,
+            "test_uuids": request.test_uuids,
+            "models": request.models,
+            "s3_bucket": s3_bucket,
+        },
         results=None,
     )
 

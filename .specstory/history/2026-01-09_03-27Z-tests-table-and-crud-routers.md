@@ -7338,3 +7338,1325 @@ Done! I've added the benchmark API with the following:
 
 ---
 
+_**User (2026-01-11 09:21Z)**_
+
+add another column with job details for stt, tts, llm-unit-test and llm-benchmark with the json config required to trigger the respective functions, then, when an app is reloaded, check for pending jobs and retrigger tem
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to:
+1. Add a `details` column to the jobs table that stores the JSON config needed to re-trigger the job
+2. When the app starts, check for pending/in_progress jobs and re-trigger them
+
+This is essentially implementing job recovery/resumption on app restart.
+
+Let me:
+1. Add the `details` column to the jobs table in db.py
+2. Update all job creation calls to include the details
+3. Create a function that checks for pending jobs and re-triggers them
+4. Call this function on app startup in main.py
+
+Let me start by updating db.py to add the details column.</details></think>
+
+---
+
+I'll add a `details` column to the jobs table and implement job recovery on app startup.
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me look at the jobs functions in db.py:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I have a good understanding. I need to:
+
+1. Update the jobs table to add a `details` column
+2. Update `create_job` to accept and store details3. Update `_parse_job_row` to parse details
+4. Add a function to get pending jobs5. Update all job creation calls to include details6. Create a job recovery function in main.py
+
+Let me start:</details></think>
+
+---
+
+Now I'll update the code. First, let me update the jobs table and functions in `db.py`:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -116,4 +116,5 @@
+                  type TEXT NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'pending',
++                 details TEXT,
+                  results TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+```
+
+**Chunk 2**
+Lines added: 9, lines removed: undefined
+
+```diff
+@@ -123,4 +124,13 @@
+          )
+  
++         # Add details column to jobs table if not present (migration)
++         try:
++             cursor.execute(
++                 "ALTER TABLE jobs ADD COLUMN details TEXT"
++             )
++         except sqlite3.OperationalError:
++             # Column already exists
++             pass
++ 
+          # Add deleted_at column to existing tables if not present (migration)
+          tables_to_migrate = [
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update the create_job function:</details></think>
+
+---
+
+The string to replace was not found in the file.
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me read the file again to see the current state:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me read a bit earlier to see the function signature:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I have the exact format. Let me update it:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 16, lines removed: 5
+
+```diff
+@@ -751,17 +751,28 @@
+  
+  def create_job(
+-     job_type: str, status: str = "pending", results: Optional[Dict[str, Any]] = None
++     job_type: str,
++     status: str = "pending",
++     details: Optional[Dict[str, Any]] = None,
++     results: Optional[Dict[str, Any]] = None,
+  ) -&gt; str:
+-     """Create a new job and return its UUID."""
++     """Create a new job and return its UUID.
++ 
++     Args:
++         job_type: Type of job (stt-eval, tts-eval, llm-unit-test, llm-benchmark)
++         status: Initial status
++         details: JSON config needed to re-trigger the job if interrupted
++         results: Initial results (usually None)
++     """
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+          job_uuid = str(uuid.uuid4())
++         details_json = json.dumps(details) if details is not None else None
+          results_json = json.dumps(results) if results is not None else None
+          cursor.execute(
+              """
+-             INSERT INTO jobs (uuid, type, status, results)
+-             VALUES (?, ?, ?, ?)
++             INSERT INTO jobs (uuid, type, status, details, results)
++             VALUES (?, ?, ?, ?, ?)
+              """,
+-             (job_uuid, job_type, status, results_json),
++             (job_uuid, job_type, status, details_json, results_json),
+          )
+          conn.commit()
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update _parse_job_row to parse details:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: undefined
+
+```diff
+@@ -784,4 +784,6 @@
+      """Parse a job database row and deserialize JSON fields."""
+      job = dict(row)
++     if job.get("details"):
++         job["details"] = json.loads(job["details"])
+      if job.get("results"):
+          job["results"] = json.loads(job["results"])
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me add a function to get pending jobs:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 11, lines removed: undefined
+
+```diff
+@@ -816,4 +816,15 @@
+          return [_parse_job_row(row) for row in rows]
+  
++ 
++ def get_pending_jobs() -&gt; List[Dict[str, Any]]:
++     """Get all jobs with status 'pending' or 'in_progress'."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM jobs WHERE status IN ('pending', 'in_progress') ORDER BY created_at ASC"
++         )
++         rows = cursor.fetchall()
++         return [_parse_job_row(row) for row in rows]
++ 
+  
+  def update_job(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to update the job creation calls in the routers to include details. Let me update:1. stt.py
+2. tts.py3. agent_tests.py (for both run and benchmark)
+
+Let me start with stt.py:</details></think>
+
+---
+
+Now let me update the job creation calls. First, `stt.py`:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the stt.py job creation to include details:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py</summary>
+
+**Chunk 1**
+Lines added: 8, lines removed: 1
+
+```diff
+@@ -438,8 +438,15 @@
+          raise HTTPException(status_code=500, detail=str(e))
+  
+-     # Create job in database
++     # Create job in database with details for recovery
+      job_id = create_job(
+          job_type="stt-eval",
+          status=TaskStatus.IN_PROGRESS.value,
++         details={
++             "audio_paths": request.audio_paths,
++             "texts": request.texts,
++             "providers": request.providers,
++             "language": request.language,
++             "s3_bucket": s3_bucket,
++         },
+          results=None,
+      )
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update tts.py:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me update tts.py job creation:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+**Chunk 1**
+Lines added: 7, lines removed: 1
+
+```diff
+@@ -453,8 +453,14 @@
+          raise HTTPException(status_code=500, detail=str(e))
+  
+-     # Create job in database
++     # Create job in database with details for recovery
+      job_id = create_job(
+          job_type="tts-eval",
+          status=TaskStatus.IN_PROGRESS.value,
++         details={
++             "texts": request.texts,
++             "providers": request.providers,
++             "language": request.language,
++             "s3_bucket": s3_bucket,
++         },
+          results=None,
+      )
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update agent_tests.py for both run and benchmark endpoints:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me update the agent_tests.py run endpoint:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 6, lines removed: 1
+
+```diff
+@@ -475,8 +475,13 @@
+          raise HTTPException(status_code=500, detail=str(e))
+  
+-     # Create job in database
++     # Create job in database with details for recovery
+      job_id = create_job(
+          job_type="llm-unit-test",
+          status=TaskStatus.IN_PROGRESS.value,
++         details={
++             "agent_uuid": agent_uuid,
++             "test_uuids": request.test_uuids,
++             "s3_bucket": s3_bucket,
++         },
+          results=None,
+      )
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the benchmark endpoint:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me update the benchmark endpoint:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 7, lines removed: 1
+
+```diff
+@@ -947,8 +947,14 @@
+          raise HTTPException(status_code=500, detail=str(e))
+  
+-     # Create job in database
++     # Create job in database with details for recovery
+      job_id = create_job(
+          job_type="llm-benchmark",
+          status=TaskStatus.IN_PROGRESS.value,
++         details={
++             "agent_uuid": agent_uuid,
++             "test_uuids": request.test_uuids,
++             "models": request.models,
++             "s3_bucket": s3_bucket,
++         },
+          results=None,
+      )
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to create a job recovery function and call it in main.py. I'll create a new file for job recovery or add it to utils.py or create a separate module. Let me add it as a function that can be called from main.py:</details></think>
+
+---
+
+Now let me create the job recovery function. I'll add it to a new module and call it from main.py:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/job_recovery.py</summary>
+
+**Chunk 1**
+Lines added: 167, lines removed: 1
+
+```diff
+@@ -1,1 +1,167 @@
+- 
++ """Job recovery module - restarts pending/in_progress jobs on app startup."""
++ 
++ import threading
++ import logging
++ 
++ from db import get_pending_jobs, get_agent, get_test, update_job
++ from utils import TaskStatus
++ 
++ logger = logging.getLogger(__name__)
++ 
++ 
++ def recover_pending_jobs():
++     """Check for pending/in_progress jobs and restart them."""
++     pending_jobs = get_pending_jobs()
++ 
++     if not pending_jobs:
++         logger.info("No pending jobs to recover")
++         return
++ 
++     logger.info(f"Found {len(pending_jobs)} pending job(s) to recover")
++ 
++     for job in pending_jobs:
++         job_id = job["uuid"]
++         job_type = job["type"]
++         details = job.get("details")
++ 
++         if not details:
++             logger.warning(f"Job {job_id} has no details, marking as failed")
++             update_job(
++                 job_id,
++                 status=TaskStatus.DONE.value,
++                 results={"error": "Job recovery failed: no details available"},
++             )
++             continue
++ 
++         try:
++             if job_type == "stt-eval":
++                 _recover_stt_job(job_id, details)
++             elif job_type == "tts-eval":
++                 _recover_tts_job(job_id, details)
++             elif job_type == "llm-unit-test":
++                 _recover_llm_unit_test_job(job_id, details)
++             elif job_type == "llm-benchmark":
++                 _recover_llm_benchmark_job(job_id, details)
++             else:
++                 logger.warning(f"Unknown job type: {job_type}, marking as failed")
++                 update_job(
++                     job_id,
++                     status=TaskStatus.DONE.value,
++                     results={"error": f"Job recovery failed: unknown job type {job_type}"},
++                 )
++         except Exception as e:
++             logger.error(f"Failed to recover job {job_id}: {e}")
++             update_job(
++                 job_id,
++                 status=TaskStatus.DONE.value,
++                 results={"error": f"Job recovery failed: {str(e)}"},
++             )
++ 
++ 
++ def _recover_stt_job(job_id: str, details: dict):
++     """Recover an STT evaluation job."""
++     from routers.stt import run_evaluation_task, STTEvaluationRequest
++ 
++     logger.info(f"Recovering STT job {job_id}")
++ 
++     request = STTEvaluationRequest(
++         audio_paths=details["audio_paths"],
++         texts=details["texts"],
++         providers=details["providers"],
++         language=details["language"],
++     )
++     s3_bucket = details["s3_bucket"]
++ 
++     thread = threading.Thread(
++         target=run_evaluation_task,
++         args=(job_id, request, s3_bucket),
++         daemon=True,
++     )
++     thread.start()
++     logger.info(f"STT job {job_id} recovery started")
++ 
++ 
++ def _recover_tts_job(job_id: str, details: dict):
++     """Recover a TTS evaluation job."""
++     from routers.tts import run_tts_evaluation_task, TTSEvaluationRequest
++ 
++     logger.info(f"Recovering TTS job {job_id}")
++ 
++     request = TTSEvaluationRequest(
++         texts=details["texts"],
++         providers=details["providers"],
++         language=details["language"],
++     )
++     s3_bucket = details["s3_bucket"]
++ 
++     thread = threading.Thread(
++         target=run_tts_evaluation_task,
++         args=(job_id, request, s3_bucket),
++         daemon=True,
++     )
++     thread.start()
++     logger.info(f"TTS job {job_id} recovery started")
++ 
++ 
++ def _recover_llm_unit_test_job(job_id: str, details: dict):
++     """Recover an LLM unit test job."""
++     from routers.agent_tests import run_llm_test_task
++ 
++     logger.info(f"Recovering LLM unit test job {job_id}")
++ 
++     agent_uuid = details["agent_uuid"]
++     test_uuids = details["test_uuids"]
++     s3_bucket = details["s3_bucket"]
++ 
++     # Fetch agent and tests
++     agent = get_agent(agent_uuid)
++     if not agent:
++         raise ValueError(f"Agent {agent_uuid} not found")
++ 
++     tests = []
++     for test_uuid in test_uuids:
++         test = get_test(test_uuid)
++         if not test:
++             raise ValueError(f"Test {test_uuid} not found")
++         tests.append(test)
++ 
++     thread = threading.Thread(
++         target=run_llm_test_task,
++         args=(job_id, agent, tests, s3_bucket),
++         daemon=True,
++     )
++     thread.start()
++     logger.info(f"LLM unit test job {job_id} recovery started")
++ 
++ 
++ def _recover_llm_benchmark_job(job_id: str, details: dict):
++     """Recover an LLM benchmark job."""
++     from routers.agent_tests import run_benchmark_task
++ 
++     logger.info(f"Recovering LLM benchmark job {job_id}")
++ 
++     agent_uuid = details["agent_uuid"]
++     test_uuids = details["test_uuids"]
++     models = details["models"]
++     s3_bucket = details["s3_bucket"]
++ 
++     # Fetch agent and tests
++     agent = get_agent(agent_uuid)
++     if not agent:
++         raise ValueError(f"Agent {agent_uuid} not found")
++ 
++     tests = []
++     for test_uuid in test_uuids:
++         test = get_test(test_uuid)
++         if not test:
++             raise ValueError(f"Test {test_uuid} not found")
++         tests.append(test)
++ 
++     thread = threading.Thread(
++         target=run_benchmark_task,
++         args=(job_id, agent, tests, models, s3_bucket),
++         daemon=True,
++     )
++     thread.start()
++     logger.info(f"LLM benchmark job {job_id} recovery started")
++ 
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update main.py to call the job recovery function on startup:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -3,4 +3,5 @@
+  import logging
+  from typing import Literal
++ from contextlib import asynccontextmanager
+  
+  from dotenv import load_dotenv
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -18,4 +19,5 @@
+  from routers.agent_tests import router as agent_tests_router
+  from utils import get_s3_client
++ from job_recovery import recover_pending_jobs
+  
+  load_dotenv()
+```
+
+**Chunk 3**
+Lines added: 13, lines removed: 3
+
+```diff
+@@ -27,8 +29,18 @@
+  )
+  
+- app = FastAPI()
+  
+- # Initialize database
+- init_db()
++ @asynccontextmanager
++ async def lifespan(app: FastAPI):
++     """Lifespan context manager for startup and shutdown events."""
++     # Startup: Initialize database and recover pending jobs
++     init_db()
++     logger.info("Checking for pending jobs to recover...")
++     recover_pending_jobs()
++     yield
++     # Shutdown: Nothing to do for now
++     logger.info("Application shutting down")
++ 
++ 
++ app = FastAPI(lifespan=lifespan)
+  
+  # Include routers
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to remove the old `init_db()` call since it's now in the lifespan function:</details></think>
+
+---
+
+The string to replace was not found in the file.
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, it seems there's no double init_db() call. Let me verify the file contents:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The file looks correct - the duplicate `init_db()` call was already removed during my edit. Let me now check for lint errors in all the modified files:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 6 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/job_recovery.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py`
+
+Lint results
+
+Lint errors for `src/routers/agent_tests.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Variable "dirs" is not accessed | 316:27-316:31 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 335:27-335:31 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "idx" is not accessed | 357:25-357:28 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 611:19-611:23 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 626:19-626:23 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 840:31-840:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All good! Let me summarize the changes made.</details></think>
+
+---
+
+Done! Here's a summary of the changes:
+
+**1. Added `details` column to `jobs` table (`db.py`):**
+- New column stores JSON config needed to re-trigger jobs
+- Added migration for existing tables
+- Updated `create_job()` to accept `details` parameter
+- Updated `_parse_job_row()` to parse details JSON
+- Added `get_pending_jobs()` function to fetch jobs with status 'pending' or 'in_progress'
+
+**2. Updated job creation to include details:**
+
+- **STT (`stt.py`):** Stores `audio_paths`, `texts`, `providers`, `language`, `s3_bucket`
+- **TTS (`tts.py`):** Stores `texts`, `providers`, `language`, `s3_bucket`
+- **LLM Unit Test (`agent_tests.py`):** Stores `agent_uuid`, `test_uuids`, `s3_bucket`
+- **LLM Benchmark (`agent_tests.py`):** Stores `agent_uuid`, `test_uuids`, `models`, `s3_bucket`
+
+**3. Created job recovery module (`job_recovery.py`):**
+- `recover_pending_jobs()` - main function that checks for pending jobs
+- Recovery functions for each job type:
+  - `_recover_stt_job()`
+  - `_recover_tts_job()`
+  - `_recover_llm_unit_test_job()`
+  - `_recover_llm_benchmark_job()`
+
+**4. Updated app startup (`main.py`):**
+- Added `lifespan` context manager for startup/shutdown events
+- On startup: initializes database, then recovers pending jobs
+- Jobs with missing details are marked as failed
+
+---
+
+_**User (2026-01-11 09:21Z)**_
+
+update @.github/workflows/deploy.yml so that if there is any error in the deployment to ec2 step the action should fail
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants to update the deploy.yml so that if any error occurs in the "Deploy to Production EC2" step, the action should fail. Currently, the script doesn't have `set -e` to exit on error. I should add that to ensure the script fails on any error.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy.yml</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: undefined
+
+```diff
+@@ -53,4 +53,6 @@
+            key: ${{ secrets.EC2_SSH_KEY }}
+            script: |
++             set -e  # Exit immediately if any command fails
++ 
+              # Set environment variables
+              export IMAGE_NAME="${{ env.IMAGE_NAME }}"
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Done. I added `set -e` at the beginning of the script which will cause the script to exit immediately if any command returns a non-zero exit code.</details></think>
+
+---
+
+Done! Added `set -e` at the beginning of the deployment script. This ensures the script will exit immediately if any command fails (returns a non-zero exit code), causing the GitHub Action to fail.
+
+---
+
+_**User (2026-01-11 09:21Z)**_
+
+why are there pending and in_progress both options for job - use one
+
+@db.py (817-825) 
+
+here and everywhere else
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user is right - having both "pending" and "in_progress" is redundant. Looking at the code, jobs are created with "in_progress" status directly (not "pending"), so I should simplify this to just use "in_progress" for jobs that need to be recovered.
+
+Let me check what statuses are actually used:
+1. Jobs are created with `status=TaskStatus.IN_PROGRESS.value` 
+2. Jobs are updated to `status=TaskStatus.DONE.value` when completed
+
+So "pending" is never actually used. I should update `get_pending_jobs()` to only check for "in_progress" status.</details></think>
+
+---
+
+You're right - jobs are always created with `in_progress` status, so `pending` is never used. Let me simplify:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me also check the create_job function default status:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 2
+
+```diff
+@@ -816,9 +816,9 @@
+  
+  def get_pending_jobs() -&gt; List[Dict[str, Any]]:
+-     """Get all jobs with status 'pending' or 'in_progress'."""
++     """Get all jobs with status 'in_progress' (for recovery on restart)."""
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+          cursor.execute(
+-             "SELECT * FROM jobs WHERE status IN ('pending', 'in_progress') ORDER BY created_at ASC"
++             "SELECT * FROM jobs WHERE status = 'in_progress' ORDER BY created_at ASC"
+          )
+          rows = cursor.fetchall()
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me also update the default status in create_job to remove "pending" since it's not used:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check the create_job function:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check the function signature to see what the default status is:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The default is "pending" but I see in other files it's always called with "in_progress" explicitly. Let me update the default to "in_progress" to be consistent:</details></think>
+
+---
+
+Now let me update the default status to `in_progress`:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -750,5 +750,5 @@
+  def create_job(
+      job_type: str,
+-     status: str = "pending",
++     status: str = "in_progress",
+      details: Optional[Dict[str, Any]] = None,
+      results: Optional[Dict[str, Any]] = None,
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -758,5 +758,5 @@
+      Args:
+          job_type: Type of job (stt-eval, tts-eval, llm-unit-test, llm-benchmark)
+-         status: Initial status
++         status: Initial status (defaults to 'in_progress')
+          details: JSON config needed to re-trigger the job if interrupted
+          results: Initial results (usually None)
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me also update the jobs table schema default value to be consistent:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "CREATE TABLE IF NOT EXISTS jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `CREATE TABLE IF NOT EXISTS jobs (` | L113 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me update the schema default as well:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -115,5 +115,5 @@
+                  uuid TEXT NOT NULL UNIQUE,
+                  type TEXT NOT NULL,
+-                 status TEXT NOT NULL DEFAULT 'pending',
++                 status TEXT NOT NULL DEFAULT 'in_progress',
+                  details TEXT,
+                  results TEXT,
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me also check the job_recovery.py file for any references to pending:</details></think>
+
+---
+
+Now let me check `job_recovery.py` for any references to `pending`:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "pending" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 14 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def get_pending_jobs() -> List[Dict[str, Any]]:` | L817 |
+| `src/job_recovery.py` | `"""Job recovery module - restarts pending/in_progress jobs on app startup."""` | L1 |
+| `src/job_recovery.py` | `from db import get_pending_jobs, get_agent, get_test, update_job` | L6 |
+| `src/job_recovery.py` | `def recover_pending_jobs():` | L12 |
+| `src/job_recovery.py` | `"""Check for pending/in_progress jobs and restart them."""` | L13 |
+| `src/job_recovery.py` | `pending_jobs = get_pending_jobs()` | L14 |
+| `src/job_recovery.py` | `if not pending_jobs:` | L16 |
+| `src/job_recovery.py` | `logger.info("No pending jobs to recover")` | L17 |
+| `src/job_recovery.py` | `logger.info(f"Found \{len(pending_jobs)\} pending job(s) to recover")` | L20 |
+| `src/job_recovery.py` | `for job in pending_jobs:` | L22 |
+| `src/main.py` | `from job_recovery import recover_pending_jobs` | L21 |
+| `src/main.py` | `# Startup: Initialize database and recover pending jobs` | L35 |
+| `src/main.py` | `logger.info("Checking for pending jobs to recover...")` | L37 |
+| `src/main.py` | `recover_pending_jobs()` | L38 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I should update the comments in job_recovery.py to reflect that we're only recovering "in_progress" jobs, not both "pending" and "in_progress":</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/job_recovery.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me update the comments in job_recovery.py:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/job_recovery.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -1,3 +1,3 @@
+- """Job recovery module - restarts pending/in_progress jobs on app startup."""
++ """Job recovery module - restarts in_progress jobs on app startup."""
+  
+  import threading
+```
+
+**Chunk 2**
+Lines added: 3, lines removed: 3
+
+```diff
+@@ -11,12 +11,12 @@
+  
+  def recover_pending_jobs():
+-     """Check for pending/in_progress jobs and restart them."""
++     """Check for in_progress jobs and restart them."""
+      pending_jobs = get_pending_jobs()
+  
+      if not pending_jobs:
+-         logger.info("No pending jobs to recover")
++         logger.info("No in_progress jobs to recover")
+          return
+  
+-     logger.info(f"Found {len(pending_jobs)} pending job(s) to recover")
++     logger.info(f"Found {len(pending_jobs)} in_progress job(s) to recover")
+  
+      for job in pending_jobs:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me also update the comments in main.py:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me update main.py comments:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 2
+
+```diff
+@@ -33,7 +33,7 @@
+  async def lifespan(app: FastAPI):
+      """Lifespan context manager for startup and shutdown events."""
+-     # Startup: Initialize database and recover pending jobs
++     # Startup: Initialize database and recover in_progress jobs
+      init_db()
+-     logger.info("Checking for pending jobs to recover...")
++     logger.info("Checking for in_progress jobs to recover...")
+      recover_pending_jobs()
+      yield
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me also verify that there are no other places where "pending" is used as a status:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for ""pending"" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 0 matches</summary>
+
+Output mode: content
+
+
+_No matches found_
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, there are no more references to "pending" as a status. Let me also check if TaskStatus enum has "pending":</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "TaskStatus" in "/Users/aman/Documents/repos/artpark/pense-backend/src/utils.py" • 2 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/utils.py` | `class TaskStatus(str, Enum):` | L18 |
+| `src/utils.py` | `class TaskStatusResponse(BaseModel):` | L37 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The TaskStatus enum doesn't have "pending" - it only has IN_PROGRESS, CANCELLED, and DONE. So we're already consistent there.
+
+Let me now check for lints:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/job_recovery.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done. I've simplified the job status to use only "in_progress" instead of both "pending" and "in_progress". The changes made:
+
+1. Updated `get_pending_jobs()` to only check for `status = 'in_progress'`
+2. Changed the default status in `create_job()` from "pending" to "in_progress"
+3. Updated the jobs table schema default from "pending" to "in_progress"
+4. Updated comments in job_recovery.py and main.py to reflect the change
+
+The TaskStatus enum in utils.py already only had IN_PROGRESS, CANCELLED, and DONE - no PENDING.</details></think>
+
+---
+
+Done. Simplified to use only `in_progress` status:
+
+1. **`src/db.py`**:
+   - Changed `get_pending_jobs()` to only check for `status = 'in_progress'`
+   - Changed default status in `create_job()` from `"pending"` to `"in_progress"`
+   - Updated jobs table schema default from `'pending'` to `'in_progress'`
+
+2. **`src/job_recovery.py`** and **`src/main.py`**: Updated comments to reflect the change
+
+The `TaskStatus` enum in `utils.py` already only has `IN_PROGRESS`, `CANCELLED`, and `DONE` - no `PENDING`.
+
+---
+

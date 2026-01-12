@@ -2,6 +2,7 @@ import os
 import uuid
 import logging
 from typing import Literal
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -17,6 +18,7 @@ from routers.tts import router as tts_router
 from routers.tests import router as tests_router
 from routers.agent_tests import router as agent_tests_router
 from utils import get_s3_client
+from job_recovery import recover_pending_jobs
 
 load_dotenv()
 
@@ -26,10 +28,20 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
-app = FastAPI()
 
-# Initialize database
-init_db()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup: Initialize database and recover in_progress jobs
+    init_db()
+    logger.info("Checking for in_progress jobs to recover...")
+    recover_pending_jobs()
+    yield
+    # Shutdown: Nothing to do for now
+    logger.info("Application shutting down")
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Include routers
 app.include_router(agents_router)
