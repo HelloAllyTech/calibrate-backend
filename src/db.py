@@ -125,6 +125,40 @@ def init_db():
 
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS agent_test_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                agent_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'in_progress',
+                details TEXT,
+                results TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (agent_id) REFERENCES agents(uuid)
+            )
+        """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS simulation_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                simulation_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'in_progress',
+                details TEXT,
+                results TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (simulation_id) REFERENCES simulations(uuid)
+            )
+        """
+        )
+
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS personas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT NOT NULL UNIQUE,
@@ -173,9 +207,11 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
+                agent_id TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                deleted_at TIMESTAMP DEFAULT NULL
+                deleted_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (agent_id) REFERENCES agents(uuid)
             )
         """
         )
@@ -248,6 +284,15 @@ def init_db():
             except sqlite3.OperationalError:
                 # Column already exists
                 pass
+
+        # Add agent_id column to simulations table if not present (migration)
+        try:
+            cursor.execute(
+                "ALTER TABLE simulations ADD COLUMN agent_id TEXT DEFAULT NULL"
+            )
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
 
         conn.commit()
         logger.info("Database initialized successfully")
@@ -1061,17 +1106,17 @@ def delete_metric(metric_uuid: str) -> bool:
 # ============ Simulations Functions ============
 
 
-def create_simulation(name: str) -> str:
+def create_simulation(name: str, agent_id: Optional[str] = None) -> str:
     """Create a new simulation and return its UUID."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         simulation_uuid = str(uuid.uuid4())
         cursor.execute(
             """
-            INSERT INTO simulations (uuid, name)
-            VALUES (?, ?)
+            INSERT INTO simulations (uuid, name, agent_id)
+            VALUES (?, ?, ?)
             """,
-            (simulation_uuid, name),
+            (simulation_uuid, name, agent_id),
         )
         conn.commit()
         logger.info(f"Created simulation with UUID: {simulation_uuid}")
@@ -1106,14 +1151,29 @@ def get_all_simulations() -> List[Dict[str, Any]]:
 def update_simulation(
     simulation_uuid: str,
     name: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    clear_agent: bool = False,
 ) -> bool:
-    """Update a simulation. Returns True if the simulation was found and updated."""
+    """Update a simulation. Returns True if the simulation was found and updated.
+
+    Args:
+        simulation_uuid: UUID of the simulation to update
+        name: New name for the simulation
+        agent_id: New agent ID to link to the simulation
+        clear_agent: If True, clears the agent_id (sets to NULL)
+    """
     updates = []
     params = []
 
     if name is not None:
         updates.append("name = ?")
         params.append(name)
+
+    if clear_agent:
+        updates.append("agent_id = NULL")
+    elif agent_id is not None:
+        updates.append("agent_id = ?")
+        params.append(agent_id)
 
     if not updates:
         return False
@@ -1696,4 +1756,306 @@ def delete_job(job_uuid: str) -> bool:
         deleted = cursor.rowcount > 0
         if deleted:
             logger.info(f"Deleted job with UUID: {job_uuid}")
+        return deleted
+
+
+# ============ Agent Test Jobs Functions ============
+
+
+def create_agent_test_job(
+    agent_id: str,
+    job_type: str,
+    status: str = "in_progress",
+    details: Optional[Dict[str, Any]] = None,
+    results: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Create a new agent test job and return its UUID.
+
+    Args:
+        agent_id: UUID of the agent this job is for
+        job_type: Type of job (llm-unit-test, llm-benchmark)
+        status: Initial status (defaults to 'in_progress')
+        details: JSON config needed to re-trigger the job if interrupted
+        results: Initial results (usually None)
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        job_uuid = str(uuid.uuid4())
+        details_json = json.dumps(details) if details is not None else None
+        results_json = json.dumps(results) if results is not None else None
+        cursor.execute(
+            """
+            INSERT INTO agent_test_jobs (uuid, agent_id, type, status, details, results)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (job_uuid, agent_id, job_type, status, details_json, results_json),
+        )
+        conn.commit()
+        logger.info(
+            f"Created agent test job with UUID: {job_uuid}, type: {job_type}, agent: {agent_id}"
+        )
+        return job_uuid
+
+
+def _parse_agent_test_job_row(row: sqlite3.Row) -> Dict[str, Any]:
+    """Parse an agent test job database row and deserialize JSON fields."""
+    job = dict(row)
+    if job.get("details"):
+        job["details"] = json.loads(job["details"])
+    if job.get("results"):
+        job["results"] = json.loads(job["results"])
+    return job
+
+
+def get_agent_test_job(job_uuid: str) -> Optional[Dict[str, Any]]:
+    """Get an agent test job by UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM agent_test_jobs WHERE uuid = ?", (job_uuid,))
+        row = cursor.fetchone()
+        if row:
+            return _parse_agent_test_job_row(row)
+        return None
+
+
+def get_agent_test_jobs_for_agent(
+    agent_id: str, job_type: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Get all agent test jobs for a specific agent, optionally filtered by type."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_type:
+            cursor.execute(
+                "SELECT * FROM agent_test_jobs WHERE agent_id = ? AND type = ? ORDER BY created_at DESC",
+                (agent_id, job_type),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM agent_test_jobs WHERE agent_id = ? ORDER BY created_at DESC",
+                (agent_id,),
+            )
+        rows = cursor.fetchall()
+        return [_parse_agent_test_job_row(row) for row in rows]
+
+
+def get_all_agent_test_jobs(job_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all agent test jobs, optionally filtered by type."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_type:
+            cursor.execute(
+                "SELECT * FROM agent_test_jobs WHERE type = ? ORDER BY created_at DESC",
+                (job_type,),
+            )
+        else:
+            cursor.execute("SELECT * FROM agent_test_jobs ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        return [_parse_agent_test_job_row(row) for row in rows]
+
+
+def get_pending_agent_test_jobs() -> List[Dict[str, Any]]:
+    """Get all agent test jobs with status 'in_progress' (for recovery on restart)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM agent_test_jobs WHERE status = 'in_progress' ORDER BY created_at ASC"
+        )
+        rows = cursor.fetchall()
+        return [_parse_agent_test_job_row(row) for row in rows]
+
+
+def update_agent_test_job(
+    job_uuid: str,
+    status: Optional[str] = None,
+    results: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Update an agent test job. Returns True if the job was found and updated."""
+    updates = []
+    params = []
+
+    if status is not None:
+        updates.append("status = ?")
+        params.append(status)
+    if results is not None:
+        updates.append("results = ?")
+        params.append(json.dumps(results))
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(job_uuid)
+
+    query = f"UPDATE agent_test_jobs SET {', '.join(updates)} WHERE uuid = ?"
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        conn.commit()
+        updated = cursor.rowcount > 0
+        if updated:
+            logger.info(f"Updated agent test job with UUID: {job_uuid}")
+        return updated
+
+
+def delete_agent_test_job(job_uuid: str) -> bool:
+    """Delete an agent test job. Returns True if the job was found and deleted."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM agent_test_jobs WHERE uuid = ?", (job_uuid,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"Deleted agent test job with UUID: {job_uuid}")
+        return deleted
+
+
+# ============ Simulation Jobs Functions ============
+
+
+def create_simulation_job(
+    simulation_id: str,
+    job_type: str,
+    status: str = "in_progress",
+    details: Optional[Dict[str, Any]] = None,
+    results: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Create a new simulation job and return its UUID.
+
+    Args:
+        simulation_id: UUID of the simulation this job is for
+        job_type: Type of job (llm-simulation)
+        status: Initial status (defaults to 'in_progress')
+        details: JSON config needed to re-trigger the job if interrupted
+        results: Initial results (usually None)
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        job_uuid = str(uuid.uuid4())
+        details_json = json.dumps(details) if details is not None else None
+        results_json = json.dumps(results) if results is not None else None
+        cursor.execute(
+            """
+            INSERT INTO simulation_jobs (uuid, simulation_id, type, status, details, results)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (job_uuid, simulation_id, job_type, status, details_json, results_json),
+        )
+        conn.commit()
+        logger.info(
+            f"Created simulation job with UUID: {job_uuid}, type: {job_type}, simulation: {simulation_id}"
+        )
+        return job_uuid
+
+
+def _parse_simulation_job_row(row: sqlite3.Row) -> Dict[str, Any]:
+    """Parse a simulation job database row and deserialize JSON fields."""
+    job = dict(row)
+    if job.get("details"):
+        job["details"] = json.loads(job["details"])
+    if job.get("results"):
+        job["results"] = json.loads(job["results"])
+    return job
+
+
+def get_simulation_job(job_uuid: str) -> Optional[Dict[str, Any]]:
+    """Get a simulation job by UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM simulation_jobs WHERE uuid = ?", (job_uuid,))
+        row = cursor.fetchone()
+        if row:
+            return _parse_simulation_job_row(row)
+        return None
+
+
+def get_simulation_jobs_for_simulation(
+    simulation_id: str, job_type: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Get all simulation jobs for a specific simulation, optionally filtered by type."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_type:
+            cursor.execute(
+                "SELECT * FROM simulation_jobs WHERE simulation_id = ? AND type = ? ORDER BY created_at DESC",
+                (simulation_id, job_type),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM simulation_jobs WHERE simulation_id = ? ORDER BY created_at DESC",
+                (simulation_id,),
+            )
+        rows = cursor.fetchall()
+        return [_parse_simulation_job_row(row) for row in rows]
+
+
+def get_all_simulation_jobs(job_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all simulation jobs, optionally filtered by type."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_type:
+            cursor.execute(
+                "SELECT * FROM simulation_jobs WHERE type = ? ORDER BY created_at DESC",
+                (job_type,),
+            )
+        else:
+            cursor.execute("SELECT * FROM simulation_jobs ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        return [_parse_simulation_job_row(row) for row in rows]
+
+
+def get_pending_simulation_jobs() -> List[Dict[str, Any]]:
+    """Get all simulation jobs with status 'in_progress' (for recovery on restart)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM simulation_jobs WHERE status = 'in_progress' ORDER BY created_at ASC"
+        )
+        rows = cursor.fetchall()
+        return [_parse_simulation_job_row(row) for row in rows]
+
+
+def update_simulation_job(
+    job_uuid: str,
+    status: Optional[str] = None,
+    results: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Update a simulation job. Returns True if the job was found and updated."""
+    updates = []
+    params = []
+
+    if status is not None:
+        updates.append("status = ?")
+        params.append(status)
+    if results is not None:
+        updates.append("results = ?")
+        params.append(json.dumps(results))
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(job_uuid)
+
+    query = f"UPDATE simulation_jobs SET {', '.join(updates)} WHERE uuid = ?"
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        conn.commit()
+        updated = cursor.rowcount > 0
+        if updated:
+            logger.info(f"Updated simulation job with UUID: {job_uuid}")
+        return updated
+
+
+def delete_simulation_job(job_uuid: str) -> bool:
+    """Delete a simulation job. Returns True if the job was found and deleted."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM simulation_jobs WHERE uuid = ?", (job_uuid,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"Deleted simulation job with UUID: {job_uuid}")
         return deleted

@@ -1,6 +1,14 @@
+import os
+import json
+import subprocess
+import traceback
+import threading
+import logging
+from pathlib import Path
 from typing import Optional, List, Dict, Any
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from db import (
     create_simulation,
@@ -14,10 +22,27 @@ from db import (
     add_persona_to_simulation,
     add_scenario_to_simulation,
     add_metric_to_simulation,
+    remove_persona_from_simulation,
+    remove_scenario_from_simulation,
+    remove_metric_from_simulation,
     get_personas_for_simulation,
     get_scenarios_for_simulation,
     get_metrics_for_simulation,
+    get_agent,
+    get_tools_for_agent,
+    create_simulation_job,
+    get_simulation_job,
+    update_simulation_job,
+    get_simulation_jobs_for_simulation,
 )
+from utils import (
+    TaskStatus,
+    TaskCreateResponse,
+    get_s3_client,
+    get_s3_output_config,
+)
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/simulations", tags=["simulations"])
@@ -25,6 +50,7 @@ router = APIRouter(prefix="/simulations", tags=["simulations"])
 
 class SimulationCreate(BaseModel):
     name: str
+    agent_uuid: Optional[str] = None
     persona_uuids: Optional[List[str]] = None
     scenario_uuids: Optional[List[str]] = None
     metric_uuids: Optional[List[str]] = None
@@ -32,6 +58,10 @@ class SimulationCreate(BaseModel):
 
 class SimulationUpdate(BaseModel):
     name: Optional[str] = None
+    agent_uuid: Optional[str] = None
+    persona_uuids: Optional[List[str]] = None
+    scenario_uuids: Optional[List[str]] = None
+    metric_uuids: Optional[List[str]] = None
 
 
 class PersonaResponse(BaseModel):
@@ -60,9 +90,18 @@ class MetricResponse(BaseModel):
     updated_at: str
 
 
+class AgentSummaryResponse(BaseModel):
+    uuid: str
+    name: str
+    config: Optional[Dict[str, Any]] = None
+    created_at: str
+    updated_at: str
+
+
 class SimulationListResponse(BaseModel):
     uuid: str
     name: str
+    agent: Optional[AgentSummaryResponse] = None
     created_at: str
     updated_at: str
 
@@ -70,6 +109,7 @@ class SimulationListResponse(BaseModel):
 class SimulationDetailResponse(BaseModel):
     uuid: str
     name: str
+    agent: Optional[AgentSummaryResponse] = None
     created_at: str
     updated_at: str
     personas: List[PersonaResponse]
@@ -82,9 +122,71 @@ class SimulationCreateResponse(BaseModel):
     message: str
 
 
+class RunSimulationRequest(BaseModel):
+    type: str = Field(..., description="Type of simulation run: 'chat' or 'voice'")
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v):
+        if v not in ["chat", "voice"]:
+            raise ValueError("type must be either 'chat' or 'voice'")
+        return v
+
+
+class EvaluationCriterionResult(BaseModel):
+    name: str
+    match: bool
+    reasoning: str
+
+
+class SimulationCaseResult(BaseModel):
+    """Result for a single persona-scenario simulation"""
+
+    simulation_name: str
+    persona: Optional[Dict[str, Any]] = (
+        None  # Full persona object from config.json (with label, characteristics, gender, language)
+    )
+    scenario: Optional[Dict[str, Any]] = (
+        None  # Full scenario object from config.json (with name/label and description)
+    )
+    evaluation_results: Optional[List[EvaluationCriterionResult]] = None
+    transcript: Optional[List[Dict[str, Any]]] = None
+
+
+class SimulationRunStatusResponse(BaseModel):
+    task_id: str
+    name: str  # Format: "Run {index}"
+    status: str
+    type: str
+    updated_at: str
+    total_simulations: Optional[int] = None
+    metrics: Optional[Dict[str, Any]] = None
+    simulation_results: Optional[List[SimulationCaseResult]] = None
+    results_s3_prefix: Optional[str] = None
+    error: Optional[str] = None
+
+
+class SimulationRunListItem(BaseModel):
+    uuid: str
+    name: str  # Format: "Run {index}"
+    status: str
+    type: str
+    updated_at: str
+
+
+class SimulationRunsResponse(BaseModel):
+    runs: List[SimulationRunListItem]
+
+
 @router.post("", response_model=SimulationCreateResponse)
 async def create_simulation_endpoint(simulation: SimulationCreate):
-    """Create a new simulation with optional linked personas, scenarios, and metrics."""
+    """Create a new simulation with optional linked agent, personas, scenarios, and metrics."""
+    # Verify agent exists if provided
+    if simulation.agent_uuid:
+        agent = get_agent(simulation.agent_uuid)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
     # Verify all personas exist
     if simulation.persona_uuids:
         for persona_uuid in simulation.persona_uuids:
@@ -113,7 +215,9 @@ async def create_simulation_endpoint(simulation: SimulationCreate):
                 )
 
     # Create the simulation
-    simulation_uuid = create_simulation(name=simulation.name)
+    simulation_uuid = create_simulation(
+        name=simulation.name, agent_id=simulation.agent_uuid
+    )
 
     # Add personas to simulation
     if simulation.persona_uuids:
@@ -137,17 +241,134 @@ async def create_simulation_endpoint(simulation: SimulationCreate):
 
 @router.get("", response_model=List[SimulationListResponse])
 async def list_simulations():
-    """List all simulations."""
+    """List all simulations with their linked agents."""
     simulations = get_all_simulations()
-    return simulations
+    result = []
+    for sim in simulations:
+        agent = None
+        if sim.get("agent_id"):
+            agent_data = get_agent(sim["agent_id"])
+            if agent_data:
+                agent = AgentSummaryResponse(
+                    uuid=agent_data["uuid"],
+                    name=agent_data["name"],
+                    config=agent_data.get("config"),
+                    created_at=agent_data["created_at"],
+                    updated_at=agent_data["updated_at"],
+                )
+        result.append(
+            SimulationListResponse(
+                uuid=sim["uuid"],
+                name=sim["name"],
+                agent=agent,
+                created_at=sim["created_at"],
+                updated_at=sim["updated_at"],
+            )
+        )
+    return result
+
+
+@router.get("/run/{task_id}", response_model=SimulationRunStatusResponse)
+async def get_simulation_run_status(task_id: str):
+    """
+    Get the status of a simulation run.
+
+    Returns the current status and, if done, the simulation results.
+    """
+    job = get_simulation_job(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Calculate run index based on creation order
+    simulation_id = job.get("simulation_id")
+    run_name = "Run 1"  # Default
+    if simulation_id:
+        all_jobs = get_simulation_jobs_for_simulation(simulation_id)
+        # Sort by created_at ASC to get oldest first (Run 1 is the oldest)
+        sorted_jobs = sorted(all_jobs, key=lambda j: j.get("created_at", ""))
+        # Find the index of current job (1-indexed)
+        for idx, j in enumerate(sorted_jobs, start=1):
+            if j["uuid"] == task_id:
+                run_name = f"Run {idx}"
+                break
+
+    results = job.get("results") or {}
+
+    return SimulationRunStatusResponse(
+        task_id=task_id,
+        name=run_name,
+        status=job["status"],
+        type=job["type"],
+        updated_at=job["updated_at"],
+        total_simulations=results.get("total_simulations"),
+        metrics=results.get("metrics"),
+        simulation_results=results.get("simulation_results"),
+        results_s3_prefix=results.get("results_s3_prefix"),
+        error=results.get("error"),
+    )
+
+
+@router.get("/{simulation_uuid}/runs", response_model=SimulationRunsResponse)
+async def get_simulation_runs(simulation_uuid: str):
+    """
+    Get all runs for a simulation.
+
+    Returns a list of all simulation runs with their UUID, status, type, and name.
+    """
+    # Verify simulation exists
+    simulation = get_simulation(simulation_uuid)
+    if not simulation:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Get all jobs for this simulation
+    jobs = get_simulation_jobs_for_simulation(simulation_uuid)
+
+    # Sort by created_at ASC to calculate run index (Run 1 is the oldest)
+    sorted_by_created = sorted(jobs, key=lambda j: j.get("created_at", ""))
+
+    # Create a mapping of job UUID to run index
+    job_to_index = {
+        job["uuid"]: idx for idx, job in enumerate(sorted_by_created, start=1)
+    }
+
+    # Sort by updated_at DESC for response (most recently updated first)
+    sorted_by_updated = sorted(
+        jobs, key=lambda j: j.get("updated_at", ""), reverse=True
+    )
+
+    runs = [
+        SimulationRunListItem(
+            uuid=job["uuid"],
+            name=f"Run {job_to_index[job['uuid']]}",  # Use the index from creation order
+            status=job["status"],
+            type=job["type"],
+            updated_at=job["updated_at"],
+        )
+        for job in sorted_by_updated
+    ]
+
+    return SimulationRunsResponse(runs=runs)
 
 
 @router.get("/{simulation_uuid}", response_model=SimulationDetailResponse)
 async def get_simulation_endpoint(simulation_uuid: str):
-    """Get a simulation by UUID with all linked personas, scenarios, and metrics."""
+    """Get a simulation by UUID with all linked agent, personas, scenarios, and metrics."""
     simulation = get_simulation(simulation_uuid)
     if not simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Get linked agent
+    agent = None
+    if simulation.get("agent_id"):
+        agent_data = get_agent(simulation["agent_id"])
+        if agent_data:
+            agent = AgentSummaryResponse(
+                uuid=agent_data["uuid"],
+                name=agent_data["name"],
+                config=agent_data.get("config"),
+                created_at=agent_data["created_at"],
+                updated_at=agent_data["updated_at"],
+            )
 
     # Get linked entities
     personas = get_personas_for_simulation(simulation_uuid)
@@ -157,6 +378,7 @@ async def get_simulation_endpoint(simulation_uuid: str):
     return SimulationDetailResponse(
         uuid=simulation["uuid"],
         name=simulation["name"],
+        agent=agent,
         created_at=simulation["created_at"],
         updated_at=simulation["updated_at"],
         personas=personas,
@@ -169,21 +391,106 @@ async def get_simulation_endpoint(simulation_uuid: str):
 async def update_simulation_endpoint(
     simulation_uuid: str, simulation: SimulationUpdate
 ):
-    """Update a simulation."""
+    """Update a simulation with optional linked agent, personas, scenarios, and metrics."""
     existing_simulation = get_simulation(simulation_uuid)
     if not existing_simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
 
-    updated = update_simulation(
-        simulation_uuid=simulation_uuid,
-        name=simulation.name,
-    )
+    # Verify agent exists if provided
+    if simulation.agent_uuid is not None and simulation.agent_uuid != "":
+        agent = get_agent(simulation.agent_uuid)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
 
-    if not updated:
-        raise HTTPException(status_code=400, detail="No fields to update")
+    # Verify all new personas exist
+    if simulation.persona_uuids is not None:
+        for persona_uuid in simulation.persona_uuids:
+            persona = get_persona(persona_uuid)
+            if not persona:
+                raise HTTPException(
+                    status_code=404, detail=f"Persona {persona_uuid} not found"
+                )
+
+    # Verify all new scenarios exist
+    if simulation.scenario_uuids is not None:
+        for scenario_uuid in simulation.scenario_uuids:
+            scenario = get_scenario(scenario_uuid)
+            if not scenario:
+                raise HTTPException(
+                    status_code=404, detail=f"Scenario {scenario_uuid} not found"
+                )
+
+    # Verify all new metrics exist
+    if simulation.metric_uuids is not None:
+        for metric_uuid in simulation.metric_uuids:
+            metric = get_metric(metric_uuid)
+            if not metric:
+                raise HTTPException(
+                    status_code=404, detail=f"Metric {metric_uuid} not found"
+                )
+
+    # Update simulation name and/or agent if provided
+    if simulation.name is not None or simulation.agent_uuid is not None:
+        # Empty string means clear the agent
+        if simulation.agent_uuid == "":
+            update_simulation(
+                simulation_uuid=simulation_uuid,
+                name=simulation.name,
+                clear_agent=True,
+            )
+        else:
+            update_simulation(
+                simulation_uuid=simulation_uuid,
+                name=simulation.name,
+                agent_id=simulation.agent_uuid,
+            )
+
+    # Update personas if provided (replace existing)
+    if simulation.persona_uuids is not None:
+        # Remove existing personas
+        existing_personas = get_personas_for_simulation(simulation_uuid)
+        for persona in existing_personas:
+            remove_persona_from_simulation(simulation_uuid, persona["uuid"])
+        # Add new personas
+        for persona_uuid in simulation.persona_uuids:
+            add_persona_to_simulation(simulation_uuid, persona_uuid)
+
+    # Update scenarios if provided (replace existing)
+    if simulation.scenario_uuids is not None:
+        # Remove existing scenarios
+        existing_scenarios = get_scenarios_for_simulation(simulation_uuid)
+        for scenario in existing_scenarios:
+            remove_scenario_from_simulation(simulation_uuid, scenario["uuid"])
+        # Add new scenarios
+        for scenario_uuid in simulation.scenario_uuids:
+            add_scenario_to_simulation(simulation_uuid, scenario_uuid)
+
+    # Update metrics if provided (replace existing)
+    if simulation.metric_uuids is not None:
+        # Remove existing metrics
+        existing_metrics = get_metrics_for_simulation(simulation_uuid)
+        for metric in existing_metrics:
+            remove_metric_from_simulation(simulation_uuid, metric["uuid"])
+        # Add new metrics
+        for metric_uuid in simulation.metric_uuids:
+            add_metric_to_simulation(simulation_uuid, metric_uuid)
 
     # Return full detail response
     updated_simulation = get_simulation(simulation_uuid)
+
+    # Get linked agent
+    agent = None
+    if updated_simulation.get("agent_id"):
+        agent_data = get_agent(updated_simulation["agent_id"])
+        if agent_data:
+            agent = AgentSummaryResponse(
+                uuid=agent_data["uuid"],
+                name=agent_data["name"],
+                config=agent_data.get("config"),
+                created_at=agent_data["created_at"],
+                updated_at=agent_data["updated_at"],
+            )
+
     personas = get_personas_for_simulation(simulation_uuid)
     scenarios = get_scenarios_for_simulation(simulation_uuid)
     metrics = get_metrics_for_simulation(simulation_uuid)
@@ -191,6 +498,7 @@ async def update_simulation_endpoint(
     return SimulationDetailResponse(
         uuid=updated_simulation["uuid"],
         name=updated_simulation["name"],
+        agent=agent,
         created_at=updated_simulation["created_at"],
         updated_at=updated_simulation["updated_at"],
         personas=personas,
@@ -206,3 +514,409 @@ async def delete_simulation_endpoint(simulation_uuid: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Simulation not found")
     return {"message": "Simulation deleted successfully"}
+
+
+# ============ Run Simulation API ============
+
+
+def _build_pense_simulation_config(
+    agent: Dict[str, Any],
+    personas: List[Dict[str, Any]],
+    scenarios: List[Dict[str, Any]],
+    metrics: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Build the pense simulation config from agent, personas, scenarios, and metrics.
+
+    Args:
+        agent: Agent dict with config containing system_prompt and llm.model
+        personas: List of persona dicts with description and config (containing gender, language)
+        scenarios: List of scenario dicts with description
+        metrics: List of metric dicts with name and description (for evaluation_criteria)
+    """
+    agent_config = agent.get("config") or {}
+
+    # Get model from agent config
+    llm_config = agent_config.get("llm", {})
+    model = llm_config.get("model", "gpt-4.1")
+
+    # Get tools from agent_tools table
+    agent_tools = get_tools_for_agent(agent["uuid"])
+    tool_configs = [
+        {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool.get("config", {}).get("parameters", []),
+        }
+        for tool in agent_tools
+    ]
+
+    # Build personas list as objects with label, characteristics, gender, and language
+    persona_list = []
+    for persona in personas:
+        persona_config = persona.get("config") or {}
+        persona_obj = {
+            "label": persona.get("name", ""),  # Store persona name/label
+            "characteristics": persona.get("description") or persona.get("name"),
+            "gender": persona_config.get("gender", "female"),
+            "language": persona_config.get("language", "english"),
+        }
+        if persona_obj["characteristics"]:
+            persona_list.append(persona_obj)
+
+    # Build scenarios list as objects with name and description
+    scenario_list = []
+    for scenario in scenarios:
+        scenario_obj = {
+            "name": scenario.get("name", ""),  # Store scenario name/label
+            "description": scenario.get("description", ""),
+        }
+        scenario_list.append(scenario_obj)
+
+    # Build evaluation criteria from metrics
+    evaluation_criteria = [
+        {
+            "name": metric.get("name"),
+            "description": metric.get("description") or metric.get("name"),
+        }
+        for metric in metrics
+        if metric.get("name")
+    ]
+
+    return {
+        "params": {"model": model},
+        "agent_system_prompt": agent_config.get("system_prompt", ""),
+        "tools": tool_configs,
+        "personas": persona_list,
+        "scenarios": scenario_list,
+        "evaluation_criteria": evaluation_criteria,
+    }
+
+
+def _run_pense_simulation(
+    model: str,
+    pense_config: Dict[str, Any],
+    output_dir: Path,
+    s3_bucket: str,
+    s3_prefix: str,
+    log_prefix: str = "LLM simulation",
+) -> Dict[str, Any]:
+    """
+    Run pense llm simulations run command and return parsed results.
+
+    Args:
+        model: Model name to use
+        pense_config: The pense config dict
+        output_dir: Directory to write output files
+        s3_bucket: S3 bucket name
+        s3_prefix: S3 key prefix for uploading results
+        log_prefix: Prefix for log messages
+
+    Returns:
+        Dict with keys: success, total_simulations, metrics, simulation_results, error
+    """
+    s3 = get_s3_client()
+
+    # Update config with model
+    config = pense_config.copy()
+    config["params"] = {"model": model}
+
+    # Resolve output directory to absolute path
+    output_dir = output_dir.resolve()
+
+    # Create output directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write config to temp file
+    config_file_name = "simulation_config"
+    config_file = output_dir / f"{config_file_name}.json"
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+    # Run pense llm simulations run command
+    # Use absolute paths for config and output
+    run_cmd = [
+        "pense",
+        "llm",
+        "simulations",
+        "run",
+        "-c",
+        str(config_file),
+        "-o",
+        str(output_dir),
+        "-m",
+        model,
+    ]
+
+    logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
+
+    result = subprocess.run(
+        run_cmd,
+        capture_output=True,
+        text=True,
+        cwd=str(output_dir),
+    )
+
+    if result.stdout:
+        logger.info(f"{log_prefix} stdout: {result.stdout}")
+    if result.stderr:
+        logger.info(f"{log_prefix} stderr: {result.stderr}")
+
+    # Parse results
+    metrics_data = None
+    results_data = None
+    simulation_results = []
+
+    # Find metrics.json and results.csv files
+    metrics_file = output_dir / "metrics.json"
+    results_file = output_dir / "results.csv"
+
+    if metrics_file.exists():
+        with open(metrics_file, "r", encoding="utf-8") as f:
+            metrics_data = json.load(f)
+
+    # Parse results.csv for aggregated scores
+    if results_file.exists():
+        import csv
+
+        with open(results_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            results_data = list(reader)
+
+    # Find simulation directories and parse their results
+    # Search recursively for simulation directories (they might be nested)
+    for root, dirs, files in os.walk(output_dir):
+        for dir_name in dirs:
+            if dir_name.startswith("simulation_persona_"):
+                sim_dir = Path(root) / dir_name
+                sim_name = dir_name
+                eval_results_file = sim_dir / "evaluation_results.csv"
+                transcript_file = sim_dir / "transcript.json"
+                config_file = sim_dir / "config.json"
+
+                eval_results = []
+                if eval_results_file.exists():
+                    import csv
+
+                    with open(eval_results_file, "r", encoding="utf-8") as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            eval_results.append(
+                                {
+                                    "name": row.get("name"),
+                                    "match": row.get("match", "").lower() == "true",
+                                    "reasoning": row.get("reasoning", ""),
+                                }
+                            )
+
+                # Parse transcript.json if it exists
+                transcript = None
+                if transcript_file.exists():
+                    try:
+                        with open(transcript_file, "r", encoding="utf-8") as f:
+                            transcript = json.load(f)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to parse transcript.json for {sim_name}: {e}"
+                        )
+
+                # Parse config.json to get persona and scenario data
+                persona_data = None
+                scenario_data = None
+                if config_file.exists():
+                    try:
+                        with open(config_file, "r", encoding="utf-8") as f:
+                            config_data = json.load(f)
+                            persona_data = config_data.get("persona")
+                            scenario_data = config_data.get("scenario")
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to parse config.json for {sim_name}: {e}"
+                        )
+
+                simulation_results.append(
+                    {
+                        "simulation_name": sim_name,
+                        "persona": persona_data,
+                        "scenario": scenario_data,
+                        "evaluation_results": eval_results,
+                        "transcript": transcript,
+                    }
+                )
+
+    # Upload results to S3
+    for root, dirs, files in os.walk(output_dir):
+        for file in files:
+            local_file_path = Path(root) / file
+            relative_path = local_file_path.relative_to(output_dir)
+            s3_key = f"{s3_prefix}/{relative_path}"
+            s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+
+    error = None
+    if result.returncode != 0:
+        error = f"Command failed: {result.stderr}"
+
+    return {
+        "success": result.returncode == 0,
+        "total_simulations": len(simulation_results),
+        "metrics": metrics_data,
+        "simulation_results": simulation_results,
+        "error": error,
+    }
+
+
+def run_simulation_task(
+    task_id: str,
+    agent: Dict[str, Any],
+    personas: List[Dict[str, Any]],
+    scenarios: List[Dict[str, Any]],
+    metrics: List[Dict[str, Any]],
+    s3_bucket: str,
+):
+    """Run the LLM simulation in the background."""
+    try:
+        logger.info(
+            f"Running simulation task {task_id} for agent {agent['uuid']} "
+            f"with {len(personas)} persona(s), {len(scenarios)} scenario(s), "
+            f"and {len(metrics)} metric(s)"
+        )
+        update_simulation_job(task_id, status=TaskStatus.IN_PROGRESS.value)
+
+        # Create persistent output directory (not deleted after job completes)
+        output_base_dir = Path("simulation_outputs").resolve()
+        output_base_dir.mkdir(exist_ok=True)
+        temp_path = output_base_dir / task_id
+        temp_path.mkdir(exist_ok=True)
+
+        try:
+            # Build pense config
+            pense_config = _build_pense_simulation_config(
+                agent, personas, scenarios, metrics
+            )
+            model_to_use = pense_config["params"]["model"]
+
+            # Create output directory
+            output_dir = temp_path / "output"
+            output_dir = output_dir.resolve()
+
+            # Run pense simulation
+            results_prefix = f"simulations/runs/{task_id}"
+            result = _run_pense_simulation(
+                model=model_to_use,
+                pense_config=pense_config,
+                output_dir=output_dir,
+                s3_bucket=s3_bucket,
+                s3_prefix=results_prefix,
+                log_prefix=f"Simulation {task_id}",
+            )
+
+            # Update job with results
+            update_simulation_job(
+                task_id,
+                status=TaskStatus.DONE.value,
+                results={
+                    "total_simulations": result["total_simulations"],
+                    "metrics": result["metrics"],
+                    "simulation_results": result["simulation_results"],
+                    "results_s3_prefix": results_prefix,
+                    "error": result["error"],
+                },
+            )
+
+            logger.info(
+                f"Simulation task {task_id} completed: "
+                f"{result['total_simulations']} simulation(s) run"
+            )
+
+        except Exception as e:
+            traceback.print_exc()
+            update_simulation_job(
+                task_id,
+                status=TaskStatus.DONE.value,
+                results={"error": f"Unexpected error during simulation: {str(e)}"},
+            )
+
+    except Exception as e:
+        traceback.print_exc()
+        update_simulation_job(
+            task_id,
+            status=TaskStatus.DONE.value,
+            results={"error": f"Task failed: {str(e)}"},
+        )
+
+
+@router.post("/{simulation_uuid}/run", response_model=TaskCreateResponse)
+async def run_simulation_endpoint(simulation_uuid: str, request: RunSimulationRequest):
+    """
+    Run a simulation with personas, scenarios, and metrics.
+
+    This starts a background task that runs the pense LLM simulations command
+    with the agent's config and the simulation's personas, scenarios, and metrics.
+
+    Uses the agent linked to the simulation and its LLM model configuration.
+
+    Returns a task ID that can be used to poll for status and results.
+    """
+    # Verify simulation exists
+    simulation = get_simulation(simulation_uuid)
+    if not simulation:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Get agent from simulation
+    agent_uuid = simulation.get("agent_id")
+    if not agent_uuid:
+        raise HTTPException(
+            status_code=400,
+            detail="No agent linked to this simulation. Link an agent to the simulation first.",
+        )
+
+    # Verify agent exists
+    agent = get_agent(agent_uuid)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get linked entities
+    personas = get_personas_for_simulation(simulation_uuid)
+    scenarios = get_scenarios_for_simulation(simulation_uuid)
+    metrics = get_metrics_for_simulation(simulation_uuid)
+
+    if not personas:
+        raise HTTPException(
+            status_code=400,
+            detail="Simulation has no personas. Add at least one persona.",
+        )
+
+    if not scenarios:
+        raise HTTPException(
+            status_code=400,
+            detail="Simulation has no scenarios. Add at least one scenario.",
+        )
+
+    # Get S3 configuration
+    try:
+        s3_bucket = get_s3_output_config()
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Create job in database with details for recovery
+    job_id = create_simulation_job(
+        simulation_id=simulation_uuid,
+        job_type=request.type,
+        status=TaskStatus.IN_PROGRESS.value,
+        details={
+            "simulation_uuid": simulation_uuid,
+            "agent_uuid": agent_uuid,
+            "s3_bucket": s3_bucket,
+        },
+        results=None,
+    )
+
+    # Start background task in a separate thread
+    thread = threading.Thread(
+        target=run_simulation_task,
+        args=(job_id, agent, personas, scenarios, metrics, s3_bucket),
+        daemon=True,
+    )
+    thread.start()
+
+    return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)

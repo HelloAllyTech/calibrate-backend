@@ -23,9 +23,9 @@ from db import (
     get_agent,
     get_test,
     get_tools_for_agent,
-    create_job,
-    get_job,
-    update_job,
+    create_agent_test_job,
+    get_agent_test_job,
+    update_agent_test_job,
 )
 from utils import (
     TaskStatus,
@@ -399,7 +399,7 @@ def run_llm_test_task(
         logger.info(
             f"Running LLM test task {task_id} for agent {agent['uuid']} with {len(tests)} test(s)"
         )
-        update_job(task_id, status=TaskStatus.IN_PROGRESS.value)
+        update_agent_test_job(task_id, status=TaskStatus.IN_PROGRESS.value)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -424,7 +424,7 @@ def run_llm_test_task(
                 )
 
                 # Update job with results
-                update_job(
+                update_agent_test_job(
                     task_id,
                     status=TaskStatus.DONE.value,
                     results={
@@ -443,7 +443,7 @@ def run_llm_test_task(
 
             except Exception as e:
                 traceback.print_exc()
-                update_job(
+                update_agent_test_job(
                     task_id,
                     status=TaskStatus.DONE.value,
                     results={"error": f"Unexpected error during LLM test: {str(e)}"},
@@ -451,7 +451,7 @@ def run_llm_test_task(
 
     except Exception as e:
         traceback.print_exc()
-        update_job(
+        update_agent_test_job(
             task_id,
             status=TaskStatus.DONE.value,
             results={"error": f"Task failed: {str(e)}"},
@@ -502,7 +502,8 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
     # Create job in database with details for recovery
-    job_id = create_job(
+    job_id = create_agent_test_job(
+        agent_id=agent_uuid,
         job_type="llm-unit-test",
         status=TaskStatus.IN_PROGRESS.value,
         details={
@@ -531,7 +532,7 @@ async def get_agent_test_run_status(task_id: str):
 
     Returns the current status and, if done, the test results.
     """
-    job = get_job(task_id)
+    job = get_agent_test_job(task_id)
     if not job:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -641,7 +642,7 @@ def run_benchmark_task(
             f"Running benchmark task {task_id} for agent {agent['uuid']} "
             f"with {len(tests)} test(s) and {len(models)} model(s)"
         )
-        update_job(task_id, status=TaskStatus.IN_PROGRESS.value)
+        update_agent_test_job(task_id, status=TaskStatus.IN_PROGRESS.value)
 
         s3 = get_s3_client()
 
@@ -760,7 +761,7 @@ def run_benchmark_task(
                     logger.warning(f"Leaderboard command failed: {e.stderr}")
 
                 # Update job with results
-                update_job(
+                update_agent_test_job(
                     task_id,
                     status=TaskStatus.DONE.value,
                     results={
@@ -775,7 +776,7 @@ def run_benchmark_task(
 
             except Exception as e:
                 traceback.print_exc()
-                update_job(
+                update_agent_test_job(
                     task_id,
                     status=TaskStatus.DONE.value,
                     results={"error": f"Unexpected error during benchmark: {str(e)}"},
@@ -783,7 +784,7 @@ def run_benchmark_task(
 
     except Exception as e:
         traceback.print_exc()
-        update_job(
+        update_agent_test_job(
             task_id,
             status=TaskStatus.DONE.value,
             results={"error": f"Task failed: {str(e)}"},
@@ -836,7 +837,8 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
     # Create job in database with details for recovery
-    job_id = create_job(
+    job_id = create_agent_test_job(
+        agent_id=agent_uuid,
         job_type="llm-benchmark",
         status=TaskStatus.IN_PROGRESS.value,
         details={
@@ -866,7 +868,7 @@ async def get_benchmark_status(task_id: str):
 
     Returns the current status and, if done, results for each model and leaderboard.
     """
-    job = get_job(task_id)
+    job = get_agent_test_job(task_id)
     if not job:
         raise HTTPException(status_code=404, detail="Task not found")
 

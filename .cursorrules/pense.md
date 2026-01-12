@@ -441,6 +441,10 @@ The test configuration file should have the following structure:
             }
           }
         ]
+      },
+      "settings": {
+        // optional settings for this test case
+        "language": "hindi" // language for the LLM to respond in (defaults to "english")
       }
     },
     {
@@ -589,7 +593,17 @@ Once you have results for multiple models or scenarios, compile a leaderboard CS
 pense llm tests leaderboard -o /path/to/output -s ./leaderboard
 ```
 
-`pense/llm/tests_leaderboard.py` walks every `<scenario>/<model>` folder under the output root, computes pass percentages, and saves `llm_leaderboard.csv` plus `llm_leaderboard.png` to the chosen save directory for quick reporting.
+`pense/llm/tests_leaderboard.py` walks every `<test_config_name>/<model>` folder under the output root, computes pass percentages, and saves `llm_leaderboard.csv` plus `llm_leaderboard.png` to the chosen save directory for quick reporting.
+
+`llm_leaderboard.csv` has the following format:
+
+```csv
+model,test_config_name,overall
+openai__gpt-4.1,80.0,80.0
+openai__gpt-4o,100.0,100.0
+```
+
+Each column after `model` represents a test config (scenario), and `overall` is the aggregate pass percentage across all configs.
 
 You can checkout [`pense/llm/examples/leaderboard`](pense/llm/examples/leaderboard) to see a sample output of the leaderboard script.
 
@@ -602,10 +616,21 @@ Run fully automated, text-only conversations between two LLMs—the “agent” 
 ```json
 {
   "agent_system_prompt": "instructions for the bot",
-  "language": "english", // language of the conversation
   "tools": [...], // tool schemas available to the agent LLM
-  "personas": [...], // different personas for users in the simulation
-  "scenarios": [...], // different simulation scenarios to be run with each user persona
+  "personas": [
+    // array of persona objects for users in the simulation
+    {
+      "characteristics": "description of user personality, background, and behavior",
+      "gender": "female", // gender of the persona (used in user system prompt)
+      "language": "english" // language for both agent and user in the simulation
+    }
+  ],
+  "scenarios": [
+    // array of scenario objects to be run with each user persona
+    {
+      "description": "description of the scenario to be played out"
+    }
+  ],
   "evaluation_criteria": [
     // array of criteria to evaluate each simulation against
     {
@@ -654,7 +679,9 @@ Sample output:
 --------------------------------
 Running simulation simulation_persona_1_scenario_1
 Persona:
-You are a mother; name is Geeta Prasad, 39 years old lives at Flat 302, Sri Venkateshwara Nilaya, near Hanuman Temple, Indiranagar. Phone number is plus nine one, nine eight triple three, forty-seven twenty-nine zero; never had a stillbirth or a baby who died soon after birth, but has had one baby who died on the third day after delivery; never had three or more miscarriages in a row; in her last pregnancy she wasn’t admitted for high blood pressure or eclampsia; only carrying one baby as per the scan; blood group is O positive, so there are no Rh-related issues; did experience light vaginal spotting once during this pregnancy but otherwise no pelvic mass or complications; uncertain about her exact blood-pressure reading, but recalls that it was around 150/95 mmHg at booking; does not have diabetes, heart disease, kidney disease, or epilepsy; does have asthma and uses an inhaler daily; has never had tuberculosis or any other serious medical condition; longer drinks alcohol or uses substances, having stopped completely after learning she was pregnant; is very shy and reserved and uses short answers to questions
+You are a mother; name is Geeta Prasad, 39 years old lives at Flat 302, Sri Venkateshwara Nilaya, near Hanuman Temple, Indiranagar. Phone number is plus nine one, nine eight triple three, forty-seven twenty-nine zero; never had a stillbirth or a baby who died soon after birth, but has had one baby who died on the third day after delivery; never had three or more miscarriages in a row; in her last pregnancy she wasn't admitted for high blood pressure or eclampsia; only carrying one baby as per the scan; blood group is O positive, so there are no Rh-related issues; did experience light vaginal spotting once during this pregnancy but otherwise no pelvic mass or complications; uncertain about her exact blood-pressure reading, but recalls that it was around 150/95 mmHg at booking; does not have diabetes, heart disease, kidney disease, or epilepsy; does have asthma and uses an inhaler daily; has never had tuberculosis or any other serious medical condition; longer drinks alcohol or uses substances, having stopped completely after learning she was pregnant; is very shy and reserved and uses short answers to questions
+Gender: female
+Language: english
 Scenario:
 the mother answers all the questions and completes the form, don't ask any further questions after the form is filled
 --------------------------------
@@ -671,7 +698,9 @@ tool call: end_call invoked by LLM
 --------------------------------
 Running simulation simulation_persona_1_scenario_2
 Persona:
-You are a mother; name is Geeta Prasad, 39 years old lives at Flat 302, Sri Venkateshwara Nilaya, near Hanuman Temple, Indiranagar. Phone number is plus nine one, nine eight triple three, forty-seven twenty-nine zero; never had a stillbirth or a baby who died soon after birth, but has had one baby who died on the third day after delivery; never had three or more miscarriages in a row; in her last pregnancy she wasn’t admitted for high blood pressure or eclampsia; only carrying one baby as per the scan; blood group is O positive, so there are no Rh-related issues; did experience light vaginal spotting once during this pregnancy but otherwise no pelvic mass or complications; uncertain about her exact blood-pressure reading, but recalls that it was around 150/95 mmHg at booking; does not have diabetes, heart disease, kidney disease, or epilepsy; does have asthma and uses an inhaler daily; has never had tuberculosis or any other serious medical condition; longer drinks alcohol or uses substances, having stopped completely after learning she was pregnant; is very shy and reserved and uses short answers to questions
+You are a mother; name is Geeta Prasad, 39 years old lives at Flat 302, Sri Venkateshwara Nilaya, near Hanuman Temple, Indiranagar. Phone number is plus nine one, nine eight triple three, forty-seven twenty-nine zero; never had a stillbirth or a baby who died soon after birth, but has had one baby who died on the third day after delivery; never had three or more miscarriages in a row; in her last pregnancy she wasn't admitted for high blood pressure or eclampsia; only carrying one baby as per the scan; blood group is O positive, so there are no Rh-related issues; did experience light vaginal spotting once during this pregnancy but otherwise no pelvic mass or complications; uncertain about her exact blood-pressure reading, but recalls that it was around 150/95 mmHg at booking; does not have diabetes, heart disease, kidney disease, or epilepsy; does have asthma and uses an inhaler daily; has never had tuberculosis or any other serious medical condition; longer drinks alcohol or uses substances, having stopped completely after learning she was pregnant; is very shy and reserved and uses short answers to questions
+Gender: female
+Language: english
 Scenario:
 the mother hesitates in directly answering some questions and wants to skip answering them at first but answers later on further probing
 --------------------------------
@@ -704,12 +733,28 @@ The output of the simulation will be saved in the output directory:
 ├── simulation_persona_1_scenario_1
 │   ├── transcript.json          # full conversation transcript
 │   ├── evaluation_results.csv   # per-criterion evaluation results
+│   ├── config.json              # persona and scenario for this simulation
 │   ├── logs                     # timestamped pipeline logs
 │   └── results.log              # terminal output of the simulation
 ├── simulation_persona_1_scenario_2
 │   └── ...
 ├── results.csv                  # aggregated results for all simulations
 └── metrics.json                 # summary statistics for each criterion
+```
+
+`config.json` in each simulation directory contains the persona and scenario used for that specific simulation:
+
+```json
+{
+  "persona": {
+    "characteristics": "description of user personality, background, and behavior",
+    "gender": "female",
+    "language": "english"
+  },
+  "scenario": {
+    "description": "the scenario description for this simulation"
+  }
+}
 ```
 
 `evaluation_results.csv` contains the evaluation results for each criterion in a simulation:
@@ -834,7 +879,9 @@ Sample output:
 --------------------------------
 Running simulation simulation_persona_1_scenario_1
 Persona:
-You are a mother; name is Geeta Prasad, 39 years old lives at Flat 302, Sri Venkateshwara Nilaya, near Hanuman Temple, Indiranagar. Phone number is plus nine one, nine eight triple three, forty-seven twenty-nine zero; never had a stillbirth or a baby who died soon after birth, but has had one baby who died on the third day after delivery; never had three or more miscarriages in a row; in her last pregnancy she wasn’t admitted for high blood pressure or eclampsia; only carrying one baby as per the scan; blood group is O positive, so there are no Rh-related issues; did experience light vaginal spotting once during this pregnancy but otherwise no pelvic mass or complications; uncertain about her exact blood-pressure reading, but recalls that it was around 150/95 mmHg at booking; does not have diabetes, heart disease, kidney disease, or epilepsy; does have asthma and uses an inhaler daily; has never had tuberculosis or any other serious medical condition; longer drinks alcohol or uses substances, having stopped completely after learning she was pregnant; is very shy and reserved and uses short answers to questions
+You are a mother; name is Geeta Prasad, 39 years old lives at Flat 302, Sri Venkateshwara Nilaya, near Hanuman Temple, Indiranagar. Phone number is plus nine one, nine eight triple three, forty-seven twenty-nine zero; never had a stillbirth or a baby who died soon after birth, but has had one baby who died on the third day after delivery; never had three or more miscarriages in a row; in her last pregnancy she wasn't admitted for high blood pressure or eclampsia; only carrying one baby as per the scan; blood group is O positive, so there are no Rh-related issues; did experience light vaginal spotting once during this pregnancy but otherwise no pelvic mass or complications; uncertain about her exact blood-pressure reading, but recalls that it was around 150/95 mmHg at booking; does not have diabetes, heart disease, kidney disease, or epilepsy; does have asthma and uses an inhaler daily; has never had tuberculosis or any other serious medical condition; longer drinks alcohol or uses substances, having stopped completely after learning she was pregnant; is very shy and reserved and uses short answers to questions
+Gender: female
+Language: english
 Scenario:
 the mother answers all the questions and completes the form, don't ask any further questions after the form is filled
 --------------------------------
@@ -894,23 +941,3 @@ Each `simulation_persona_*_scenario_*` directory contains:
 - `transcripts.json`: full conversation transcript - alternating `user`/`assistant` turns.
 
 You can checkout [`pense/agent/examples/simulation/sample_output`](pense/agent/examples/simulation/sample_output) to see a sample output of the voice agent simulation.
-
-## Documentation
-
-Pense documentation is built using [MkDocs](https://www.mkdocs.org) with the [Material theme](https://squidfunk.github.io/mkdocs-material/).
-
-### Building Documentation Locally
-
-1. **Install documentation dependencies:**
-
-```bash
-uv pip install -r requirements-docs.txt
-```
-
-2. **Preview documentation locally:**
-
-```bash
-mkdocs serve
-```
-
-This will start a local server at `http://127.0.0.1:8000` where you can preview the documentation.

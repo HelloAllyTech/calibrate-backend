@@ -1,8 +1,22 @@
+import copy
+import logging
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from db import create_agent, get_agent, get_all_agents, update_agent, delete_agent
+from db import (
+    create_agent,
+    get_agent,
+    get_all_agents,
+    update_agent,
+    delete_agent,
+    get_tools_for_agent,
+    get_tests_for_agent,
+    add_tool_to_agent,
+    add_test_to_agent,
+)
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -27,6 +41,15 @@ class AgentResponse(BaseModel):
 
 
 class AgentCreateResponse(BaseModel):
+    uuid: str
+    message: str
+
+
+class AgentDuplicateRequest(BaseModel):
+    name: str
+
+
+class AgentDuplicateResponse(BaseModel):
     uuid: str
     message: str
 
@@ -87,3 +110,58 @@ async def delete_agent_endpoint(agent_uuid: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Agent not found")
     return {"message": "Agent deleted successfully"}
+
+
+@router.post("/{agent_uuid}/duplicate", response_model=AgentDuplicateResponse)
+async def duplicate_agent_endpoint(agent_uuid: str, request: AgentDuplicateRequest):
+    """
+    Duplicate an agent with all its linked data.
+    
+    This will:
+    - Copy the agent (with the provided name, config including speaks_first, data extraction fields, etc.)
+    - Copy all linked tools
+    - Copy all linked tests
+    - Return the new agent UUID
+    """
+    # Get the original agent
+    original_agent = get_agent(agent_uuid)
+    if not original_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Use the provided name
+    new_name = request.name
+    
+    # Copy the entire config (includes speaks_first, data extraction fields, llm config, etc.)
+    new_config = original_agent.get("config")
+    if new_config:
+        # Deep copy the config to avoid reference issues
+        new_config = copy.deepcopy(new_config)
+
+    # Create the new agent
+    new_agent_uuid = create_agent(
+        name=new_name,
+        config=new_config,
+    )
+
+    # Copy all linked tools
+    linked_tools = get_tools_for_agent(agent_uuid)
+    for tool in linked_tools:
+        try:
+            add_tool_to_agent(new_agent_uuid, tool["uuid"])
+        except Exception as e:
+            # Log but continue - don't fail the entire duplication
+            logger.warning(f"Failed to link tool {tool['uuid']} to duplicated agent: {e}")
+
+    # Copy all linked tests
+    linked_tests = get_tests_for_agent(agent_uuid)
+    for test in linked_tests:
+        try:
+            add_test_to_agent(new_agent_uuid, test["uuid"])
+        except Exception as e:
+            # Log but continue - don't fail the entire duplication
+            logger.warning(f"Failed to link test {test['uuid']} to duplicated agent: {e}")
+
+    return AgentDuplicateResponse(
+        uuid=new_agent_uuid,
+        message="Agent duplicated successfully with all linked tools and tests",
+    )

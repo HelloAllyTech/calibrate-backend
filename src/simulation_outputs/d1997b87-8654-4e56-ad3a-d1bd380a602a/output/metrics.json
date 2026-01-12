@@ -1,0 +1,30 @@
+{
+    "tool_calls": {
+        "mean": 0.0,
+        "std": 0.0,
+        "values": [
+            0.0
+        ]
+    },
+    "answer_completeness": {
+        "mean": 0.0,
+        "std": 0.0,
+        "values": [
+            0.0
+        ]
+    },
+    "assistant_behavior": {
+        "mean": 1.0,
+        "std": 0.0,
+        "values": [
+            1.0
+        ]
+    },
+    "question_completeness": {
+        "mean": 0.0,
+        "std": 0.0,
+        "values": [
+            0.0
+        ]
+    }
+}
