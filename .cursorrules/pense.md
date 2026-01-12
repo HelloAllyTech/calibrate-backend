@@ -395,7 +395,7 @@ The test configuration file should have the following structure:
   "params": {
     "model": "gpt-4.1" // the name of the openai model
   },
-  "system_prompt": "You are a helpful assistant...", // the system prompt for the LLM. Can include a placeholder for `{language}` that will be replaced with possible values from `variables`
+  "system_prompt": "You are a helpful assistant...", // the system prompt for the LLM.
   "tools": [
     // array of tools that the LLM can call. Each tool should have:
     {
@@ -413,9 +413,6 @@ The test configuration file should have the following structure:
       ]
     }
   ],
-  "variables": {
-    "language": ["hindi", "english"] // array of language values to iterate over. The system prompt will be formatted with these values
-  },
   "test_cases": [
     // array of test cases, each containing:
     {
@@ -503,7 +500,45 @@ The output of the script will be saved in the output directory.
 ```bash
 /path/to/output/<test_config_name>/<model_name>
 ├── results.json
+├── metrics.json
 ├── logs
+```
+
+`results.json` contains the detailed results for each test case:
+
+```json
+[
+  {
+    "output": {
+      "response": "Sure, I can help you with that.", // either the output is a string response
+      "tool_calls": [ // or the output is a list of tool calls - not both simultaneously
+        {
+          "tool": "plan_next_question",
+          "arguments": {
+            "next_unanswered_question_index": 2,
+            "questions_answered": [1]
+          }
+        }
+      ]
+    },
+    "metrics": {
+      "passed": true
+    },
+    "test_case": {
+      "history": [...],
+      "evaluation": {...}
+    }
+  }
+]
+```
+
+`metrics.json` contains summary statistics:
+
+```json
+{
+  "total": 5,
+  "passed": 4
+}
 ```
 
 You can checkout [`pense/llm/examples/tests/sample_output`](pense/llm/examples/tests/sample_output) to see a sample output of the evaluation script.
@@ -757,10 +792,7 @@ To run agent simulations with all the three components - STT, LLM, and TTS - pre
           "required": true,
           "value_type": "llm_prompt"
         }
-      ],
-      "dynamic_variables": {
-        "dynamic_variable_placeholders": {}
-      }
+      ]
     }
   ], // tools that the voice agent has access to
   "personas": [

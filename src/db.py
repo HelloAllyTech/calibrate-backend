@@ -108,6 +108,20 @@ def init_db():
         """
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                results TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        )
+
         # Add deleted_at column to existing tables if not present (migration)
         tables_to_migrate = [
             "agents",
@@ -375,20 +389,39 @@ def delete_tool(tool_uuid: str) -> bool:
 
 
 def add_tool_to_agent(agent_id: str, tool_id: str) -> int:
-    """Add a tool to an agent. Returns the id of the created link."""
+    """Add a tool to an agent. Returns the id of the created/restored link.
+    If a soft-deleted link exists, it will be restored by unsetting deleted_at.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        # Check if a soft-deleted link exists
         cursor.execute(
-            """
-            INSERT INTO agent_tools (agent_id, tool_id)
-            VALUES (?, ?)
-            """,
+            "SELECT id FROM agent_tools WHERE agent_id = ? AND tool_id = ? AND deleted_at IS NOT NULL",
             (agent_id, tool_id),
         )
-        conn.commit()
-        link_id = cursor.lastrowid
-        logger.info(f"Added tool {tool_id} to agent {agent_id}")
-        return link_id
+        existing = cursor.fetchone()
+        if existing:
+            # Restore the soft-deleted link
+            cursor.execute(
+                "UPDATE agent_tools SET deleted_at = NULL WHERE id = ?",
+                (existing["id"],),
+            )
+            conn.commit()
+            logger.info(f"Restored tool {tool_id} to agent {agent_id}")
+            return existing["id"]
+        else:
+            # Insert new link
+            cursor.execute(
+                """
+                INSERT INTO agent_tools (agent_id, tool_id)
+                VALUES (?, ?)
+                """,
+                (agent_id, tool_id),
+            )
+            conn.commit()
+            link_id = cursor.lastrowid
+            logger.info(f"Added tool {tool_id} to agent {agent_id}")
+            return link_id
 
 
 def remove_tool_from_agent(agent_id: str, tool_id: str) -> bool:
@@ -592,20 +625,39 @@ def delete_test(test_uuid: str) -> bool:
 
 
 def add_test_to_agent(agent_id: str, test_id: str) -> int:
-    """Add a test to an agent. Returns the id of the created link."""
+    """Add a test to an agent. Returns the id of the created/restored link.
+    If a soft-deleted link exists, it will be restored by unsetting deleted_at.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        # Check if a soft-deleted link exists
         cursor.execute(
-            """
-            INSERT INTO agent_tests (agent_id, test_id)
-            VALUES (?, ?)
-            """,
+            "SELECT id FROM agent_tests WHERE agent_id = ? AND test_id = ? AND deleted_at IS NOT NULL",
             (agent_id, test_id),
         )
-        conn.commit()
-        link_id = cursor.lastrowid
-        logger.info(f"Added test {test_id} to agent {agent_id}")
-        return link_id
+        existing = cursor.fetchone()
+        if existing:
+            # Restore the soft-deleted link
+            cursor.execute(
+                "UPDATE agent_tests SET deleted_at = NULL WHERE id = ?",
+                (existing["id"],),
+            )
+            conn.commit()
+            logger.info(f"Restored test {test_id} to agent {agent_id}")
+            return existing["id"]
+        else:
+            # Insert new link
+            cursor.execute(
+                """
+                INSERT INTO agent_tests (agent_id, test_id)
+                VALUES (?, ?)
+                """,
+                (agent_id, test_id),
+            )
+            conn.commit()
+            link_id = cursor.lastrowid
+            logger.info(f"Added test {test_id} to agent {agent_id}")
+            return link_id
 
 
 def remove_test_from_agent(agent_id: str, test_id: str) -> bool:
@@ -682,3 +734,106 @@ def get_all_agent_tests() -> List[Dict[str, Any]]:
         )
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+# ============ Jobs Functions ============
+
+
+def create_job(
+    job_type: str, status: str = "pending", results: Optional[Dict[str, Any]] = None
+) -> str:
+    """Create a new job and return its UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        job_uuid = str(uuid.uuid4())
+        results_json = json.dumps(results) if results is not None else None
+        cursor.execute(
+            """
+            INSERT INTO jobs (uuid, type, status, results)
+            VALUES (?, ?, ?, ?)
+            """,
+            (job_uuid, job_type, status, results_json),
+        )
+        conn.commit()
+        logger.info(f"Created job with UUID: {job_uuid}, type: {job_type}")
+        return job_uuid
+
+
+def _parse_job_row(row: sqlite3.Row) -> Dict[str, Any]:
+    """Parse a job database row and deserialize JSON fields."""
+    job = dict(row)
+    if job.get("results"):
+        job["results"] = json.loads(job["results"])
+    return job
+
+
+def get_job(job_uuid: str) -> Optional[Dict[str, Any]]:
+    """Get a job by UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM jobs WHERE uuid = ?", (job_uuid,))
+        row = cursor.fetchone()
+        if row:
+            return _parse_job_row(row)
+        return None
+
+
+def get_all_jobs(job_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all jobs, optionally filtered by type."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_type:
+            cursor.execute(
+                "SELECT * FROM jobs WHERE type = ? ORDER BY created_at DESC",
+                (job_type,),
+            )
+        else:
+            cursor.execute("SELECT * FROM jobs ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        return [_parse_job_row(row) for row in rows]
+
+
+def update_job(
+    job_uuid: str,
+    status: Optional[str] = None,
+    results: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Update a job. Returns True if the job was found and updated."""
+    updates = []
+    params = []
+
+    if status is not None:
+        updates.append("status = ?")
+        params.append(status)
+    if results is not None:
+        updates.append("results = ?")
+        params.append(json.dumps(results))
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(job_uuid)
+
+    query = f"UPDATE jobs SET {', '.join(updates)} WHERE uuid = ?"
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        conn.commit()
+        updated = cursor.rowcount > 0
+        if updated:
+            logger.info(f"Updated job with UUID: {job_uuid}")
+        return updated
+
+
+def delete_job(job_uuid: str) -> bool:
+    """Delete a job. Returns True if the job was found and deleted."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM jobs WHERE uuid = ?", (job_uuid,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"Deleted job with UUID: {job_uuid}")
+        return deleted

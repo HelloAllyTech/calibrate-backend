@@ -4,7 +4,6 @@ import json
 import subprocess
 import tempfile
 import traceback
-import uuid
 import concurrent.futures
 import threading
 import logging
@@ -15,9 +14,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import openpyxl
 
+from db import create_job, get_job, update_job
 from utils import (
-    tasks,
-    tasks_lock,
     TaskStatus,
     ProviderResult,
     TaskCreateResponse,
@@ -34,7 +32,9 @@ router = APIRouter(prefix="/tts", tags=["tts"])
 
 class TTSEvaluationRequest(BaseModel):
     texts: List[str]  # List of texts to synthesize
-    providers: List[str]  # List of TTS providers (e.g., ["smallest", "cartesia", "openai"])
+    providers: List[
+        str
+    ]  # List of TTS providers (e.g., ["smallest", "cartesia", "openai"])
     language: str  # Language (e.g., "english", "hindi")
 
 
@@ -216,8 +216,7 @@ def run_tts_evaluation_task(
         logger.info(
             f"Running TTS evaluation task {task_id} with {len(request.providers)} providers"
         )
-        with tasks_lock:
-            tasks[task_id]["status"] = TaskStatus.IN_PROGRESS.value
+        update_job(task_id, status=TaskStatus.IN_PROGRESS.value)
 
         s3 = get_s3_client()
 
@@ -282,12 +281,17 @@ def run_tts_evaluation_task(
                     failed_providers = [
                         r.provider for r in provider_results if not r.success
                     ]
-                    with tasks_lock:
-                        tasks[task_id]["status"] = TaskStatus.DONE.value
-                        tasks[task_id]["provider_results"] = provider_results
-                        tasks[task_id][
-                            "error"
-                        ] = f"Some providers failed: {', '.join(failed_providers)}"
+                    update_job(
+                        task_id,
+                        status=TaskStatus.DONE.value,
+                        results={
+                            "provider_results": [
+                                r.model_dump() for r in provider_results
+                            ],
+                            "leaderboard_summary": None,
+                            "error": f"Some providers failed: {', '.join(failed_providers)}",
+                        },
+                    )
                     return
 
                 # Run pense TTS leaderboard command
@@ -392,26 +396,34 @@ def run_tts_evaluation_task(
                     # Leaderboard failure is not critical, continue
                     pass
 
-                # Update task with results
-                with tasks_lock:
-                    tasks[task_id]["status"] = TaskStatus.DONE.value
-                    tasks[task_id]["provider_results"] = provider_results
-                    tasks[task_id]["leaderboard_summary"] = leaderboard_summary
+                # Update job with results
+                update_job(
+                    task_id,
+                    status=TaskStatus.DONE.value,
+                    results={
+                        "provider_results": [r.model_dump() for r in provider_results],
+                        "leaderboard_summary": leaderboard_summary,
+                        "error": None,
+                    },
+                )
 
             except Exception as e:
                 traceback.print_exc()
-                with tasks_lock:
-                    tasks[task_id]["status"] = TaskStatus.DONE.value
-                    tasks[task_id][
-                        "error"
-                    ] = f"Unexpected error during TTS evaluation: {str(e)}"
+                update_job(
+                    task_id,
+                    status=TaskStatus.DONE.value,
+                    results={
+                        "error": f"Unexpected error during TTS evaluation: {str(e)}",
+                    },
+                )
 
     except Exception as e:
         traceback.print_exc()
-        with tasks_lock:
-            if task_id in tasks:
-                tasks[task_id]["status"] = TaskStatus.DONE.value
-                tasks[task_id]["error"] = f"Task failed: {str(e)}"
+        update_job(
+            task_id,
+            status=TaskStatus.DONE.value,
+            results={"error": f"Task failed: {str(e)}"},
+        )
 
 
 @router.post("/evaluate", response_model=TaskCreateResponse)
@@ -440,27 +452,22 @@ async def evaluate_tts(request: TTSEvaluationRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Generate task ID
-    task_id = str(uuid.uuid4())
-
-    # Initialize task in storage
-    with tasks_lock:
-        tasks[task_id] = {
-            "status": TaskStatus.IN_PROGRESS.value,
-            "provider_results": None,
-            "leaderboard_summary": None,
-            "error": None,
-        }
+    # Create job in database
+    job_id = create_job(
+        job_type="tts-eval",
+        status=TaskStatus.IN_PROGRESS.value,
+        results=None,
+    )
 
     # Start background task in a separate thread
     thread = threading.Thread(
         target=run_tts_evaluation_task,
-        args=(task_id, request, s3_bucket),
+        args=(job_id, request, s3_bucket),
         daemon=True,
     )
     thread.start()
 
-    return TaskCreateResponse(task_id=task_id, status=TaskStatus.IN_PROGRESS.value)
+    return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)
 
 
 @router.get("/evaluate/{task_id}", response_model=TaskStatusResponse)
@@ -470,16 +477,16 @@ async def get_tts_evaluation_status(task_id: str):
 
     Returns the current status and, if done, the provider results and leaderboard path.
     """
-    with tasks_lock:
-        if task_id not in tasks:
-            raise HTTPException(status_code=404, detail="Task not found")
+    job = get_job(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Task not found")
 
-        task = tasks[task_id]
+    results = job.get("results") or {}
 
     return TaskStatusResponse(
         task_id=task_id,
-        status=task["status"],
-        provider_results=task["provider_results"],
-        leaderboard_summary=task.get("leaderboard_summary"),
-        error=task["error"],
+        status=job["status"],
+        provider_results=results.get("provider_results"),
+        leaderboard_summary=results.get("leaderboard_summary"),
+        error=results.get("error"),
     )
