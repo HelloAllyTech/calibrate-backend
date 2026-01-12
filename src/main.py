@@ -17,6 +17,10 @@ from routers.stt import router as stt_router
 from routers.tts import router as tts_router
 from routers.tests import router as tests_router
 from routers.agent_tests import router as agent_tests_router
+from routers.personas import router as personas_router
+from routers.scenarios import router as scenarios_router
+from routers.metrics import router as metrics_router
+from routers.simulations import router as simulations_router
 from utils import get_s3_client
 from job_recovery import recover_pending_jobs
 
@@ -51,6 +55,10 @@ app.include_router(stt_router)
 app.include_router(tts_router)
 app.include_router(tests_router)
 app.include_router(agent_tests_router)
+app.include_router(personas_router)
+app.include_router(scenarios_router)
+app.include_router(metrics_router)
+app.include_router(simulations_router)
 
 app.add_middleware(
     CORSMiddleware,

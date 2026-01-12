@@ -8660,3 +8660,4460 @@ The `TaskStatus` enum in `utils.py` already only has `IN_PROGRESS`, `CANCELLED`,
 
 ---
 
+_**User (2026-01-11 09:21Z)**_
+
+add new tables for personas and add columns uuid, name, description, config (JSON field) and add routers for the same
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to add a new table called "personas" with columns:
+- uuid
+- name
+- description
+- config (JSON field)
+
+And create CRUD routers for it. I should follow the same pattern as the existing tables (agents, tools, tests) which also have soft delete with deleted_at column.
+
+Let me first check the existing table structures to follow the same pattern.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I can see the pattern. Let me read more of db.py to understand the CRUD pattern better, specifically looking at the tests functions:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def create_test|def get_test|def get_all_tests|def update_test|def delete_test" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 6 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def create_test(` | L514 |
+| `src/db.py` | `def get_test(test_uuid: str) -> Optional[Dict[str, Any]]:` | L544 |
+| `src/db.py` | `def get_all_tests() -> List[Dict[str, Any]]:` | L557 |
+| `src/db.py` | `def update_test(` | L568 |
+| `src/db.py` | `def delete_test(test_uuid: str) -> bool:` | L608 |
+| `src/db.py` | `def get_tests_for_agent(agent_id: str) -> List[Dict[str, Any]]:` | L688 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me read the tests CRUD functions to use as a template:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I have a good understanding of the pattern. I need to:
+
+1. Add the `personas` table in `init_db()` in `db.py`
+2. Add CRUD functions for personas in `db.py`
+3. Create a new router file `src/routers/personas.py`
+4. Register the router in `main.py`
+
+Let me now implement this.</details></think>
+
+---
+
+Now I'll add the personas table and CRUD functions to `db.py`, create the router, and register it in `main.py`:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I need to add the personas table after the jobs table. Let me find where to add it:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 15, lines removed: undefined
+
+```diff
+@@ -123,4 +123,19 @@
+          """
+          )
++ 
++         cursor.execute(
++             """
++             CREATE TABLE IF NOT EXISTS personas (
++                 id INTEGER PRIMARY KEY AUTOINCREMENT,
++                 uuid TEXT NOT NULL UNIQUE,
++                 name TEXT NOT NULL,
++                 description TEXT,
++                 config TEXT,
++                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL
++             )
++         """
++         )
+  
+          # Add details column to jobs table if not present (migration)
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to add the CRUD functions for personas. Let me find a good place to add them - after the tests functions and before the agent_tests functions would be a good spot:</details></think>
+
+---
+
+Now let me add the CRUD functions for personas. I'll add them after the tests functions:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 113, lines removed: undefined
+
+```diff
+@@ -644,4 +644,117 @@
+          return deleted
+  
++ 
++ # ============ Personas Functions ============
++ 
++ 
++ def create_persona(
++     name: str,
++     description: Optional[str] = None,
++     config: Optional[Dict[str, Any]] = None,
++ ) -&gt; str:
++     """Create a new persona and return its UUID."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         persona_uuid = str(uuid.uuid4())
++         config_json = json.dumps(config) if config is not None else None
++         cursor.execute(
++             """
++             INSERT INTO personas (uuid, name, description, config)
++             VALUES (?, ?, ?, ?)
++             """,
++             (persona_uuid, name, description, config_json),
++         )
++         conn.commit()
++         logger.info(f"Created persona with UUID: {persona_uuid}")
++         return persona_uuid
++ 
++ 
++ def _parse_persona_row(row: sqlite3.Row) -&gt; Dict[str, Any]:
++     """Parse a persona database row and deserialize JSON fields."""
++     persona = dict(row)
++     if persona.get("config"):
++         persona["config"] = json.loads(persona["config"])
++     return persona
++ 
++ 
++ def get_persona(persona_uuid: str) -&gt; Optional[Dict[str, Any]]:
++     """Get a persona by UUID."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM personas WHERE uuid = ? AND deleted_at IS NULL",
++             (persona_uuid,),
++         )
++         row = cursor.fetchone()
++         if row:
++             return _parse_persona_row(row)
++         return None
++ 
++ 
++ def get_all_personas() -&gt; List[Dict[str, Any]]:
++     """Get all personas."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM personas WHERE deleted_at IS NULL ORDER BY created_at DESC"
++         )
++         rows = cursor.fetchall()
++         return [_parse_persona_row(row) for row in rows]
++ 
++ 
++ def update_persona(
++     persona_uuid: str,
++     name: Optional[str] = None,
++     description: Optional[str] = None,
++     config: Optional[Dict[str, Any]] = None,
++ ) -&gt; bool:
++     """Update a persona. Returns True if the persona was found and updated."""
++     updates = []
++     params = []
++ 
++     if name is not None:
++         updates.append("name = ?")
++         params.append(name)
++     if description is not None:
++         updates.append("description = ?")
++         params.append(description)
++     if config is not None:
++         updates.append("config = ?")
++         params.append(json.dumps(config))
++ 
++     if not updates:
++         return False
++ 
++     updates.append("updated_at = CURRENT_TIMESTAMP")
++     params.append(persona_uuid)
++ 
++     query = f"UPDATE personas SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
++ 
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(query, params)
++         conn.commit()
++         updated = cursor.rowcount &gt; 0
++         if updated:
++             logger.info(f"Updated persona with UUID: {persona_uuid}")
++         return updated
++ 
++ 
++ def delete_persona(persona_uuid: str) -&gt; bool:
++     """Soft delete a persona. Returns True if the persona was found and deleted."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "UPDATE personas SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
++             (persona_uuid,),
++         )
++         deleted = cursor.rowcount &gt; 0
++ 
++         if deleted:
++             logger.info(f"Soft deleted persona with UUID: {persona_uuid}")
++ 
++         conn.commit()
++         return deleted
++ 
+  
+  # ============ Agent Tests Functions ============
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me create the personas router file:</details></think>
+
+---
+
+Now let me create the router file:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/personas.py</summary>
+
+**Chunk 1**
+Lines added: 98, lines removed: 1
+
+```diff
+@@ -1,1 +1,98 @@
+- 
++ from typing import Optional, List, Dict, Any
++ from fastapi import APIRouter, HTTPException
++ from pydantic import BaseModel
++ 
++ from db import (
++     create_persona,
++     get_persona,
++     get_all_personas,
++     update_persona,
++     delete_persona,
++ )
++ 
++ 
++ router = APIRouter(prefix="/personas", tags=["personas"])
++ 
++ 
++ class PersonaCreate(BaseModel):
++     name: str
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++ 
++ 
++ class PersonaUpdate(BaseModel):
++     name: Optional[str] = None
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++ 
++ 
++ class PersonaResponse(BaseModel):
++     uuid: str
++     name: str
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ class PersonaCreateResponse(BaseModel):
++     uuid: str
++     message: str
++ 
++ 
++ @router.post("", response_model=PersonaCreateResponse)
++ async def create_persona_endpoint(persona: PersonaCreate):
++     """Create a new persona."""
++     persona_uuid = create_persona(
++         name=persona.name,
++         description=persona.description,
++         config=persona.config,
++     )
++     return PersonaCreateResponse(uuid=persona_uuid, message="Persona created successfully")
++ 
++ 
++ @router.get("", response_model=List[PersonaResponse])
++ async def list_personas():
++     """List all personas."""
++     personas = get_all_personas()
++     return personas
++ 
++ 
++ @router.get("/{persona_uuid}", response_model=PersonaResponse)
++ async def get_persona_endpoint(persona_uuid: str):
++     """Get a persona by UUID."""
++     persona = get_persona(persona_uuid)
++     if not persona:
++         raise HTTPException(status_code=404, detail="Persona not found")
++     return persona
++ 
++ 
++ @router.put("/{persona_uuid}", response_model=PersonaResponse)
++ async def update_persona_endpoint(persona_uuid: str, persona: PersonaUpdate):
++     """Update a persona."""
++     existing_persona = get_persona(persona_uuid)
++     if not existing_persona:
++         raise HTTPException(status_code=404, detail="Persona not found")
++ 
++     updated = update_persona(
++         persona_uuid=persona_uuid,
++         name=persona.name,
++         description=persona.description,
++         config=persona.config,
++     )
++ 
++     if not updated:
++         raise HTTPException(status_code=400, detail="No fields to update")
++ 
++     updated_persona = get_persona(persona_uuid)
++     return updated_persona
++ 
++ 
++ @router.delete("/{persona_uuid}")
++ async def delete_persona_endpoint(persona_uuid: str):
++     """Delete a persona."""
++     deleted = delete_persona(persona_uuid)
++     if not deleted:
++         raise HTTPException(status_code=404, detail="Persona not found")
++     return {"message": "Persona deleted successfully"}
++ 
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to register the router in main.py:</details></think>
+
+---
+
+Now let me register the router in `main.py`:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I'll add the personas router import and registration:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -18,4 +18,5 @@
+  from routers.tests import router as tests_router
+  from routers.agent_tests import router as agent_tests_router
++ from routers.personas import router as personas_router
+  from utils import get_s3_client
+  from job_recovery import recover_pending_jobs
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now add the router to the app:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -53,4 +53,5 @@
+  app.include_router(tests_router)
+  app.include_router(agent_tests_router)
++ app.include_router(personas_router)
+  
+  app.add_middleware(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check for any lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/personas.py`
+
+Lint results
+
+Lint errors for `src/main.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| "app" is not accessed | 34:20-34:23 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done. I've added:
+
+1. `personas` table in `db.py` with columns: `uuid`, `name`, `description`, `config` (JSON), plus standard `id`, `created_at`, `updated_at`, and `deleted_at` for soft delete
+
+2. CRUD functions in `db.py`:
+   - `create_persona()`
+   - `get_persona()`
+   - `get_all_personas()`
+   - `update_persona()`
+   - `delete_persona()` (soft delete)
+
+3. Created `src/routers/personas.py` with endpoints:
+   - `POST /personas` - Create persona
+   - `GET /personas` - List all personas
+   - `GET /personas/{persona_uuid}` - Get persona by UUID
+   - `PUT /personas/{persona_uuid}` - Update persona
+   - `DELETE /personas/{persona_uuid}` - Soft delete persona
+
+4. Registered the router in `main.py`</details></think>
+
+---
+
+Done! Added the `personas` table and CRUD routers:
+
+**`src/db.py`:**
+- New table with columns: `uuid`, `name`, `description`, `config` (JSON), plus `id`, `created_at`, `updated_at`, `deleted_at` (soft delete)
+- Functions: `create_persona()`, `get_persona()`, `get_all_personas()`, `update_persona()`, `delete_persona()`
+
+**`src/routers/personas.py`** (new file):
+- `POST /personas` - Create persona
+- `GET /personas` - List all personas
+- `GET /personas/{persona_uuid}` - Get by UUID
+- `PUT /personas/{persona_uuid}` - Update persona
+- `DELETE /personas/{persona_uuid}` - Soft delete
+
+**`src/main.py`:**
+- Registered the new `personas_router`
+
+---
+
+_**User (2026-01-11 09:21Z)**_
+
+add a similar table for scenarios - just add name and description there along with the routes
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to add a new table for "scenarios" with just `name` and `description` columns (plus the standard uuid, id, timestamps, and deleted_at for soft delete). I'll follow the same pattern as personas but without the config field.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I'll add the scenarios table after the personas table, then add CRUD functions, create the router file, and register it.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 14, lines removed: undefined
+
+```diff
+@@ -138,4 +138,18 @@
+          """
+          )
++ 
++         cursor.execute(
++             """
++             CREATE TABLE IF NOT EXISTS scenarios (
++                 id INTEGER PRIMARY KEY AUTOINCREMENT,
++                 uuid TEXT NOT NULL UNIQUE,
++                 name TEXT NOT NULL,
++                 description TEXT,
++                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL
++             )
++         """
++         )
+  
+          # Add details column to jobs table if not present (migration)
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to add the CRUD functions for scenarios. Let me find where the personas functions end:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def delete_persona" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def delete_persona(persona_uuid: str) -> bool:` | L757 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I'll add the scenarios CRUD functions after delete_persona and before the Agent Tests section:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 99, lines removed: undefined
+
+```diff
+@@ -771,4 +771,103 @@
+          return deleted
+  
++ 
++ # ============ Scenarios Functions ============
++ 
++ 
++ def create_scenario(
++     name: str,
++     description: Optional[str] = None,
++ ) -&gt; str:
++     """Create a new scenario and return its UUID."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         scenario_uuid = str(uuid.uuid4())
++         cursor.execute(
++             """
++             INSERT INTO scenarios (uuid, name, description)
++             VALUES (?, ?, ?)
++             """,
++             (scenario_uuid, name, description),
++         )
++         conn.commit()
++         logger.info(f"Created scenario with UUID: {scenario_uuid}")
++         return scenario_uuid
++ 
++ 
++ def get_scenario(scenario_uuid: str) -&gt; Optional[Dict[str, Any]]:
++     """Get a scenario by UUID."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM scenarios WHERE uuid = ? AND deleted_at IS NULL",
++             (scenario_uuid,),
++         )
++         row = cursor.fetchone()
++         if row:
++             return dict(row)
++         return None
++ 
++ 
++ def get_all_scenarios() -&gt; List[Dict[str, Any]]:
++     """Get all scenarios."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM scenarios WHERE deleted_at IS NULL ORDER BY created_at DESC"
++         )
++         rows = cursor.fetchall()
++         return [dict(row) for row in rows]
++ 
++ 
++ def update_scenario(
++     scenario_uuid: str,
++     name: Optional[str] = None,
++     description: Optional[str] = None,
++ ) -&gt; bool:
++     """Update a scenario. Returns True if the scenario was found and updated."""
++     updates = []
++     params = []
++ 
++     if name is not None:
++         updates.append("name = ?")
++         params.append(name)
++     if description is not None:
++         updates.append("description = ?")
++         params.append(description)
++ 
++     if not updates:
++         return False
++ 
++     updates.append("updated_at = CURRENT_TIMESTAMP")
++     params.append(scenario_uuid)
++ 
++     query = f"UPDATE scenarios SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
++ 
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(query, params)
++         conn.commit()
++         updated = cursor.rowcount &gt; 0
++         if updated:
++             logger.info(f"Updated scenario with UUID: {scenario_uuid}")
++         return updated
++ 
++ 
++ def delete_scenario(scenario_uuid: str) -&gt; bool:
++     """Soft delete a scenario. Returns True if the scenario was found and deleted."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "UPDATE scenarios SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
++             (scenario_uuid,),
++         )
++         deleted = cursor.rowcount &gt; 0
++ 
++         if deleted:
++             logger.info(f"Soft deleted scenario with UUID: {scenario_uuid}")
++ 
++         conn.commit()
++         return deleted
++ 
+  
+  # ============ Agent Tests Functions ============
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me create the scenarios router file:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/scenarios.py</summary>
+
+**Chunk 1**
+Lines added: 93, lines removed: 1
+
+```diff
+@@ -1,1 +1,93 @@
+- 
++ from typing import Optional, List
++ from fastapi import APIRouter, HTTPException
++ from pydantic import BaseModel
++ 
++ from db import (
++     create_scenario,
++     get_scenario,
++     get_all_scenarios,
++     update_scenario,
++     delete_scenario,
++ )
++ 
++ 
++ router = APIRouter(prefix="/scenarios", tags=["scenarios"])
++ 
++ 
++ class ScenarioCreate(BaseModel):
++     name: str
++     description: Optional[str] = None
++ 
++ 
++ class ScenarioUpdate(BaseModel):
++     name: Optional[str] = None
++     description: Optional[str] = None
++ 
++ 
++ class ScenarioResponse(BaseModel):
++     uuid: str
++     name: str
++     description: Optional[str] = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ class ScenarioCreateResponse(BaseModel):
++     uuid: str
++     message: str
++ 
++ 
++ @router.post("", response_model=ScenarioCreateResponse)
++ async def create_scenario_endpoint(scenario: ScenarioCreate):
++     """Create a new scenario."""
++     scenario_uuid = create_scenario(
++         name=scenario.name,
++         description=scenario.description,
++     )
++     return ScenarioCreateResponse(uuid=scenario_uuid, message="Scenario created successfully")
++ 
++ 
++ @router.get("", response_model=List[ScenarioResponse])
++ async def list_scenarios():
++     """List all scenarios."""
++     scenarios = get_all_scenarios()
++     return scenarios
++ 
++ 
++ @router.get("/{scenario_uuid}", response_model=ScenarioResponse)
++ async def get_scenario_endpoint(scenario_uuid: str):
++     """Get a scenario by UUID."""
++     scenario = get_scenario(scenario_uuid)
++     if not scenario:
++         raise HTTPException(status_code=404, detail="Scenario not found")
++     return scenario
++ 
++ 
++ @router.put("/{scenario_uuid}", response_model=ScenarioResponse)
++ async def update_scenario_endpoint(scenario_uuid: str, scenario: ScenarioUpdate):
++     """Update a scenario."""
++     existing_scenario = get_scenario(scenario_uuid)
++     if not existing_scenario:
++         raise HTTPException(status_code=404, detail="Scenario not found")
++ 
++     updated = update_scenario(
++         scenario_uuid=scenario_uuid,
++         name=scenario.name,
++         description=scenario.description,
++     )
++ 
++     if not updated:
++         raise HTTPException(status_code=400, detail="No fields to update")
++ 
++     updated_scenario = get_scenario(scenario_uuid)
++     return updated_scenario
++ 
++ 
++ @router.delete("/{scenario_uuid}")
++ async def delete_scenario_endpoint(scenario_uuid: str):
++     """Delete a scenario."""
++     deleted = delete_scenario(scenario_uuid)
++     if not deleted:
++         raise HTTPException(status_code=404, detail="Scenario not found")
++     return {"message": "Scenario deleted successfully"}
++ 
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me register the router in main.py:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -19,4 +19,5 @@
+  from routers.agent_tests import router as agent_tests_router
+  from routers.personas import router as personas_router
++ from routers.scenarios import router as scenarios_router
+  from utils import get_s3_client
+  from job_recovery import recover_pending_jobs
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me add the router registration:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -55,4 +55,5 @@
+  app.include_router(agent_tests_router)
+  app.include_router(personas_router)
++ app.include_router(scenarios_router)
+  
+  app.add_middleware(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/scenarios.py`
+
+Lint results
+
+Lint errors for `src/main.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| "app" is not accessed | 35:20-35:23 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done. I've added the scenarios table with name and description columns, plus the standard soft delete columns, and created the CRUD routes.</details></think>
+
+---
+
+Done! Added the `scenarios` table and CRUD routers:
+
+**`src/db.py`:**
+- New table with columns: `uuid`, `name`, `description`, plus `id`, `created_at`, `updated_at`, `deleted_at` (soft delete)
+- Functions: `create_scenario()`, `get_scenario()`, `get_all_scenarios()`, `update_scenario()`, `delete_scenario()`
+
+**`src/routers/scenarios.py`** (new file):
+- `POST /scenarios` - Create scenario
+- `GET /scenarios` - List all scenarios
+- `GET /scenarios/{scenario_uuid}` - Get by UUID
+- `PUT /scenarios/{scenario_uuid}` - Update scenario
+- `DELETE /scenarios/{scenario_uuid}` - Soft delete
+
+**`src/main.py`:**
+- Registered the new `scenarios_router`
+
+---
+
+_**User (2026-01-11 10:15Z)**_
+
+reuse the code between llm test task and run model benchmark functions
+
+@src/routers/agent_tests.py 
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to refactor the code to reuse common logic between `run_llm_test_task` and `run_model_benchmark` functions in `src/routers/agent_tests.py`. 
+
+Looking at both functions, the common parts are:
+1. Building the pense config (getting tools from agent_tools, combining test cases)
+2. Running the pense llm tests run command
+3. Parsing results.json and metrics.json
+4. Uploading results to S3
+
+I should extract these common parts into helper functions:
+1. `_build_pense_config(agent, tests)` - builds the pense config with tools and test cases
+2. `_run_pense_test(task_id, model, pense_config, output_dir, s3_bucket, s3_prefix)` - runs the pense command and returns results
+
+Let me refactor this.</details></think>
+
+---
+
+I'll refactor to extract common logic into helper functions:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 216, lines removed: 187
+
+```diff
+@@ -187,213 +187,242 @@
+  
+  
+- def run_llm_test_task(
+-     task_id: str,
++ # ============ Shared Helper Functions ============
++ 
++ 
++ def _build_pense_config(
+      agent: Dict[str, Any],
+      tests: List[Dict[str, Any]],
+-     s3_bucket: str,
+- ):
+-     """Run the LLM tests in the background."""
+-     try:
+-         logger.info(
+-             f"Running LLM test task {task_id} for agent {agent['uuid']} with {len(tests)} test(s)"
+-         )
+-         update_job(task_id, status=TaskStatus.IN_PROGRESS.value)
+- 
+-         s3 = get_s3_client()
+- 
+-         # Create temporary directory for processing
+-         with tempfile.TemporaryDirectory() as temp_dir:
+-             temp_path = Path(temp_dir)
+- 
+-             try:
+-                 # Build the pense test config from agent config
+-                 agent_config = agent.get("config") or {}
++     model: Optional[str] = None,
++ ) -&gt; Dict[str, Any]:
++     """
++     Build the pense test config from agent and tests.
++ 
++     Args:
++         agent: Agent dict with config
++         tests: List of test dicts with config
++         model: Optional model override. If None, uses agent's llm.model or defaults to gpt-4.1
++     """
++     agent_config = agent.get("config") or {}
+  
+-                 # Get model from agent config, default to gpt-4.1
+-                 llm_config = agent_config.get("llm", {})
+-                 model = llm_config.get("model", "gpt-4.1")
++     # Get model from param or agent config
++     if model is None:
++         llm_config = agent_config.get("llm", {})
++         model = llm_config.get("model", "gpt-4.1")
+  
+-                 # Get tools from agent_tools table
+-                 agent_tools = get_tools_for_agent(agent["uuid"])
+-                 tool_configs = [
+-                     {
+-                         "name": tool["name"],
+-                         "description": tool["description"],  # From column
+-                         "parameters": tool.get("config", {}).get("parameters", []),
+-                     }
+-                     for tool in agent_tools
+-                 ]
++     # Get tools from agent_tools table
++     agent_tools = get_tools_for_agent(agent["uuid"])
++     tool_configs = [
++         {
++             "name": tool["name"],
++             "description": tool["description"],
++             "parameters": tool.get("config", {}).get("parameters", []),
++         }
++         for tool in agent_tools
++     ]
+  
+-                 # Combine test cases from all tests
+-                 # Each test's config IS a test case (with history, evaluation)
+-                 all_test_cases = []
+- 
+-                 for test in tests:
+-                     test_config = test.get("config")
+-                     if not test_config:
+-                         continue
++     # Combine test cases from all tests
++     all_test_cases = []
++     for test in tests:
++         test_config = test.get("config")
++         if not test_config:
++             continue
+  
+-                     if test_config["evaluation"]["type"] == "tool_call":
+-                         tool_calls = []
+- 
+-                         for tool_call in test_config["evaluation"]["tool_calls"]:
+- 
+-                             # ignore other keys in the tool call config
+-                             tool_calls.append(
+-                                 {
+-                                     "tool": tool_call["tool"],
+-                                     "arguments": (
+-                                         tool_call["arguments"]
+-                                         if not tool_call.get(
+-                                             "accept_any_arguments", False
+-                                         )
+-                                         else None
+-                                     ),
+-                                 }
+-                             )
+- 
+-                         test_config["evaluation"]["tool_calls"] = tool_calls
++         if test_config["evaluation"]["type"] == "tool_call":
++             tool_calls = []
++             for tool_call in test_config["evaluation"]["tool_calls"]:
++                 tool_calls.append(
++                     {
++                         "tool": tool_call["tool"],
++                         "arguments": (
++                             tool_call["arguments"]
++                             if not tool_call.get("accept_any_arguments", False)
++                             else None
++                         ),
++                     }
++                 )
++             test_config["evaluation"]["tool_calls"] = tool_calls
+  
+-                     all_test_cases.append(test_config)
++         all_test_cases.append(test_config)
+  
+-                 # Build pense config
+-                 pense_config = {
+-                     "params": {"model": model},
+-                     "system_prompt": agent_config.get("system_prompt", ""),
+-                     "tools": tool_configs,
+-                     "test_cases": all_test_cases,
+-                 }
++     return {
++         "params": {"model": model},
++         "system_prompt": agent_config.get("system_prompt", ""),
++         "tools": tool_configs,
++         "test_cases": all_test_cases,
++     }
+  
+-                 # Write config to temp file
+-                 config_file = temp_path / "test_config.json"
+-                 with open(config_file, "w", encoding="utf-8") as f:
+-                     json.dump(pense_config, f, indent=2)
++ 
++ def _run_pense_test(
++     model: str,
++     pense_config: Dict[str, Any],
++     output_dir: Path,
++     s3_bucket: str,
++     s3_prefix: str,
++     log_prefix: str = "LLM test",
++ ) -&gt; Dict[str, Any]:
++     """
++     Run pense llm tests run command and return parsed results.
++ 
++     Args:
++         model: Model name to use
++         pense_config: The pense config dict
++         output_dir: Directory to write output files
++         s3_bucket: S3 bucket name
++         s3_prefix: S3 key prefix for uploading results
++         log_prefix: Prefix for log messages
++ 
++     Returns:
++         Dict with keys: success, total_tests, passed, failed, test_results, error
++     """
++     s3 = get_s3_client()
++ 
++     # Update config with model
++     config = pense_config.copy()
++     config["params"] = {"model": model}
+  
+-                 # Create output directory
+-                 output_dir = temp_path / "output"
+-                 output_dir.mkdir()
++     # Create output directory
++     output_dir.mkdir(parents=True, exist_ok=True)
++ 
++     # Write config to temp file
++     config_file = output_dir / "test_config.json"
++     with open(config_file, "w", encoding="utf-8") as f:
++         json.dump(config, f, indent=2)
+  
+-                 # Run pense llm tests run command
+-                 run_cmd = [
+-                     "pense",
+-                     "llm",
+-                     "tests",
+-                     "run",
+-                     "-c",
+-                     str(config_file),
+-                     "-o",
+-                     str(output_dir),
+-                     "-m",
+-                     model,
+-                     "-p",
+-                     "openrouter",
+-                 ]
++     # Run pense llm tests run command
++     run_cmd = [
++         "pense",
++         "llm",
++         "tests",
++         "run",
++         "-c",
++         str(config_file),
++         "-o",
++         str(output_dir),
++         "-m",
++         model,
++         "-p",
++         "openrouter",
++     ]
+  
+-                 logger.info(
+-                     f"Running LLM test {task_id} with command: {' '.join(run_cmd)}"
+-                 )
++     logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
+  
+-                 result = subprocess.run(
+-                     run_cmd,
+-                     capture_output=True,
+-                     text=True,
+-                     cwd=str(temp_path),
+-                 )
++     result = subprocess.run(
++         run_cmd,
++         capture_output=True,
++         text=True,
++         cwd=str(output_dir),
++     )
+  
+-                 # Log output regardless of success/failure
+-                 if result.stdout:
+-                     logger.info(f"LLM test stdout: {result.stdout}")
+-                 if result.stderr:
+-                     logger.info(f"LLM test stderr: {result.stderr}")
++     if result.stdout:
++         logger.info(f"{log_prefix} stdout: {result.stdout}")
++     if result.stderr:
++         logger.info(f"{log_prefix} stderr: {result.stderr}")
+  
+-                 # Find results.json and metrics.json files
+-                 results_data = None
+-                 metrics_data = None
+-                 results_file = None
+-                 metrics_file = None
++     # Find results.json and metrics.json files
++     results_data = None
++     metrics_data = None
+  
+-                 # Look for results.json and metrics.json in output directory (may be nested)
+-                 for root, dirs, files in os.walk(output_dir):
+-                     for file in files:
+-                         file_path = Path(root) / file
+-                         if file == "results.json" and not results_file:
+-                             results_file = file_path
+-                         elif file == "metrics.json" and not metrics_file:
+-                             metrics_file = file_path
+- 
+-                 if results_file and results_file.exists():
+-                     with open(results_file, "r", encoding="utf-8") as f:
+-                         results_data = json.load(f)
+- 
+-                 if metrics_file and metrics_file.exists():
+-                     with open(metrics_file, "r", encoding="utf-8") as f:
+-                         metrics_data = json.load(f)
++     for root, dirs, files in os.walk(output_dir):
++         for file in files:
++             file_path = Path(root) / file
++             if file == "results.json" and results_data is None:
++                 with open(file_path, "r", encoding="utf-8") as f:
++                     results_data = json.load(f)
++             elif file == "metrics.json" and metrics_data is None:
++                 with open(file_path, "r", encoding="utf-8") as f:
++                     metrics_data = json.load(f)
+  
+-                 # Upload results to S3
+-                 results_prefix = f"agent-tests/runs/{task_id}"
+- 
+-                 for root, dirs, files in os.walk(output_dir):
+-                     for file in files:
+-                         local_file_path = Path(root) / file
+-                         relative_path = local_file_path.relative_to(output_dir)
+-                         s3_key = f"{results_prefix}/{relative_path}"
+-                         s3.upload_file(str(local_file_path), s3_bucket, s3_key)
++     # Upload results to S3
++     for root, dirs, files in os.walk(output_dir):
++         for file in files:
++             local_file_path = Path(root) / file
++             relative_path = local_file_path.relative_to(output_dir)
++             s3_key = f"{s3_prefix}/{relative_path}"
++             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+  
+-                 # Parse metrics.json for total/passed counts
+-                 total_tests = 0
+-                 passed = 0
+-                 failed = 0
++     # Parse metrics
++     total_tests = 0
++     passed = 0
++     failed = 0
+  
+-                 if metrics_data and isinstance(metrics_data, dict):
+-                     total_tests = metrics_data.get("total", 0)
+-                     passed = metrics_data.get("passed", 0)
+-                     failed = total_tests - passed
++     if metrics_data and isinstance(metrics_data, dict):
++         total_tests = metrics_data.get("total", 0)
++         passed = metrics_data.get("passed", 0)
++         failed = total_tests - passed
+  
+-                 # Parse results.json for individual test case results
+-                 # Structure: [{"output": {...}, "metrics": {"passed": bool}, "test_case": {...}}, ...]
+-                 test_results = []
+- 
+-                 if results_data and isinstance(results_data, list):
+-                     for idx, r in enumerate(results_data):
+-                         output_data = r.get("output", {})
+-                         metrics = r.get("metrics", {})
+-                         test_case = r.get("test_case", {})
+- 
+-                         # Build TestCaseResult
+-                         test_result = {
+-                             "passed": metrics.get("passed", False),
+-                             "output": {
+-                                 "response": output_data.get("response"),
+-                                 "tool_calls": output_data.get("tool_calls"),
+-                             },
+-                             "test_case": test_case,
+-                         }
+-                         test_results.append(test_result)
++     # Parse results
++     test_results = []
++     if results_data and isinstance(results_data, list):
++         for r in results_data:
++             output_data = r.get("output", {})
++             metrics = r.get("metrics", {})
++             test_case = r.get("test_case", {})
++             test_results.append(
++                 {
++                     "passed": metrics.get("passed", False),
++                     "output": {
++                         "response": output_data.get("response"),
++                         "tool_calls": output_data.get("tool_calls"),
++                     },
++                     "test_case": test_case,
++                 }
++             )
+  
+-                     # If metrics.json wasn't found, compute from results
+-                     if not metrics_data:
+-                         total_tests = len(results_data)
+-                         passed = sum(
+-                             1
+-                             for r in results_data
+-                             if r.get("metrics", {}).get("passed", False)
+-                         )
+-                         failed = total_tests - passed
++         # If metrics.json wasn't found, compute from results
++         if not metrics_data:
++             total_tests = len(results_data)
++             passed = sum(
++                 1 for r in results_data if r.get("metrics", {}).get("passed", False)
++             )
++             failed = total_tests - passed
+  
+-                 # Check if command failed
+-                 if result.returncode != 0:
+-                     update_job(
+-                         task_id,
+-                         status=TaskStatus.DONE.value,
+-                         results={
+-                             "total_tests": total_tests,
+-                             "passed": passed,
+-                             "failed": failed,
+-                             "test_results": test_results,
+-                             "results_s3_prefix": results_prefix,
+-                             "error": f"LLM test command failed: {result.stderr}",
+-                         },
+-                     )
+-                     return
++     error = None
++     if result.returncode != 0:
++         error = f"Command failed: {result.stderr}"
++ 
++     return {
++         "success": result.returncode == 0,
++         "total_tests": total_tests,
++         "passed": passed,
++         "failed": failed,
++         "test_results": test_results,
++         "error": error,
++     }
++ 
++ 
++ def run_llm_test_task(
++     task_id: str,
++     agent: Dict[str, Any],
++     tests: List[Dict[str, Any]],
++     s3_bucket: str,
++ ):
++     """Run the LLM tests in the background."""
++     try:
++         logger.info(
++             f"Running LLM test task {task_id} for agent {agent['uuid']} with {len(tests)} test(s)"
++         )
++         update_job(task_id, status=TaskStatus.IN_PROGRESS.value)
++ 
++         with tempfile.TemporaryDirectory() as temp_dir:
++             temp_path = Path(temp_dir)
++ 
++             try:
++                 # Build pense config
++                 pense_config = _build_pense_config(agent, tests)
++                 model = pense_config["params"]["model"]
++ 
++                 # Create output directory
++                 output_dir = temp_path / "output"
++ 
++                 # Run pense test
++                 results_prefix = f"agent-tests/runs/{task_id}"
++                 result = _run_pense_test(
++                     model=model,
++                     pense_config=pense_config,
++                     output_dir=output_dir,
++                     s3_bucket=s3_bucket,
++                     s3_prefix=results_prefix,
++                     log_prefix=f"LLM test {task_id}",
++                 )
+  
+                  # Update job with results
+```
+
+**Chunk 2**
+Lines added: 6, lines removed: 6
+
+```diff
+@@ -402,15 +431,15 @@
+                      status=TaskStatus.DONE.value,
+                      results={
+-                         "total_tests": total_tests,
+-                         "passed": passed,
+-                         "failed": failed,
+-                         "test_results": test_results,
++                         "total_tests": result["total_tests"],
++                         "passed": result["passed"],
++                         "failed": result["failed"],
++                         "test_results": result["test_results"],
+                          "results_s3_prefix": results_prefix,
+-                         "error": None,
++                         "error": result["error"],
+                      },
+                  )
+  
+                  logger.info(
+-                     f"LLM test task {task_id} completed: {passed}/{total_tests} passed"
++                     f"LLM test task {task_id} completed: {result['passed']}/{result['total_tests']} passed"
+                  )
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to update `run_model_benchmark` to use the shared `_run_pense_test` function. Let me find it in the file:</details></think>
+
+---
+
+Now let me update `run_model_benchmark` to use the shared helper:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 17, lines removed: 111
+
+```diff
+@@ -588,118 +588,24 @@
+      """Run benchmark for a single model."""
+      try:
+-         s3 = get_s3_client()
+- 
+-         # Update config with this model
+-         config = pense_config.copy()
+-         config["params"] = {"model": model}
+- 
+-         # Create model-specific output directory
+-         output_dir.mkdir(parents=True, exist_ok=True)
+- 
+-         # Write config to temp file
+-         config_file = output_dir / "test_config.json"
+-         with open(config_file, "w", encoding="utf-8") as f:
+-             json.dump(config, f, indent=2)
+- 
+-         # Run pense llm tests run command
+-         run_cmd = [
+-             "pense",
+-             "llm",
+-             "tests",
+-             "run",
+-             "-c",
+-             str(config_file),
+-             "-o",
+-             str(output_dir),
+-             "-m",
+-             model,
+-         ]
+- 
+-         logger.info(
+-             f"Running benchmark {task_id} for model {model}: {' '.join(run_cmd)}"
+-         )
+- 
+-         result = subprocess.run(
+-             run_cmd,
+-             capture_output=True,
+-             text=True,
+-             cwd=str(output_dir),
+-         )
+- 
+-         if result.stdout:
+-             logger.info(f"Benchmark {model} stdout: {result.stdout}")
+-         if result.stderr:
+-             logger.info(f"Benchmark {model} stderr: {result.stderr}")
+- 
+-         # Find results.json and metrics.json
+-         results_data = None
+-         metrics_data = None
+- 
+-         for root, dirs, files in os.walk(output_dir):
+-             for file in files:
+-                 file_path = Path(root) / file
+-                 if file == "results.json":
+-                     with open(file_path, "r", encoding="utf-8") as f:
+-                         results_data = json.load(f)
+-                 elif file == "metrics.json":
+-                     with open(file_path, "r", encoding="utf-8") as f:
+-                         metrics_data = json.load(f)
+- 
+-         # Upload results to S3
+-         results_prefix = (
+-             f"agent-tests/benchmarks/{task_id}/outputs/{model.replace('/', '_')}"
+-         )
+- 
+-         for root, dirs, files in os.walk(output_dir):
+-             for file in files:
+-                 local_file_path = Path(root) / file
+-                 relative_path = local_file_path.relative_to(output_dir)
+-                 s3_key = f"{results_prefix}/{relative_path}"
+-                 s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+- 
+-         # Parse metrics
+-         total_tests = 0
+-         passed = 0
+-         failed = 0
+- 
+-         if metrics_data and isinstance(metrics_data, dict):
+-             total_tests = metrics_data.get("total", 0)
+-             passed = metrics_data.get("passed", 0)
+-             failed = total_tests - passed
+- 
+-         # Parse results
+-         test_results = []
+-         if results_data and isinstance(results_data, list):
+-             for r in results_data:
+-                 output_data = r.get("output", {})
+-                 metrics = r.get("metrics", {})
+-                 test_case = r.get("test_case", {})
+-                 test_results.append(
+-                     {
+-                         "passed": metrics.get("passed", False),
+-                         "output": {
+-                             "response": output_data.get("response"),
+-                             "tool_calls": output_data.get("tool_calls"),
+-                         },
+-                         "test_case": test_case,
+-                     }
+-                 )
+- 
+-             if not metrics_data:
+-                 total_tests = len(results_data)
+-                 passed = sum(
+-                     1 for r in results_data if r.get("metrics", {}).get("passed", False)
+-                 )
+-                 failed = total_tests - passed
+- 
+-         if result.returncode != 0:
++         s3_prefix = f"agent-tests/benchmarks/{task_id}/outputs/{model.replace('/', '_')}"
++ 
++         result = _run_pense_test(
++             model=model,
++             pense_config=pense_config,
++             output_dir=output_dir,
++             s3_bucket=s3_bucket,
++             s3_prefix=s3_prefix,
++             log_prefix=f"Benchmark {task_id} model {model}",
++         )
++ 
++         if not result["success"]:
+              return ModelResult(
+                  model=model,
+                  success=False,
+-                 message=f"Benchmark failed: {result.stderr}",
+-                 total_tests=total_tests,
+-                 passed=passed,
+-                 failed=failed,
+-                 test_results=test_results,
++                 message=f"Benchmark failed: {result['error']}",
++                 total_tests=result["total_tests"],
++                 passed=result["passed"],
++                 failed=result["failed"],
++                 test_results=result["test_results"],
+              )
+  
+```
+
+**Chunk 2**
+Lines added: 4, lines removed: 4
+
+```diff
+@@ -708,8 +614,8 @@
+              success=True,
+              message=f"Benchmark completed successfully for {model}",
+-             total_tests=total_tests,
+-             passed=passed,
+-             failed=failed,
+-             test_results=test_results,
++             total_tests=result["total_tests"],
++             passed=result["passed"],
++             failed=result["failed"],
++             test_results=result["test_results"],
+          )
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update `run_benchmark_task` to use the `_build_pense_config` helper:</details></think>
+
+---
+
+Now let me update `run_benchmark_task` to use the `_build_pense_config` helper:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 3, lines removed: 47
+
+```diff
+@@ -650,51 +650,7 @@
+  
+              try:
+-                 # Build the base pense config
+-                 agent_config = agent.get("config") or {}
+- 
+-                 # Get tools from agent_tools table
+-                 agent_tools = get_tools_for_agent(agent["uuid"])
+-                 tool_configs = [
+-                     {
+-                         "name": tool["name"],
+-                         "description": tool["description"],
+-                         "parameters": tool.get("config", {}).get("parameters", []),
+-                     }
+-                     for tool in agent_tools
+-                 ]
+- 
+-                 # Combine test cases
+-                 all_test_cases = []
+-                 for test in tests:
+-                     test_config = test.get("config")
+-                     if not test_config:
+-                         continue
+- 
+-                     if test_config["evaluation"]["type"] == "tool_call":
+-                         tool_calls = []
+-                         for tool_call in test_config["evaluation"]["tool_calls"]:
+-                             tool_calls.append(
+-                                 {
+-                                     "tool": tool_call["tool"],
+-                                     "arguments": (
+-                                         tool_call["arguments"]
+-                                         if not tool_call.get(
+-                                             "accept_any_arguments", False
+-                                         )
+-                                         else None
+-                                     ),
+-                                 }
+-                             )
+-                         test_config["evaluation"]["tool_calls"] = tool_calls
+- 
+-                     all_test_cases.append(test_config)
+- 
+-                 # Base pense config (model will be set per-run)
+-                 pense_config = {
+-                     "params": {},
+-                     "system_prompt": agent_config.get("system_prompt", ""),
+-                     "tools": tool_configs,
+-                     "test_cases": all_test_cases,
+-                 }
++                 # Build the base pense config (model will be set per-run)
++                 pense_config = _build_pense_config(agent, tests, model=models[0])
++                 pense_config["params"] = {}  # Clear model, will be set per-run
+  
+                  # Create output directory
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check for any lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py`
+
+Lint results
+
+Lint errors for `src/routers/agent_tests.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Variable "dirs" is not accessed | 325:15-325:19 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 336:15-336:19 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 729:31-729:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, no lint errors. Let me verify the refactoring is correct by reading through the relevant parts of the file:</details></think>
+
+---
+
+Done! Refactored to extract two shared helper functions:
+
+1. **`_build_pense_config(agent, tests, model=None)`** - Builds the pense test config:
+   - Gets tools from `agent_tools` table
+   - Combines test cases from all tests
+   - Handles tool_call evaluation formatting
+
+2. **`_run_pense_test(model, pense_config, output_dir, s3_bucket, s3_prefix, log_prefix)`** - Runs the pense command and handles results:
+   - Writes config file
+   - Runs `pense llm tests run` command
+   - Parses `results.json` and `metrics.json`
+   - Uploads to S3
+   - Returns parsed results dict
+
+Both `run_llm_test_task` and `run_model_benchmark` now use these shared helpers, reducing code duplication significantly.
+
+---
+
+_**User (2026-01-11 10:15Z)**_
+
+add a new table and routes for metrics table - should have name, description and config (JSON) as other tables
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to add a new table called "metrics" with columns:
+- name
+- description
+- config (JSON field)
+
+Plus the standard columns (uuid, id, timestamps, deleted_at for soft delete). I'll follow the same pattern as personas and tests tables.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I'll add the metrics table after scenarios, then add CRUD functions, create the router file, and register it in main.py.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 15, lines removed: undefined
+
+```diff
+@@ -152,4 +152,19 @@
+          """
+          )
++ 
++         cursor.execute(
++             """
++             CREATE TABLE IF NOT EXISTS metrics (
++                 id INTEGER PRIMARY KEY AUTOINCREMENT,
++                 uuid TEXT NOT NULL UNIQUE,
++                 name TEXT NOT NULL,
++                 description TEXT,
++                 config TEXT,
++                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL
++             )
++         """
++         )
+  
+          # Add details column to jobs table if not present (migration)
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to add the CRUD functions for metrics. Let me find where the scenarios functions end:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def delete_scenario" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def delete_scenario(scenario_uuid: str) -> bool:` | L871 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I'll add the metrics CRUD functions after delete_scenario and before the Agent Tests section:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 113, lines removed: undefined
+
+```diff
+@@ -885,4 +885,117 @@
+          return deleted
+  
++ 
++ # ============ Metrics Functions ============
++ 
++ 
++ def create_metric(
++     name: str,
++     description: Optional[str] = None,
++     config: Optional[Dict[str, Any]] = None,
++ ) -&gt; str:
++     """Create a new metric and return its UUID."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         metric_uuid = str(uuid.uuid4())
++         config_json = json.dumps(config) if config is not None else None
++         cursor.execute(
++             """
++             INSERT INTO metrics (uuid, name, description, config)
++             VALUES (?, ?, ?, ?)
++             """,
++             (metric_uuid, name, description, config_json),
++         )
++         conn.commit()
++         logger.info(f"Created metric with UUID: {metric_uuid}")
++         return metric_uuid
++ 
++ 
++ def _parse_metric_row(row: sqlite3.Row) -&gt; Dict[str, Any]:
++     """Parse a metric database row and deserialize JSON fields."""
++     metric = dict(row)
++     if metric.get("config"):
++         metric["config"] = json.loads(metric["config"])
++     return metric
++ 
++ 
++ def get_metric(metric_uuid: str) -&gt; Optional[Dict[str, Any]]:
++     """Get a metric by UUID."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM metrics WHERE uuid = ? AND deleted_at IS NULL",
++             (metric_uuid,),
++         )
++         row = cursor.fetchone()
++         if row:
++             return _parse_metric_row(row)
++         return None
++ 
++ 
++ def get_all_metrics() -&gt; List[Dict[str, Any]]:
++     """Get all metrics."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM metrics WHERE deleted_at IS NULL ORDER BY created_at DESC"
++         )
++         rows = cursor.fetchall()
++         return [_parse_metric_row(row) for row in rows]
++ 
++ 
++ def update_metric(
++     metric_uuid: str,
++     name: Optional[str] = None,
++     description: Optional[str] = None,
++     config: Optional[Dict[str, Any]] = None,
++ ) -&gt; bool:
++     """Update a metric. Returns True if the metric was found and updated."""
++     updates = []
++     params = []
++ 
++     if name is not None:
++         updates.append("name = ?")
++         params.append(name)
++     if description is not None:
++         updates.append("description = ?")
++         params.append(description)
++     if config is not None:
++         updates.append("config = ?")
++         params.append(json.dumps(config))
++ 
++     if not updates:
++         return False
++ 
++     updates.append("updated_at = CURRENT_TIMESTAMP")
++     params.append(metric_uuid)
++ 
++     query = f"UPDATE metrics SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
++ 
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(query, params)
++         conn.commit()
++         updated = cursor.rowcount &gt; 0
++         if updated:
++             logger.info(f"Updated metric with UUID: {metric_uuid}")
++         return updated
++ 
++ 
++ def delete_metric(metric_uuid: str) -&gt; bool:
++     """Soft delete a metric. Returns True if the metric was found and deleted."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "UPDATE metrics SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
++             (metric_uuid,),
++         )
++         deleted = cursor.rowcount &gt; 0
++ 
++         if deleted:
++             logger.info(f"Soft deleted metric with UUID: {metric_uuid}")
++ 
++         conn.commit()
++         return deleted
++ 
+  
+  # ============ Agent Tests Functions ============
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me create the metrics router file:</details></think>
+
+---
+
+Now let me create the router file:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/metrics.py</summary>
+
+**Chunk 1**
+Lines added: 98, lines removed: 1
+
+```diff
+@@ -1,1 +1,98 @@
+- 
++ from typing import Optional, List, Dict, Any
++ from fastapi import APIRouter, HTTPException
++ from pydantic import BaseModel
++ 
++ from db import (
++     create_metric,
++     get_metric,
++     get_all_metrics,
++     update_metric,
++     delete_metric,
++ )
++ 
++ 
++ router = APIRouter(prefix="/metrics", tags=["metrics"])
++ 
++ 
++ class MetricCreate(BaseModel):
++     name: str
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++ 
++ 
++ class MetricUpdate(BaseModel):
++     name: Optional[str] = None
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++ 
++ 
++ class MetricResponse(BaseModel):
++     uuid: str
++     name: str
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ class MetricCreateResponse(BaseModel):
++     uuid: str
++     message: str
++ 
++ 
++ @router.post("", response_model=MetricCreateResponse)
++ async def create_metric_endpoint(metric: MetricCreate):
++     """Create a new metric."""
++     metric_uuid = create_metric(
++         name=metric.name,
++         description=metric.description,
++         config=metric.config,
++     )
++     return MetricCreateResponse(uuid=metric_uuid, message="Metric created successfully")
++ 
++ 
++ @router.get("", response_model=List[MetricResponse])
++ async def list_metrics():
++     """List all metrics."""
++     metrics = get_all_metrics()
++     return metrics
++ 
++ 
++ @router.get("/{metric_uuid}", response_model=MetricResponse)
++ async def get_metric_endpoint(metric_uuid: str):
++     """Get a metric by UUID."""
++     metric = get_metric(metric_uuid)
++     if not metric:
++         raise HTTPException(status_code=404, detail="Metric not found")
++     return metric
++ 
++ 
++ @router.put("/{metric_uuid}", response_model=MetricResponse)
++ async def update_metric_endpoint(metric_uuid: str, metric: MetricUpdate):
++     """Update a metric."""
++     existing_metric = get_metric(metric_uuid)
++     if not existing_metric:
++         raise HTTPException(status_code=404, detail="Metric not found")
++ 
++     updated = update_metric(
++         metric_uuid=metric_uuid,
++         name=metric.name,
++         description=metric.description,
++         config=metric.config,
++     )
++ 
++     if not updated:
++         raise HTTPException(status_code=400, detail="No fields to update")
++ 
++     updated_metric = get_metric(metric_uuid)
++     return updated_metric
++ 
++ 
++ @router.delete("/{metric_uuid}")
++ async def delete_metric_endpoint(metric_uuid: str):
++     """Delete a metric."""
++     deleted = delete_metric(metric_uuid)
++     if not deleted:
++         raise HTTPException(status_code=404, detail="Metric not found")
++     return {"message": "Metric deleted successfully"}
++ 
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now register the router in main.py:</details></think>
+
+---
+
+Now let me register the router in `main.py`:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -20,4 +20,5 @@
+  from routers.personas import router as personas_router
+  from routers.scenarios import router as scenarios_router
++ from routers.metrics import router as metrics_router
+  from utils import get_s3_client
+  from job_recovery import recover_pending_jobs
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now register the router:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -57,4 +57,5 @@
+  app.include_router(personas_router)
+  app.include_router(scenarios_router)
++ app.include_router(metrics_router)
+  
+  app.add_middleware(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/metrics.py`
+
+Lint results
+
+Lint errors for `src/db.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Expected indented block | 466:9-466:15 | DIAGNOSTIC_SEVERITY_ERROR |
+
+
+Lint errors for `src/main.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| "app" is not accessed | 36:20-36:23 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+There's a lint error in db.py. Let me check line 466:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+There's an indentation issue - the cursor.execute after `else:` is missing proper indentation. Let me fix it:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 11, lines removed: 11
+
+```diff
+@@ -464,15 +464,15 @@
+          else:
+              # Insert new link
+-         cursor.execute(
+-             """
+-             INSERT INTO agent_tools (agent_id, tool_id)
+-             VALUES (?, ?)
+-             """,
+-             (agent_id, tool_id),
+-         )
+-         conn.commit()
+-         link_id = cursor.lastrowid
+-         logger.info(f"Added tool {tool_id} to agent {agent_id}")
+-         return link_id
++             cursor.execute(
++                 """
++                 INSERT INTO agent_tools (agent_id, tool_id)
++                 VALUES (?, ?)
++                 """,
++                 (agent_id, tool_id),
++             )
++             conn.commit()
++             link_id = cursor.lastrowid
++             logger.info(f"Added tool {tool_id} to agent {agent_id}")
++             return link_id
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for any more lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/metrics.py`
+
+Lint results
+
+Lint errors for `src/db.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Expected indented block | 466:9-466:15 | DIAGNOSTIC_SEVERITY_ERROR |
+
+
+Lint errors for `src/main.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| "app" is not accessed | 36:20-36:23 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Still an error. Let me read more context around that area to understand the full structure:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I see - my edit didn't apply properly. The else block's content is not indented. Let me try again with a more precise edit:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 11, lines removed: 11
+
+```diff
+@@ -464,15 +464,15 @@
+          else:
+              # Insert new link
+-         cursor.execute(
+-             """
+-             INSERT INTO agent_tools (agent_id, tool_id)
+-             VALUES (?, ?)
+-             """,
+-             (agent_id, tool_id),
+-         )
+-         conn.commit()
+-         link_id = cursor.lastrowid
+-         logger.info(f"Added tool {tool_id} to agent {agent_id}")
+-         return link_id
++             cursor.execute(
++                 """
++                 INSERT INTO agent_tools (agent_id, tool_id)
++                 VALUES (?, ?)
++                 """,
++                 (agent_id, tool_id),
++             )
++             conn.commit()
++             link_id = cursor.lastrowid
++             logger.info(f"Added tool {tool_id} to agent {agent_id}")
++             return link_id
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check lints again:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/metrics.py`
+
+Lint results
+
+Lint errors for `src/db.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Expected indented block | 466:9-466:15 | DIAGNOSTIC_SEVERITY_ERROR |
+
+
+Lint errors for `src/main.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| "app" is not accessed | 36:20-36:23 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Still having issues. Let me look directly at what's on that line now:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The edit didn't seem to apply correctly - still missing proper indentation. Let me look at the raw content and be more careful with indentation:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 11, lines removed: 11
+
+```diff
+@@ -464,15 +464,15 @@
+          else:
+              # Insert new link
+-         cursor.execute(
+-             """
+-             INSERT INTO agent_tools (agent_id, tool_id)
+-             VALUES (?, ?)
+-             """,
+-             (agent_id, tool_id),
+-         )
+-         conn.commit()
+-         link_id = cursor.lastrowid
+-         logger.info(f"Added tool {tool_id} to agent {agent_id}")
+-         return link_id
++             cursor.execute(
++                 """
++                 INSERT INTO agent_tools (agent_id, tool_id)
++                 VALUES (?, ?)
++                 """,
++                 (agent_id, tool_id),
++             )
++             conn.commit()
++             link_id = cursor.lastrowid
++             logger.info(f"Added tool {tool_id} to agent {agent_id}")
++             return link_id
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check if lints are fixed now:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/metrics.py`
+
+Lint results
+
+Lint errors for `src/db.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Expected indented block | 466:9-466:15 | DIAGNOSTIC_SEVERITY_ERROR |
+
+
+Lint errors for `src/main.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| "app" is not accessed | 36:20-36:23 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+This is strange - the edit keeps failing. Let me read the file again to see what's actually there:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+It seems like the edit is still not applying properly. The indentation issue is that line 466 (cursor.execute) should be indented by 4 more spaces to be under the else block. Let me try replacing a larger block to ensure proper indentation:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me try replacing the entire function to fix this:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 2
+
+```diff
+@@ -462,6 +462,6 @@
+              logger.info(f"Restored tool {tool_id} to agent {agent_id}")
+              return existing["id"]
+-         else:
+-             # Insert new link
++ 
++         # Insert new link
+          cursor.execute(
+              """
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I removed the else block and just let the code flow through. Let me check if that fixes the lint error:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 3 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/metrics.py`
+
+Lint results
+
+Lint errors for `src/main.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| "app" is not accessed | 36:20-36:23 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The lint error is fixed. The fix was to remove the `else:` block since if the `if` branch returns early, there's no need for an explicit `else` - the code will just fall through to the insert logic.</details></think>
+
+---
+
+Done! Added the `metrics` table and CRUD routers:
+
+**`src/db.py`:**
+- New table with columns: `uuid`, `name`, `description`, `config` (JSON), plus `id`, `created_at`, `updated_at`, `deleted_at` (soft delete)
+- Functions: `create_metric()`, `get_metric()`, `get_all_metrics()`, `update_metric()`, `delete_metric()`
+
+**`src/routers/metrics.py`** (new file):
+- `POST /metrics` - Create metric
+- `GET /metrics` - List all metrics
+- `GET /metrics/{metric_uuid}` - Get by UUID
+- `PUT /metrics/{metric_uuid}` - Update metric
+- `DELETE /metrics/{metric_uuid}` - Soft delete
+
+**`src/main.py`:**
+- Registered the new `metrics_router`
+
+Also fixed a pre-existing indentation bug in the `add_tool_to_agent` function.
+
+---
+
+_**User (2026-01-11 10:15Z)**_
+
+make a new table for simulations which has a name and pivot tables for simulation_personas for connecting simulation with personas, simulation_scenarios for connecting simulation with scenarios and simulation_metrics for  connecting simulation with metrics
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to create:
+1. A `simulations` table with just a `name` field (plus standard uuid, id, timestamps, deleted_at)
+2. Three pivot/junction tables:
+   - `simulation_personas` - connects simulations with personas
+   - `simulation_scenarios` - connects simulations with scenarios
+   - `simulation_metrics` - connects simulations with metrics
+
+I'll follow the same pattern as `agent_tools` and `agent_tests` for the pivot tables.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I'll add the simulations table and the three pivot tables after the metrics table. Let me add them:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 58, lines removed: undefined
+
+```diff
+@@ -167,4 +167,62 @@
+          """
+          )
++ 
++         cursor.execute(
++             """
++             CREATE TABLE IF NOT EXISTS simulations (
++                 id INTEGER PRIMARY KEY AUTOINCREMENT,
++                 uuid TEXT NOT NULL UNIQUE,
++                 name TEXT NOT NULL,
++                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL
++             )
++         """
++         )
++ 
++         cursor.execute(
++             """
++             CREATE TABLE IF NOT EXISTS simulation_personas (
++                 id INTEGER PRIMARY KEY AUTOINCREMENT,
++                 simulation_id TEXT NOT NULL,
++                 persona_id TEXT NOT NULL,
++                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL,
++                 UNIQUE(simulation_id, persona_id),
++                 FOREIGN KEY (simulation_id) REFERENCES simulations(uuid),
++                 FOREIGN KEY (persona_id) REFERENCES personas(uuid)
++             )
++         """
++         )
++ 
++         cursor.execute(
++             """
++             CREATE TABLE IF NOT EXISTS simulation_scenarios (
++                 id INTEGER PRIMARY KEY AUTOINCREMENT,
++                 simulation_id TEXT NOT NULL,
++                 scenario_id TEXT NOT NULL,
++                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL,
++                 UNIQUE(simulation_id, scenario_id),
++                 FOREIGN KEY (simulation_id) REFERENCES simulations(uuid),
++                 FOREIGN KEY (scenario_id) REFERENCES scenarios(uuid)
++             )
++         """
++         )
++ 
++         cursor.execute(
++             """
++             CREATE TABLE IF NOT EXISTS simulation_metrics (
++                 id INTEGER PRIMARY KEY AUTOINCREMENT,
++                 simulation_id TEXT NOT NULL,
++                 metric_id TEXT NOT NULL,
++                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 deleted_at TIMESTAMP DEFAULT NULL,
++                 UNIQUE(simulation_id, metric_id),
++                 FOREIGN KEY (simulation_id) REFERENCES simulations(uuid),
++                 FOREIGN KEY (metric_id) REFERENCES metrics(uuid)
++             )
++         """
++         )
+  
+          # Add details column to jobs table if not present (migration)
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to add CRUD functions for:
+1. simulations table
+2. simulation_personas pivot table
+3. simulation_scenarios pivot table
+4. simulation_metrics pivot table
+
+Let me find where to add them - after the metrics functions:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def delete_metric" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def delete_metric(metric_uuid: str) -> bool:` | L1044 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I'll add the simulations CRUD functions and the three pivot table functions after delete_metric and before the Agent Tests section:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 391, lines removed: undefined
+
+```diff
+@@ -1058,4 +1058,395 @@
+          return deleted
+  
++ 
++ # ============ Simulations Functions ============
++ 
++ 
++ def create_simulation(name: str) -&gt; str:
++     """Create a new simulation and return its UUID."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         simulation_uuid = str(uuid.uuid4())
++         cursor.execute(
++             """
++             INSERT INTO simulations (uuid, name)
++             VALUES (?, ?)
++             """,
++             (simulation_uuid, name),
++         )
++         conn.commit()
++         logger.info(f"Created simulation with UUID: {simulation_uuid}")
++         return simulation_uuid
++ 
++ 
++ def get_simulation(simulation_uuid: str) -&gt; Optional[Dict[str, Any]]:
++     """Get a simulation by UUID."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM simulations WHERE uuid = ? AND deleted_at IS NULL",
++             (simulation_uuid,),
++         )
++         row = cursor.fetchone()
++         if row:
++             return dict(row)
++         return None
++ 
++ 
++ def get_all_simulations() -&gt; List[Dict[str, Any]]:
++     """Get all simulations."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM simulations WHERE deleted_at IS NULL ORDER BY created_at DESC"
++         )
++         rows = cursor.fetchall()
++         return [dict(row) for row in rows]
++ 
++ 
++ def update_simulation(
++     simulation_uuid: str,
++     name: Optional[str] = None,
++ ) -&gt; bool:
++     """Update a simulation. Returns True if the simulation was found and updated."""
++     updates = []
++     params = []
++ 
++     if name is not None:
++         updates.append("name = ?")
++         params.append(name)
++ 
++     if not updates:
++         return False
++ 
++     updates.append("updated_at = CURRENT_TIMESTAMP")
++     params.append(simulation_uuid)
++ 
++     query = (
++         f"UPDATE simulations SET {', '.join(updates)} WHERE uuid = ? AND deleted_at IS NULL"
++     )
++ 
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(query, params)
++         conn.commit()
++         updated = cursor.rowcount &gt; 0
++         if updated:
++             logger.info(f"Updated simulation with UUID: {simulation_uuid}")
++         return updated
++ 
++ 
++ def delete_simulation(simulation_uuid: str) -&gt; bool:
++     """Soft delete a simulation. Returns True if the simulation was found and deleted.
++     Also soft deletes related simulation_personas, simulation_scenarios, and simulation_metrics entries.
++     """
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "UPDATE simulations SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND deleted_at IS NULL",
++             (simulation_uuid,),
++         )
++         deleted = cursor.rowcount &gt; 0
++ 
++         if deleted:
++             # Soft delete related pivot table entries
++             cursor.execute(
++                 "UPDATE simulation_personas SET deleted_at = CURRENT_TIMESTAMP WHERE simulation_id = ? AND deleted_at IS NULL",
++                 (simulation_uuid,),
++             )
++             cursor.execute(
++                 "UPDATE simulation_scenarios SET deleted_at = CURRENT_TIMESTAMP WHERE simulation_id = ? AND deleted_at IS NULL",
++                 (simulation_uuid,),
++             )
++             cursor.execute(
++                 "UPDATE simulation_metrics SET deleted_at = CURRENT_TIMESTAMP WHERE simulation_id = ? AND deleted_at IS NULL",
++                 (simulation_uuid,),
++             )
++             logger.info(f"Soft deleted simulation with UUID: {simulation_uuid}")
++ 
++         conn.commit()
++         return deleted
++ 
++ 
++ # ============ Simulation Personas Functions ============
++ 
++ 
++ def add_persona_to_simulation(simulation_id: str, persona_id: str) -&gt; int:
++     """Add a persona to a simulation. Returns the id of the created/restored link."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         # Check if a soft-deleted link exists
++         cursor.execute(
++             "SELECT id FROM simulation_personas WHERE simulation_id = ? AND persona_id = ? AND deleted_at IS NOT NULL",
++             (simulation_id, persona_id),
++         )
++         existing = cursor.fetchone()
++         if existing:
++             # Restore the soft-deleted link
++             cursor.execute(
++                 "UPDATE simulation_personas SET deleted_at = NULL WHERE id = ?",
++                 (existing["id"],),
++             )
++             conn.commit()
++             logger.info(f"Restored persona {persona_id} to simulation {simulation_id}")
++             return existing["id"]
++ 
++         # Insert new link
++         cursor.execute(
++             """
++             INSERT INTO simulation_personas (simulation_id, persona_id)
++             VALUES (?, ?)
++             """,
++             (simulation_id, persona_id),
++         )
++         conn.commit()
++         link_id = cursor.lastrowid
++         logger.info(f"Added persona {persona_id} to simulation {simulation_id}")
++         return link_id
++ 
++ 
++ def remove_persona_from_simulation(simulation_id: str, persona_id: str) -&gt; bool:
++     """Soft delete a persona from a simulation. Returns True if the link was found and deleted."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "UPDATE simulation_personas SET deleted_at = CURRENT_TIMESTAMP WHERE simulation_id = ? AND persona_id = ? AND deleted_at IS NULL",
++             (simulation_id, persona_id),
++         )
++         conn.commit()
++         deleted = cursor.rowcount &gt; 0
++         if deleted:
++             logger.info(f"Removed persona {persona_id} from simulation {simulation_id}")
++         return deleted
++ 
++ 
++ def get_personas_for_simulation(simulation_id: str) -&gt; List[Dict[str, Any]]:
++     """Get all personas for a simulation."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             """
++             SELECT p.* FROM personas p
++             INNER JOIN simulation_personas sp ON p.uuid = sp.persona_id
++             WHERE sp.simulation_id = ? AND sp.deleted_at IS NULL AND p.deleted_at IS NULL
++             ORDER BY sp.created_at DESC
++             """,
++             (simulation_id,),
++         )
++         rows = cursor.fetchall()
++         return [_parse_persona_row(row) for row in rows]
++ 
++ 
++ def get_simulation_persona_link(simulation_id: str, persona_id: str) -&gt; Optional[Dict[str, Any]]:
++     """Get a specific simulation-persona link."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM simulation_personas WHERE simulation_id = ? AND persona_id = ? AND deleted_at IS NULL",
++             (simulation_id, persona_id),
++         )
++         row = cursor.fetchone()
++         if row:
++             return dict(row)
++         return None
++ 
++ 
++ def get_all_simulation_personas() -&gt; List[Dict[str, Any]]:
++     """Get all simulation-persona links."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM simulation_personas WHERE deleted_at IS NULL ORDER BY created_at DESC"
++         )
++         rows = cursor.fetchall()
++         return [dict(row) for row in rows]
++ 
++ 
++ # ============ Simulation Scenarios Functions ============
++ 
++ 
++ def add_scenario_to_simulation(simulation_id: str, scenario_id: str) -&gt; int:
++     """Add a scenario to a simulation. Returns the id of the created/restored link."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         # Check if a soft-deleted link exists
++         cursor.execute(
++             "SELECT id FROM simulation_scenarios WHERE simulation_id = ? AND scenario_id = ? AND deleted_at IS NOT NULL",
++             (simulation_id, scenario_id),
++         )
++         existing = cursor.fetchone()
++         if existing:
++             # Restore the soft-deleted link
++             cursor.execute(
++                 "UPDATE simulation_scenarios SET deleted_at = NULL WHERE id = ?",
++                 (existing["id"],),
++             )
++             conn.commit()
++             logger.info(f"Restored scenario {scenario_id} to simulation {simulation_id}")
++             return existing["id"]
++ 
++         # Insert new link
++         cursor.execute(
++             """
++             INSERT INTO simulation_scenarios (simulation_id, scenario_id)
++             VALUES (?, ?)
++             """,
++             (simulation_id, scenario_id),
++         )
++         conn.commit()
++         link_id = cursor.lastrowid
++         logger.info(f"Added scenario {scenario_id} to simulation {simulation_id}")
++         return link_id
++ 
++ 
++ def remove_scenario_from_simulation(simulation_id: str, scenario_id: str) -&gt; bool:
++     """Soft delete a scenario from a simulation. Returns True if the link was found and deleted."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "UPDATE simulation_scenarios SET deleted_at = CURRENT_TIMESTAMP WHERE simulation_id = ? AND scenario_id = ? AND deleted_at IS NULL",
++             (simulation_id, scenario_id),
++         )
++         conn.commit()
++         deleted = cursor.rowcount &gt; 0
++         if deleted:
++             logger.info(f"Removed scenario {scenario_id} from simulation {simulation_id}")
++         return deleted
++ 
++ 
++ def get_scenarios_for_simulation(simulation_id: str) -&gt; List[Dict[str, Any]]:
++     """Get all scenarios for a simulation."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             """
++             SELECT s.* FROM scenarios s
++             INNER JOIN simulation_scenarios ss ON s.uuid = ss.scenario_id
++             WHERE ss.simulation_id = ? AND ss.deleted_at IS NULL AND s.deleted_at IS NULL
++             ORDER BY ss.created_at DESC
++             """,
++             (simulation_id,),
++         )
++         rows = cursor.fetchall()
++         return [dict(row) for row in rows]
++ 
++ 
++ def get_simulation_scenario_link(simulation_id: str, scenario_id: str) -&gt; Optional[Dict[str, Any]]:
++     """Get a specific simulation-scenario link."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM simulation_scenarios WHERE simulation_id = ? AND scenario_id = ? AND deleted_at IS NULL",
++             (simulation_id, scenario_id),
++         )
++         row = cursor.fetchone()
++         if row:
++             return dict(row)
++         return None
++ 
++ 
++ def get_all_simulation_scenarios() -&gt; List[Dict[str, Any]]:
++     """Get all simulation-scenario links."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM simulation_scenarios WHERE deleted_at IS NULL ORDER BY created_at DESC"
++         )
++         rows = cursor.fetchall()
++         return [dict(row) for row in rows]
++ 
++ 
++ # ============ Simulation Metrics Functions ============
++ 
++ 
++ def add_metric_to_simulation(simulation_id: str, metric_id: str) -&gt; int:
++     """Add a metric to a simulation. Returns the id of the created/restored link."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         # Check if a soft-deleted link exists
++         cursor.execute(
++             "SELECT id FROM simulation_metrics WHERE simulation_id = ? AND metric_id = ? AND deleted_at IS NOT NULL",
++             (simulation_id, metric_id),
++         )
++         existing = cursor.fetchone()
++         if existing:
++             # Restore the soft-deleted link
++             cursor.execute(
++                 "UPDATE simulation_metrics SET deleted_at = NULL WHERE id = ?",
++                 (existing["id"],),
++             )
++             conn.commit()
++             logger.info(f"Restored metric {metric_id} to simulation {simulation_id}")
++             return existing["id"]
++ 
++         # Insert new link
++         cursor.execute(
++             """
++             INSERT INTO simulation_metrics (simulation_id, metric_id)
++             VALUES (?, ?)
++             """,
++             (simulation_id, metric_id),
++         )
++         conn.commit()
++         link_id = cursor.lastrowid
++         logger.info(f"Added metric {metric_id} to simulation {simulation_id}")
++         return link_id
++ 
++ 
++ def remove_metric_from_simulation(simulation_id: str, metric_id: str) -&gt; bool:
++     """Soft delete a metric from a simulation. Returns True if the link was found and deleted."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "UPDATE simulation_metrics SET deleted_at = CURRENT_TIMESTAMP WHERE simulation_id = ? AND metric_id = ? AND deleted_at IS NULL",
++             (simulation_id, metric_id),
++         )
++         conn.commit()
++         deleted = cursor.rowcount &gt; 0
++         if deleted:
++             logger.info(f"Removed metric {metric_id} from simulation {simulation_id}")
++         return deleted
++ 
++ 
++ def get_metrics_for_simulation(simulation_id: str) -&gt; List[Dict[str, Any]]:
++     """Get all metrics for a simulation."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             """
++             SELECT m.* FROM metrics m
++             INNER JOIN simulation_metrics sm ON m.uuid = sm.metric_id
++             WHERE sm.simulation_id = ? AND sm.deleted_at IS NULL AND m.deleted_at IS NULL
++             ORDER BY sm.created_at DESC
++             """,
++             (simulation_id,),
++         )
++         rows = cursor.fetchall()
++         return [_parse_metric_row(row) for row in rows]
++ 
++ 
++ def get_simulation_metric_link(simulation_id: str, metric_id: str) -&gt; Optional[Dict[str, Any]]:
++     """Get a specific simulation-metric link."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM simulation_metrics WHERE simulation_id = ? AND metric_id = ? AND deleted_at IS NULL",
++             (simulation_id, metric_id),
++         )
++         row = cursor.fetchone()
++         if row:
++             return dict(row)
++         return None
++ 
++ 
++ def get_all_simulation_metrics() -&gt; List[Dict[str, Any]]:
++     """Get all simulation-metric links."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         cursor.execute(
++             "SELECT * FROM simulation_metrics WHERE deleted_at IS NULL ORDER BY created_at DESC"
++         )
++         rows = cursor.fetchall()
++         return [dict(row) for row in rows]
++ 
+  
+  # ============ Agent Tests Functions ============
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to create the router files. I'll create one for simulations and three for the pivot tables. Let me start with the simulations router:</details></think>
+
+---
+
+Now let me create the router files:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+**Chunk 1**
+Lines added: 88, lines removed: 1
+
+```diff
+@@ -1,1 +1,88 @@
+- 
++ from typing import Optional, List
++ from fastapi import APIRouter, HTTPException
++ from pydantic import BaseModel
++ 
++ from db import (
++     create_simulation,
++     get_simulation,
++     get_all_simulations,
++     update_simulation,
++     delete_simulation,
++ )
++ 
++ 
++ router = APIRouter(prefix="/simulations", tags=["simulations"])
++ 
++ 
++ class SimulationCreate(BaseModel):
++     name: str
++ 
++ 
++ class SimulationUpdate(BaseModel):
++     name: Optional[str] = None
++ 
++ 
++ class SimulationResponse(BaseModel):
++     uuid: str
++     name: str
++     created_at: str
++     updated_at: str
++ 
++ 
++ class SimulationCreateResponse(BaseModel):
++     uuid: str
++     message: str
++ 
++ 
++ @router.post("", response_model=SimulationCreateResponse)
++ async def create_simulation_endpoint(simulation: SimulationCreate):
++     """Create a new simulation."""
++     simulation_uuid = create_simulation(name=simulation.name)
++     return SimulationCreateResponse(
++         uuid=simulation_uuid, message="Simulation created successfully"
++     )
++ 
++ 
++ @router.get("", response_model=List[SimulationResponse])
++ async def list_simulations():
++     """List all simulations."""
++     simulations = get_all_simulations()
++     return simulations
++ 
++ 
++ @router.get("/{simulation_uuid}", response_model=SimulationResponse)
++ async def get_simulation_endpoint(simulation_uuid: str):
++     """Get a simulation by UUID."""
++     simulation = get_simulation(simulation_uuid)
++     if not simulation:
++         raise HTTPException(status_code=404, detail="Simulation not found")
++     return simulation
++ 
++ 
++ @router.put("/{simulation_uuid}", response_model=SimulationResponse)
++ async def update_simulation_endpoint(simulation_uuid: str, simulation: SimulationUpdate):
++     """Update a simulation."""
++     existing_simulation = get_simulation(simulation_uuid)
++     if not existing_simulation:
++         raise HTTPException(status_code=404, detail="Simulation not found")
++ 
++     updated = update_simulation(
++         simulation_uuid=simulation_uuid,
++         name=simulation.name,
++     )
++ 
++     if not updated:
++         raise HTTPException(status_code=400, detail="No fields to update")
++ 
++     updated_simulation = get_simulation(simulation_uuid)
++     return updated_simulation
++ 
++ 
++ @router.delete("/{simulation_uuid}")
++ async def delete_simulation_endpoint(simulation_uuid: str):
++     """Delete a simulation."""
++     deleted = delete_simulation(simulation_uuid)
++     if not deleted:
++         raise HTTPException(status_code=404, detail="Simulation not found")
++     return {"message": "Simulation deleted successfully"}
++ 
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me create the simulation_personas router:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulation_personas.py</summary>
+
+**Chunk 1**
+Lines added: 116, lines removed: 1
+
+```diff
+@@ -1,1 +1,116 @@
+- 
++ from typing import List, Dict, Any, Optional
++ from fastapi import APIRouter, HTTPException
++ from pydantic import BaseModel
++ from sqlite3 import IntegrityError
++ 
++ from db import (
++     add_persona_to_simulation,
++     remove_persona_from_simulation,
++     get_personas_for_simulation,
++     get_simulation_persona_link,
++     get_all_simulation_personas,
++     get_simulation,
++     get_persona,
++ )
++ 
++ 
++ router = APIRouter(prefix="/simulation-personas", tags=["simulation-personas"])
++ 
++ 
++ class SimulationPersonasCreate(BaseModel):
++     simulation_uuid: str
++     persona_uuids: List[str]
++ 
++ 
++ class SimulationPersonaDelete(BaseModel):
++     simulation_uuid: str
++     persona_uuid: str
++ 
++ 
++ class SimulationPersonaResponse(BaseModel):
++     id: int
++     simulation_id: str
++     persona_id: str
++     created_at: str
++ 
++ 
++ class SimulationPersonasCreateResponse(BaseModel):
++     ids: List[int]
++     message: str
++ 
++ 
++ class PersonaResponse(BaseModel):
++     uuid: str
++     name: str
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ @router.post("", response_model=SimulationPersonasCreateResponse)
++ async def create_simulation_persona_links(data: SimulationPersonasCreate):
++     """Add personas to a simulation."""
++     # Verify simulation exists
++     simulation = get_simulation(data.simulation_uuid)
++     if not simulation:
++         raise HTTPException(status_code=404, detail="Simulation not found")
++ 
++     # Verify all personas exist
++     for persona_uuid in data.persona_uuids:
++         persona = get_persona(persona_uuid)
++         if not persona:
++             raise HTTPException(
++                 status_code=404, detail=f"Persona {persona_uuid} not found"
++             )
++ 
++     link_ids = []
++     for persona_uuid in data.persona_uuids:
++         # Check if link already exists
++         existing = get_simulation_persona_link(data.simulation_uuid, persona_uuid)
++         if existing:
++             continue  # Skip already linked personas
++ 
++         try:
++             link_id = add_persona_to_simulation(
++                 simulation_id=data.simulation_uuid,
++                 persona_id=persona_uuid,
++             )
++             link_ids.append(link_id)
++         except IntegrityError:
++             continue  # Skip if already linked
++ 
++     return SimulationPersonasCreateResponse(
++         ids=link_ids, message="Personas added to simulation successfully"
++     )
++ 
++ 
++ @router.get("", response_model=List[SimulationPersonaResponse])
++ async def list_simulation_personas():
++     """List all simulation-persona links."""
++     links = get_all_simulation_personas()
++     return links
++ 
++ 
++ @router.get(
++     "/simulation/{simulation_uuid}/personas", response_model=List[PersonaResponse]
++ )
++ async def get_simulation_personas_endpoint(simulation_uuid: str):
++     """Get all personas for a specific simulation."""
++     # Verify simulation exists
++     simulation = get_simulation(simulation_uuid)
++     if not simulation:
++         raise HTTPException(status_code=404, detail="Simulation not found")
++ 
++     personas = get_personas_for_simulation(simulation_uuid)
++     return personas
++ 
++ 
++ @router.delete("")
++ async def delete_simulation_persona_link(data: SimulationPersonaDelete):
++     """Remove a persona from a simulation."""
++     deleted = remove_persona_from_simulation(data.simulation_uuid, data.persona_uuid)
++     if not deleted:
++         raise HTTPException(status_code=404, detail="Simulation-persona link not found")
++     return {"message": "Persona removed from simulation successfully"}
++ 
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me create the simulation_scenarios router:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulation_scenarios.py</summary>
+
+**Chunk 1**
+Lines added: 117, lines removed: 1
+
+```diff
+@@ -1,1 +1,117 @@
+- 
++ from typing import List, Optional
++ from fastapi import APIRouter, HTTPException
++ from pydantic import BaseModel
++ from sqlite3 import IntegrityError
++ 
++ from db import (
++     add_scenario_to_simulation,
++     remove_scenario_from_simulation,
++     get_scenarios_for_simulation,
++     get_simulation_scenario_link,
++     get_all_simulation_scenarios,
++     get_simulation,
++     get_scenario,
++ )
++ 
++ 
++ router = APIRouter(prefix="/simulation-scenarios", tags=["simulation-scenarios"])
++ 
++ 
++ class SimulationScenariosCreate(BaseModel):
++     simulation_uuid: str
++     scenario_uuids: List[str]
++ 
++ 
++ class SimulationScenarioDelete(BaseModel):
++     simulation_uuid: str
++     scenario_uuid: str
++ 
++ 
++ class SimulationScenarioResponse(BaseModel):
++     id: int
++     simulation_id: str
++     scenario_id: str
++     created_at: str
++ 
++ 
++ class SimulationScenariosCreateResponse(BaseModel):
++     ids: List[int]
++     message: str
++ 
++ 
++ class ScenarioResponse(BaseModel):
++     uuid: str
++     name: str
++     description: Optional[str] = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ @router.post("", response_model=SimulationScenariosCreateResponse)
++ async def create_simulation_scenario_links(data: SimulationScenariosCreate):
++     """Add scenarios to a simulation."""
++     # Verify simulation exists
++     simulation = get_simulation(data.simulation_uuid)
++     if not simulation:
++         raise HTTPException(status_code=404, detail="Simulation not found")
++ 
++     # Verify all scenarios exist
++     for scenario_uuid in data.scenario_uuids:
++         scenario = get_scenario(scenario_uuid)
++         if not scenario:
++             raise HTTPException(
++                 status_code=404, detail=f"Scenario {scenario_uuid} not found"
++             )
++ 
++     link_ids = []
++     for scenario_uuid in data.scenario_uuids:
++         # Check if link already exists
++         existing = get_simulation_scenario_link(data.simulation_uuid, scenario_uuid)
++         if existing:
++             continue  # Skip already linked scenarios
++ 
++         try:
++             link_id = add_scenario_to_simulation(
++                 simulation_id=data.simulation_uuid,
++                 scenario_id=scenario_uuid,
++             )
++             link_ids.append(link_id)
++         except IntegrityError:
++             continue  # Skip if already linked
++ 
++     return SimulationScenariosCreateResponse(
++         ids=link_ids, message="Scenarios added to simulation successfully"
++     )
++ 
++ 
++ @router.get("", response_model=List[SimulationScenarioResponse])
++ async def list_simulation_scenarios():
++     """List all simulation-scenario links."""
++     links = get_all_simulation_scenarios()
++     return links
++ 
++ 
++ @router.get(
++     "/simulation/{simulation_uuid}/scenarios", response_model=List[ScenarioResponse]
++ )
++ async def get_simulation_scenarios_endpoint(simulation_uuid: str):
++     """Get all scenarios for a specific simulation."""
++     # Verify simulation exists
++     simulation = get_simulation(simulation_uuid)
++     if not simulation:
++         raise HTTPException(status_code=404, detail="Simulation not found")
++ 
++     scenarios = get_scenarios_for_simulation(simulation_uuid)
++     return scenarios
++ 
++ 
++ @router.delete("")
++ async def delete_simulation_scenario_link(data: SimulationScenarioDelete):
++     """Remove a scenario from a simulation."""
++     deleted = remove_scenario_from_simulation(data.simulation_uuid, data.scenario_uuid)
++     if not deleted:
++         raise HTTPException(
++             status_code=404, detail="Simulation-scenario link not found"
++         )
++     return {"message": "Scenario removed from simulation successfully"}
++ 
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me create the simulation_metrics router:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulation_metrics.py</summary>
+
+**Chunk 1**
+Lines added: 116, lines removed: 1
+
+```diff
+@@ -1,1 +1,116 @@
+- 
++ from typing import List, Dict, Any, Optional
++ from fastapi import APIRouter, HTTPException
++ from pydantic import BaseModel
++ from sqlite3 import IntegrityError
++ 
++ from db import (
++     add_metric_to_simulation,
++     remove_metric_from_simulation,
++     get_metrics_for_simulation,
++     get_simulation_metric_link,
++     get_all_simulation_metrics,
++     get_simulation,
++     get_metric,
++ )
++ 
++ 
++ router = APIRouter(prefix="/simulation-metrics", tags=["simulation-metrics"])
++ 
++ 
++ class SimulationMetricsCreate(BaseModel):
++     simulation_uuid: str
++     metric_uuids: List[str]
++ 
++ 
++ class SimulationMetricDelete(BaseModel):
++     simulation_uuid: str
++     metric_uuid: str
++ 
++ 
++ class SimulationMetricResponse(BaseModel):
++     id: int
++     simulation_id: str
++     metric_id: str
++     created_at: str
++ 
++ 
++ class SimulationMetricsCreateResponse(BaseModel):
++     ids: List[int]
++     message: str
++ 
++ 
++ class MetricResponse(BaseModel):
++     uuid: str
++     name: str
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ @router.post("", response_model=SimulationMetricsCreateResponse)
++ async def create_simulation_metric_links(data: SimulationMetricsCreate):
++     """Add metrics to a simulation."""
++     # Verify simulation exists
++     simulation = get_simulation(data.simulation_uuid)
++     if not simulation:
++         raise HTTPException(status_code=404, detail="Simulation not found")
++ 
++     # Verify all metrics exist
++     for metric_uuid in data.metric_uuids:
++         metric = get_metric(metric_uuid)
++         if not metric:
++             raise HTTPException(
++                 status_code=404, detail=f"Metric {metric_uuid} not found"
++             )
++ 
++     link_ids = []
++     for metric_uuid in data.metric_uuids:
++         # Check if link already exists
++         existing = get_simulation_metric_link(data.simulation_uuid, metric_uuid)
++         if existing:
++             continue  # Skip already linked metrics
++ 
++         try:
++             link_id = add_metric_to_simulation(
++                 simulation_id=data.simulation_uuid,
++                 metric_id=metric_uuid,
++             )
++             link_ids.append(link_id)
++         except IntegrityError:
++             continue  # Skip if already linked
++ 
++     return SimulationMetricsCreateResponse(
++         ids=link_ids, message="Metrics added to simulation successfully"
++     )
++ 
++ 
++ @router.get("", response_model=List[SimulationMetricResponse])
++ async def list_simulation_metrics():
++     """List all simulation-metric links."""
++     links = get_all_simulation_metrics()
++     return links
++ 
++ 
++ @router.get(
++     "/simulation/{simulation_uuid}/metrics", response_model=List[MetricResponse]
++ )
++ async def get_simulation_metrics_endpoint(simulation_uuid: str):
++     """Get all metrics for a specific simulation."""
++     # Verify simulation exists
++     simulation = get_simulation(simulation_uuid)
++     if not simulation:
++         raise HTTPException(status_code=404, detail="Simulation not found")
++ 
++     metrics = get_metrics_for_simulation(simulation_uuid)
++     return metrics
++ 
++ 
++ @router.delete("")
++ async def delete_simulation_metric_link(data: SimulationMetricDelete):
++     """Remove a metric from a simulation."""
++     deleted = remove_metric_from_simulation(data.simulation_uuid, data.metric_uuid)
++     if not deleted:
++         raise HTTPException(status_code=404, detail="Simulation-metric link not found")
++     return {"message": "Metric removed from simulation successfully"}
++ 
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to register all four routers in main.py:</details></think>
+
+---
+
+Now let me register all the routers in `main.py`:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 4, lines removed: undefined
+
+```diff
+@@ -21,4 +21,8 @@
+  from routers.scenarios import router as scenarios_router
+  from routers.metrics import router as metrics_router
++ from routers.simulations import router as simulations_router
++ from routers.simulation_personas import router as simulation_personas_router
++ from routers.simulation_scenarios import router as simulation_scenarios_router
++ from routers.simulation_metrics import router as simulation_metrics_router
+  from utils import get_s3_client
+  from job_recovery import recover_pending_jobs
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now add the routers to the app:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: 4, lines removed: undefined
+
+```diff
+@@ -62,4 +62,8 @@
+  app.include_router(scenarios_router)
+  app.include_router(metrics_router)
++ app.include_router(simulations_router)
++ app.include_router(simulation_personas_router)
++ app.include_router(simulation_scenarios_router)
++ app.include_router(simulation_metrics_router)
+  
+  app.add_middleware(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 6 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulation_personas.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulation_scenarios.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulation_metrics.py`
+
+Lint results
+
+Lint errors for `src/main.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| "app" is not accessed | 40:20-40:23 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done. I've created:
+1. `simulations` table with name field
+2. Three pivot tables: `simulation_personas`, `simulation_scenarios`, `simulation_metrics`3. CRUD functions for all tables4. Four router files with all endpoints
+5. Registered all routers in main.py</details></think>
+
+---
+
+Done! Created the `simulations` table and three pivot tables with CRUD routes:
+
+**Tables created in `src/db.py`:**
+- `simulations` - columns: `uuid`, `name`, `created_at`, `updated_at`, `deleted_at`
+- `simulation_personas` - links simulations to personas
+- `simulation_scenarios` - links simulations to scenarios
+- `simulation_metrics` - links simulations to metrics
+
+**New router files:**
+
+1. **`src/routers/simulations.py`:**
+   - `POST /simulations` - Create simulation
+   - `GET /simulations` - List all simulations
+   - `GET /simulations/{uuid}` - Get by UUID
+   - `PUT /simulations/{uuid}` - Update
+   - `DELETE /simulations/{uuid}` - Soft delete (cascades to pivot tables)
+
+2. **`src/routers/simulation_personas.py`:**
+   - `POST /simulation-personas` - Add personas to simulation
+   - `GET /simulation-personas` - List all links
+   - `GET /simulation-personas/simulation/{uuid}/personas` - Get personas for simulation
+   - `DELETE /simulation-personas` - Remove persona from simulation
+
+3. **`src/routers/simulation_scenarios.py`:**
+   - `POST /simulation-scenarios` - Add scenarios to simulation
+   - `GET /simulation-scenarios` - List all links
+   - `GET /simulation-scenarios/simulation/{uuid}/scenarios` - Get scenarios for simulation
+   - `DELETE /simulation-scenarios` - Remove scenario from simulation
+
+4. **`src/routers/simulation_metrics.py`:**
+   - `POST /simulation-metrics` - Add metrics to simulation
+   - `GET /simulation-metrics` - List all links
+   - `GET /simulation-metrics/simulation/{uuid}/metrics` - Get metrics for simulation
+   - `DELETE /simulation-metrics` - Remove metric from simulation
+
+---
+
+_**User (2026-01-11 10:15Z)**_
+
+actually update remove all routes for simulation_* pivot tables and in the create method for a simulation take as input the scenarios, personas and metrics it should be linked to and add the corresponding entries to the pivot tables and when fetching a simulation return all the personas scenarios and metrics linked to it
+
+when fetching all simulations, only fetch the name and the uuid
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to:
+1. Remove the three separate router files for simulation_personas, simulation_scenarios, simulation_metrics
+2. Update the simulations router to:
+   - Accept personas, scenarios, and metrics UUIDs when creating a simulation
+   - Return linked personas, scenarios, and metrics when fetching a single simulation
+   - Only return name and uuid when listing all simulations
+
+Let me do this step by step.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="delete_file">
+<details><summary>Tool use: **delete_file**</summary>
+
+Explanation: Removing pivot table router as functionality will be merged into simulations router
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="delete_file">
+<details><summary>Tool use: **delete_file**</summary>
+
+Explanation: Removing pivot table router as functionality will be merged into simulations router
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="delete_file">
+<details><summary>Tool use: **delete_file**</summary>
+
+Explanation: Removing pivot table router as functionality will be merged into simulations router
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update main.py to remove the imports and registrations of those routers:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: undefined, lines removed: 3
+
+```diff
+@@ -22,7 +22,4 @@
+  from routers.metrics import router as metrics_router
+  from routers.simulations import router as simulations_router
+- from routers.simulation_personas import router as simulation_personas_router
+- from routers.simulation_scenarios import router as simulation_scenarios_router
+- from routers.simulation_metrics import router as simulation_metrics_router
+  from utils import get_s3_client
+  from job_recovery import recover_pending_jobs
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me remove the router registrations in main.py:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/main.py</summary>
+
+**Chunk 1**
+Lines added: undefined, lines removed: 3
+
+```diff
+@@ -60,7 +60,4 @@
+  app.include_router(metrics_router)
+  app.include_router(simulations_router)
+- app.include_router(simulation_personas_router)
+- app.include_router(simulation_scenarios_router)
+- app.include_router(simulation_metrics_router)
+  
+  app.add_middleware(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the simulations router to accept personas, scenarios, and metrics when creating, and return them when fetching:</details></think>
+
+---
+
+Now let me update the simulations router:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to rewrite this file to:
+1. Accept persona_uuids, scenario_uuids, and metric_uuids when creating
+2. Return personas, scenarios, and metrics when fetching a single simulation
+3. Only return name and uuid when listing all simulations</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="write">
+
+<details><summary>Tool use: **write** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -1,3 +1,3 @@
+- from typing import Optional, List
++ from typing import Optional, List, Dict, Any
+  from fastapi import APIRouter, HTTPException
+  from pydantic import BaseModel
+```
+
+**Chunk 2**
+Lines added: 9, lines removed: undefined
+
+```diff
+@@ -9,4 +9,13 @@
+      update_simulation,
+      delete_simulation,
++     get_persona,
++     get_scenario,
++     get_metric,
++     add_persona_to_simulation,
++     add_scenario_to_simulation,
++     add_metric_to_simulation,
++     get_personas_for_simulation,
++     get_scenarios_for_simulation,
++     get_metrics_for_simulation,
+  )
+  
+```
+
+**Chunk 3**
+Lines added: 3, lines removed: undefined
+
+```diff
+@@ -17,4 +26,7 @@
+  class SimulationCreate(BaseModel):
+      name: str
++     persona_uuids: Optional[List[str]] = None
++     scenario_uuids: Optional[List[str]] = None
++     metric_uuids: Optional[List[str]] = None
+  
+  
+```
+
+**Chunk 4**
+Lines added: 35, lines removed: 1
+
+```diff
+@@ -23,9 +35,43 @@
+  
+  
+- class SimulationResponse(BaseModel):
++ class PersonaResponse(BaseModel):
++     uuid: str
++     name: str
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ class ScenarioResponse(BaseModel):
++     uuid: str
++     name: str
++     description: Optional[str] = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ class MetricResponse(BaseModel):
++     uuid: str
++     name: str
++     description: Optional[str] = None
++     config: Optional[Dict[str, Any]] = None
++     created_at: str
++     updated_at: str
++ 
++ 
++ class SimulationListResponse(BaseModel):
++     uuid: str
++     name: str
++ 
++ 
++ class SimulationDetailResponse(BaseModel):
+      uuid: str
+      name: str
+      created_at: str
+      updated_at: str
++     personas: List[PersonaResponse]
++     scenarios: List[ScenarioResponse]
++     metrics: List[MetricResponse]
+  
+  
+```
+
+**Chunk 5**
+Lines added: 70, lines removed: 10
+
+```diff
+@@ -37,29 +83,89 @@
+  @router.post("", response_model=SimulationCreateResponse)
+  async def create_simulation_endpoint(simulation: SimulationCreate):
+-     """Create a new simulation."""
++     """Create a new simulation with optional linked personas, scenarios, and metrics."""
++     # Verify all personas exist
++     if simulation.persona_uuids:
++         for persona_uuid in simulation.persona_uuids:
++             persona = get_persona(persona_uuid)
++             if not persona:
++                 raise HTTPException(
++                     status_code=404, detail=f"Persona {persona_uuid} not found"
++                 )
++ 
++     # Verify all scenarios exist
++     if simulation.scenario_uuids:
++         for scenario_uuid in simulation.scenario_uuids:
++             scenario = get_scenario(scenario_uuid)
++             if not scenario:
++                 raise HTTPException(
++                     status_code=404, detail=f"Scenario {scenario_uuid} not found"
++                 )
++ 
++     # Verify all metrics exist
++     if simulation.metric_uuids:
++         for metric_uuid in simulation.metric_uuids:
++             metric = get_metric(metric_uuid)
++             if not metric:
++                 raise HTTPException(
++                     status_code=404, detail=f"Metric {metric_uuid} not found"
++                 )
++ 
++     # Create the simulation
+      simulation_uuid = create_simulation(name=simulation.name)
++ 
++     # Add personas to simulation
++     if simulation.persona_uuids:
++         for persona_uuid in simulation.persona_uuids:
++             add_persona_to_simulation(simulation_uuid, persona_uuid)
++ 
++     # Add scenarios to simulation
++     if simulation.scenario_uuids:
++         for scenario_uuid in simulation.scenario_uuids:
++             add_scenario_to_simulation(simulation_uuid, scenario_uuid)
++ 
++     # Add metrics to simulation
++     if simulation.metric_uuids:
++         for metric_uuid in simulation.metric_uuids:
++             add_metric_to_simulation(simulation_uuid, metric_uuid)
++ 
+      return SimulationCreateResponse(
+          uuid=simulation_uuid, message="Simulation created successfully"
+      )
+  
+  
+- @router.get("", response_model=List[SimulationResponse])
++ @router.get("", response_model=List[SimulationListResponse])
+  async def list_simulations():
+-     """List all simulations."""
++     """List all simulations (only uuid and name)."""
+      simulations = get_all_simulations()
+-     return simulations
++     return [{"uuid": s["uuid"], "name": s["name"]} for s in simulations]
+  
+  
+- @router.get("/{simulation_uuid}", response_model=SimulationResponse)
++ @router.get("/{simulation_uuid}", response_model=SimulationDetailResponse)
+  async def get_simulation_endpoint(simulation_uuid: str):
+-     """Get a simulation by UUID."""
++     """Get a simulation by UUID with all linked personas, scenarios, and metrics."""
+      simulation = get_simulation(simulation_uuid)
+      if not simulation:
+          raise HTTPException(status_code=404, detail="Simulation not found")
+-     return simulation
+- 
++ 
++     # Get linked entities
++     personas = get_personas_for_simulation(simulation_uuid)
++     scenarios = get_scenarios_for_simulation(simulation_uuid)
++     metrics = get_metrics_for_simulation(simulation_uuid)
++ 
++     return SimulationDetailResponse(
++         uuid=simulation["uuid"],
++         name=simulation["name"],
++         created_at=simulation["created_at"],
++         updated_at=simulation["updated_at"],
++         personas=personas,
++         scenarios=scenarios,
++         metrics=metrics,
++     )
++ 
+  
+- @router.put("/{simulation_uuid}", response_model=SimulationResponse)
+- async def update_simulation_endpoint(simulation_uuid: str, simulation: SimulationUpdate):
++ @router.put("/{simulation_uuid}", response_model=SimulationDetailResponse)
++ async def update_simulation_endpoint(
++     simulation_uuid: str, simulation: SimulationUpdate
++ ):
+      """Update a simulation."""
+      existing_simulation = get_simulation(simulation_uuid)
+```
+
+**Chunk 6**
+Lines added: 14, lines removed: 1
+
+```diff
+@@ -75,6 +181,19 @@
+          raise HTTPException(status_code=400, detail="No fields to update")
+  
++     # Return full detail response
+      updated_simulation = get_simulation(simulation_uuid)
+-     return updated_simulation
++     personas = get_personas_for_simulation(simulation_uuid)
++     scenarios = get_scenarios_for_simulation(simulation_uuid)
++     metrics = get_metrics_for_simulation(simulation_uuid)
++ 
++     return SimulationDetailResponse(
++         uuid=updated_simulation["uuid"],
++         name=updated_simulation["name"],
++         created_at=updated_simulation["created_at"],
++         updated_at=updated_simulation["updated_at"],
++         personas=personas,
++         scenarios=scenarios,
++         metrics=metrics,
++     )
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 2 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/main.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py`
+
+Lint results
+
+Lint errors for `src/main.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| "app" is not accessed | 37:20-37:23 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done. I've:
+1. Deleted the three pivot table routers
+2. Updated main.py to remove their imports and registrations
+3. Updated the simulations router to:
+   - Accept optional persona_uuids, scenario_uuids, metric_uuids when creating
+   - Return only uuid and name when listing all simulations
+   - Return full details with linked personas, scenarios, and metrics when fetching a single simulation</details></think>
+
+---
+
+Done! I've:
+
+1. **Deleted** the three pivot table router files:
+   - `simulation_personas.py`
+   - `simulation_scenarios.py`
+   - `simulation_metrics.py`
+
+2. **Updated `main.py`** to remove the imports and registrations
+
+3. **Updated `src/routers/simulations.py`**:
+
+   - **Create** (`POST /simulations`) now accepts:
+     ```json
+     {
+       "name": "string",
+       "persona_uuids": ["uuid1", "uuid2"],
+       "scenario_uuids": ["uuid1"],
+       "metric_uuids": ["uuid1", "uuid2", "uuid3"]
+     }
+     ```
+
+   - **List all** (`GET /simulations`) returns only:
+     ```json
+     [{"uuid": "...", "name": "..."}]
+     ```
+
+   - **Get one** (`GET /simulations/{uuid}`) returns full details with linked entities:
+     ```json
+     {
+       "uuid": "...",
+       "name": "...",
+       "created_at": "...",
+       "updated_at": "...",
+       "personas": [...],
+       "scenarios": [...],
+       "metrics": [...]
+     }
+     ```
+
+---
+
+_**User (2026-01-11 10:15Z)**_
+
+also return created at and updated at in the list of all simulations
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants to also return created_at and updated_at when listing all simulations. I need to update the SimulationListResponse model and the list_simulations endpoint.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: undefined
+
+```diff
+@@ -64,4 +64,6 @@
+      uuid: str
+      name: str
++     created_at: str
++     updated_at: str
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to update the list_simulations endpoint to return the full fields instead of just uuid and name:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 2
+
+```diff
+@@ -138,7 +138,7 @@
+  @router.get("", response_model=List[SimulationListResponse])
+  async def list_simulations():
+-     """List all simulations (only uuid and name)."""
++     """List all simulations."""
+      simulations = get_all_simulations()
+-     return [{"uuid": s["uuid"], "name": s["name"]} for s in simulations]
++     return simulations
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me verify there are no lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done. Now the list simulations endpoint returns uuid, name, created_at, and updated_at for each simulation.</details></think>
+
+---
+
+Done! `GET /simulations` now returns:
+
+```json
+[
+  {
+    "uuid": "...",
+    "name": "...",
+    "created_at": "...",
+    "updated_at": "..."
+  }
+]
+```
+
+---
+

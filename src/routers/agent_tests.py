@@ -186,6 +186,208 @@ async def delete_agent_test_link(agent_test: AgentTestDelete):
     return {"message": "Test removed from agent successfully"}
 
 
+# ============ Shared Helper Functions ============
+
+
+def _build_pense_config(
+    agent: Dict[str, Any],
+    tests: List[Dict[str, Any]],
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Build the pense test config from agent and tests.
+
+    Args:
+        agent: Agent dict with config
+        tests: List of test dicts with config
+        model: Optional model override. If None, uses agent's llm.model or defaults to gpt-4.1
+    """
+    agent_config = agent.get("config") or {}
+
+    # Get model from param or agent config
+    if model is None:
+        llm_config = agent_config.get("llm", {})
+        model = llm_config.get("model", "gpt-4.1")
+
+    # Get tools from agent_tools table
+    agent_tools = get_tools_for_agent(agent["uuid"])
+    tool_configs = [
+        {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool.get("config", {}).get("parameters", []),
+        }
+        for tool in agent_tools
+    ]
+
+    # Combine test cases from all tests
+    all_test_cases = []
+    for test in tests:
+        test_config = test.get("config")
+        if not test_config:
+            continue
+
+        if test_config["evaluation"]["type"] == "tool_call":
+            tool_calls = []
+            for tool_call in test_config["evaluation"]["tool_calls"]:
+                tool_calls.append(
+                    {
+                        "tool": tool_call["tool"],
+                        "arguments": (
+                            tool_call["arguments"]
+                            if not tool_call.get("accept_any_arguments", False)
+                            else None
+                        ),
+                    }
+                )
+            test_config["evaluation"]["tool_calls"] = tool_calls
+
+        all_test_cases.append(test_config)
+
+    return {
+        "params": {"model": model},
+        "system_prompt": agent_config.get("system_prompt", ""),
+        "tools": tool_configs,
+        "test_cases": all_test_cases,
+    }
+
+
+def _run_pense_test(
+    model: str,
+    pense_config: Dict[str, Any],
+    output_dir: Path,
+    s3_bucket: str,
+    s3_prefix: str,
+    log_prefix: str = "LLM test",
+) -> Dict[str, Any]:
+    """
+    Run pense llm tests run command and return parsed results.
+
+    Args:
+        model: Model name to use
+        pense_config: The pense config dict
+        output_dir: Directory to write output files
+        s3_bucket: S3 bucket name
+        s3_prefix: S3 key prefix for uploading results
+        log_prefix: Prefix for log messages
+
+    Returns:
+        Dict with keys: success, total_tests, passed, failed, test_results, error
+    """
+    s3 = get_s3_client()
+
+    # Update config with model
+    config = pense_config.copy()
+    config["params"] = {"model": model}
+
+    # Create output directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write config to temp file
+    config_file = output_dir / "test_config.json"
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+    # Run pense llm tests run command
+    run_cmd = [
+        "pense",
+        "llm",
+        "tests",
+        "run",
+        "-c",
+        str(config_file),
+        "-o",
+        str(output_dir),
+        "-m",
+        model,
+    ]
+
+    logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
+
+    result = subprocess.run(
+        run_cmd,
+        capture_output=True,
+        text=True,
+        cwd=str(output_dir),
+    )
+
+    if result.stdout:
+        logger.info(f"{log_prefix} stdout: {result.stdout}")
+    if result.stderr:
+        logger.info(f"{log_prefix} stderr: {result.stderr}")
+
+    # Find results.json and metrics.json files
+    results_data = None
+    metrics_data = None
+
+    for root, dirs, files in os.walk(output_dir):
+        for file in files:
+            file_path = Path(root) / file
+            if file == "results.json" and results_data is None:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    results_data = json.load(f)
+            elif file == "metrics.json" and metrics_data is None:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    metrics_data = json.load(f)
+
+    # Upload results to S3
+    for root, dirs, files in os.walk(output_dir):
+        for file in files:
+            local_file_path = Path(root) / file
+            relative_path = local_file_path.relative_to(output_dir)
+            s3_key = f"{s3_prefix}/{relative_path}"
+            s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+
+    # Parse metrics
+    total_tests = 0
+    passed = 0
+    failed = 0
+
+    if metrics_data and isinstance(metrics_data, dict):
+        total_tests = metrics_data.get("total", 0)
+        passed = metrics_data.get("passed", 0)
+        failed = total_tests - passed
+
+    # Parse results
+    test_results = []
+    if results_data and isinstance(results_data, list):
+        for r in results_data:
+            output_data = r.get("output", {})
+            metrics = r.get("metrics", {})
+            test_case = r.get("test_case", {})
+            test_results.append(
+                {
+                    "passed": metrics.get("passed", False),
+                    "output": {
+                        "response": output_data.get("response"),
+                        "tool_calls": output_data.get("tool_calls"),
+                    },
+                    "test_case": test_case,
+                }
+            )
+
+        # If metrics.json wasn't found, compute from results
+        if not metrics_data:
+            total_tests = len(results_data)
+            passed = sum(
+                1 for r in results_data if r.get("metrics", {}).get("passed", False)
+            )
+            failed = total_tests - passed
+
+    error = None
+    if result.returncode != 0:
+        error = f"Command failed: {result.stderr}"
+
+    return {
+        "success": result.returncode == 0,
+        "total_tests": total_tests,
+        "passed": passed,
+        "failed": failed,
+        "test_results": test_results,
+        "error": error,
+    }
+
+
 def run_llm_test_task(
     task_id: str,
     agent: Dict[str, Any],
@@ -199,219 +401,44 @@ def run_llm_test_task(
         )
         update_job(task_id, status=TaskStatus.IN_PROGRESS.value)
 
-        s3 = get_s3_client()
-
-        # Create temporary directory for processing
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
             try:
-                # Build the pense test config from agent config
-                agent_config = agent.get("config") or {}
-
-                # Get model from agent config, default to gpt-4.1
-                llm_config = agent_config.get("llm", {})
-                model = llm_config.get("model", "gpt-4.1")
-
-                # Get tools from agent_tools table
-                agent_tools = get_tools_for_agent(agent["uuid"])
-                tool_configs = [
-                    {
-                        "name": tool["name"],
-                        "description": tool["description"],  # From column
-                        "parameters": tool.get("config", {}).get("parameters", []),
-                    }
-                    for tool in agent_tools
-                ]
-
-                # Combine test cases from all tests
-                # Each test's config IS a test case (with history, evaluation)
-                all_test_cases = []
-
-                for test in tests:
-                    test_config = test.get("config")
-                    if not test_config:
-                        continue
-
-                    if test_config["evaluation"]["type"] == "tool_call":
-                        tool_calls = []
-
-                        for tool_call in test_config["evaluation"]["tool_calls"]:
-
-                            # ignore other keys in the tool call config
-                            tool_calls.append(
-                                {
-                                    "tool": tool_call["tool"],
-                                    "arguments": (
-                                        tool_call["arguments"]
-                                        if not tool_call.get(
-                                            "accept_any_arguments", False
-                                        )
-                                        else None
-                                    ),
-                                }
-                            )
-
-                        test_config["evaluation"]["tool_calls"] = tool_calls
-
-                    all_test_cases.append(test_config)
-
                 # Build pense config
-                pense_config = {
-                    "params": {"model": model},
-                    "system_prompt": agent_config.get("system_prompt", ""),
-                    "tools": tool_configs,
-                    "test_cases": all_test_cases,
-                }
-
-                # Write config to temp file
-                config_file = temp_path / "test_config.json"
-                with open(config_file, "w", encoding="utf-8") as f:
-                    json.dump(pense_config, f, indent=2)
+                pense_config = _build_pense_config(agent, tests)
+                model = pense_config["params"]["model"]
 
                 # Create output directory
                 output_dir = temp_path / "output"
-                output_dir.mkdir()
 
-                # Run pense llm tests run command
-                run_cmd = [
-                    "pense",
-                    "llm",
-                    "tests",
-                    "run",
-                    "-c",
-                    str(config_file),
-                    "-o",
-                    str(output_dir),
-                    "-m",
-                    model,
-                    "-p",
-                    "openrouter",
-                ]
-
-                logger.info(
-                    f"Running LLM test {task_id} with command: {' '.join(run_cmd)}"
-                )
-
-                result = subprocess.run(
-                    run_cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd=str(temp_path),
-                )
-
-                # Log output regardless of success/failure
-                if result.stdout:
-                    logger.info(f"LLM test stdout: {result.stdout}")
-                if result.stderr:
-                    logger.info(f"LLM test stderr: {result.stderr}")
-
-                # Find results.json and metrics.json files
-                results_data = None
-                metrics_data = None
-                results_file = None
-                metrics_file = None
-
-                # Look for results.json and metrics.json in output directory (may be nested)
-                for root, dirs, files in os.walk(output_dir):
-                    for file in files:
-                        file_path = Path(root) / file
-                        if file == "results.json" and not results_file:
-                            results_file = file_path
-                        elif file == "metrics.json" and not metrics_file:
-                            metrics_file = file_path
-
-                if results_file and results_file.exists():
-                    with open(results_file, "r", encoding="utf-8") as f:
-                        results_data = json.load(f)
-
-                if metrics_file and metrics_file.exists():
-                    with open(metrics_file, "r", encoding="utf-8") as f:
-                        metrics_data = json.load(f)
-
-                # Upload results to S3
+                # Run pense test
                 results_prefix = f"agent-tests/runs/{task_id}"
-
-                for root, dirs, files in os.walk(output_dir):
-                    for file in files:
-                        local_file_path = Path(root) / file
-                        relative_path = local_file_path.relative_to(output_dir)
-                        s3_key = f"{results_prefix}/{relative_path}"
-                        s3.upload_file(str(local_file_path), s3_bucket, s3_key)
-
-                # Parse metrics.json for total/passed counts
-                total_tests = 0
-                passed = 0
-                failed = 0
-
-                if metrics_data and isinstance(metrics_data, dict):
-                    total_tests = metrics_data.get("total", 0)
-                    passed = metrics_data.get("passed", 0)
-                    failed = total_tests - passed
-
-                # Parse results.json for individual test case results
-                # Structure: [{"output": {...}, "metrics": {"passed": bool}, "test_case": {...}}, ...]
-                test_results = []
-
-                if results_data and isinstance(results_data, list):
-                    for idx, r in enumerate(results_data):
-                        output_data = r.get("output", {})
-                        metrics = r.get("metrics", {})
-                        test_case = r.get("test_case", {})
-
-                        # Build TestCaseResult
-                        test_result = {
-                            "passed": metrics.get("passed", False),
-                            "output": {
-                                "response": output_data.get("response"),
-                                "tool_calls": output_data.get("tool_calls"),
-                            },
-                            "test_case": test_case,
-                        }
-                        test_results.append(test_result)
-
-                    # If metrics.json wasn't found, compute from results
-                    if not metrics_data:
-                        total_tests = len(results_data)
-                        passed = sum(
-                            1
-                            for r in results_data
-                            if r.get("metrics", {}).get("passed", False)
-                        )
-                        failed = total_tests - passed
-
-                # Check if command failed
-                if result.returncode != 0:
-                    update_job(
-                        task_id,
-                        status=TaskStatus.DONE.value,
-                        results={
-                            "total_tests": total_tests,
-                            "passed": passed,
-                            "failed": failed,
-                            "test_results": test_results,
-                            "results_s3_prefix": results_prefix,
-                            "error": f"LLM test command failed: {result.stderr}",
-                        },
-                    )
-                    return
+                result = _run_pense_test(
+                    model=model,
+                    pense_config=pense_config,
+                    output_dir=output_dir,
+                    s3_bucket=s3_bucket,
+                    s3_prefix=results_prefix,
+                    log_prefix=f"LLM test {task_id}",
+                )
 
                 # Update job with results
                 update_job(
                     task_id,
                     status=TaskStatus.DONE.value,
                     results={
-                        "total_tests": total_tests,
-                        "passed": passed,
-                        "failed": failed,
-                        "test_results": test_results,
+                        "total_tests": result["total_tests"],
+                        "passed": result["passed"],
+                        "failed": result["failed"],
+                        "test_results": result["test_results"],
                         "results_s3_prefix": results_prefix,
-                        "error": None,
+                        "error": result["error"],
                     },
                 )
 
                 logger.info(
-                    f"LLM test task {task_id} completed: {passed}/{total_tests} passed"
+                    f"LLM test task {task_id} completed: {result['passed']}/{result['total_tests']} passed"
                 )
 
             except Exception as e:
@@ -558,132 +585,38 @@ def run_model_benchmark(
 ) -> ModelResult:
     """Run benchmark for a single model."""
     try:
-        s3 = get_s3_client()
-
-        # Update config with this model
-        config = pense_config.copy()
-        config["params"] = {"model": model}
-
-        # Create model-specific output directory
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write config to temp file
-        config_file = output_dir / "test_config.json"
-        with open(config_file, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
-
-        # Run pense llm tests run command
-        run_cmd = [
-            "pense",
-            "llm",
-            "tests",
-            "run",
-            "-c",
-            str(config_file),
-            "-o",
-            str(output_dir),
-            "-m",
-            model,
-            "-p",
-            "openrouter",
-        ]
-
-        logger.info(
-            f"Running benchmark {task_id} for model {model}: {' '.join(run_cmd)}"
-        )
-
-        result = subprocess.run(
-            run_cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(output_dir),
-        )
-
-        if result.stdout:
-            logger.info(f"Benchmark {model} stdout: {result.stdout}")
-        if result.stderr:
-            logger.info(f"Benchmark {model} stderr: {result.stderr}")
-
-        # Find results.json and metrics.json
-        results_data = None
-        metrics_data = None
-
-        for root, dirs, files in os.walk(output_dir):
-            for file in files:
-                file_path = Path(root) / file
-                if file == "results.json":
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        results_data = json.load(f)
-                elif file == "metrics.json":
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        metrics_data = json.load(f)
-
-        # Upload results to S3
-        results_prefix = (
+        s3_prefix = (
             f"agent-tests/benchmarks/{task_id}/outputs/{model.replace('/', '_')}"
         )
 
-        for root, dirs, files in os.walk(output_dir):
-            for file in files:
-                local_file_path = Path(root) / file
-                relative_path = local_file_path.relative_to(output_dir)
-                s3_key = f"{results_prefix}/{relative_path}"
-                s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+        result = _run_pense_test(
+            model=model,
+            pense_config=pense_config,
+            output_dir=output_dir,
+            s3_bucket=s3_bucket,
+            s3_prefix=s3_prefix,
+            log_prefix=f"Benchmark {task_id} model {model}",
+        )
 
-        # Parse metrics
-        total_tests = 0
-        passed = 0
-        failed = 0
-
-        if metrics_data and isinstance(metrics_data, dict):
-            total_tests = metrics_data.get("total", 0)
-            passed = metrics_data.get("passed", 0)
-            failed = total_tests - passed
-
-        # Parse results
-        test_results = []
-        if results_data and isinstance(results_data, list):
-            for r in results_data:
-                output_data = r.get("output", {})
-                metrics = r.get("metrics", {})
-                test_case = r.get("test_case", {})
-                test_results.append(
-                    {
-                        "passed": metrics.get("passed", False),
-                        "output": {
-                            "response": output_data.get("response"),
-                            "tool_calls": output_data.get("tool_calls"),
-                        },
-                        "test_case": test_case,
-                    }
-                )
-
-            if not metrics_data:
-                total_tests = len(results_data)
-                passed = sum(
-                    1 for r in results_data if r.get("metrics", {}).get("passed", False)
-                )
-                failed = total_tests - passed
-
-        if result.returncode != 0:
+        if not result["success"]:
             return ModelResult(
                 model=model,
                 success=False,
-                message=f"Benchmark failed: {result.stderr}",
-                total_tests=total_tests,
-                passed=passed,
-                failed=failed,
-                test_results=test_results,
+                message=f"Benchmark failed: {result['error']}",
+                total_tests=result["total_tests"],
+                passed=result["passed"],
+                failed=result["failed"],
+                test_results=result["test_results"],
             )
 
         return ModelResult(
             model=model,
             success=True,
             message=f"Benchmark completed successfully for {model}",
-            total_tests=total_tests,
-            passed=passed,
-            failed=failed,
-            test_results=test_results,
+            total_tests=result["total_tests"],
+            passed=result["passed"],
+            failed=result["failed"],
+            test_results=result["test_results"],
         )
 
     except Exception as e:
@@ -716,53 +649,9 @@ def run_benchmark_task(
             temp_path = Path(temp_dir)
 
             try:
-                # Build the base pense config
-                agent_config = agent.get("config") or {}
-
-                # Get tools from agent_tools table
-                agent_tools = get_tools_for_agent(agent["uuid"])
-                tool_configs = [
-                    {
-                        "name": tool["name"],
-                        "description": tool["description"],
-                        "parameters": tool.get("config", {}).get("parameters", []),
-                    }
-                    for tool in agent_tools
-                ]
-
-                # Combine test cases
-                all_test_cases = []
-                for test in tests:
-                    test_config = test.get("config")
-                    if not test_config:
-                        continue
-
-                    if test_config["evaluation"]["type"] == "tool_call":
-                        tool_calls = []
-                        for tool_call in test_config["evaluation"]["tool_calls"]:
-                            tool_calls.append(
-                                {
-                                    "tool": tool_call["tool"],
-                                    "arguments": (
-                                        tool_call["arguments"]
-                                        if not tool_call.get(
-                                            "accept_any_arguments", False
-                                        )
-                                        else None
-                                    ),
-                                }
-                            )
-                        test_config["evaluation"]["tool_calls"] = tool_calls
-
-                    all_test_cases.append(test_config)
-
-                # Base pense config (model will be set per-run)
-                pense_config = {
-                    "params": {},
-                    "system_prompt": agent_config.get("system_prompt", ""),
-                    "tools": tool_configs,
-                    "test_cases": all_test_cases,
-                }
+                # Build the base pense config (model will be set per-run)
+                pense_config = _build_pense_config(agent, tests, model=models[0])
+                pense_config["params"] = {}  # Clear model, will be set per-run
 
                 # Create output directory
                 output_dir = temp_path / "output"
