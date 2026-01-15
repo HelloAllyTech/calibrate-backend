@@ -2932,7 +2932,138 @@ Lines added: 1, lines removed: undefined
 
 <details><summary>Tool use: **search_replace** • Edit file: src/routers/simulations.py</summary>
 
-Status: **loading**
+**Chunk 1**
+Lines added: 57, lines removed: 58
+
+```diff
+@@ -1103,69 +1103,68 @@
+          update_simulation_job(task_id, status=TaskStatus.IN_PROGRESS.value)
+  
+-         # Create persistent output directory (not deleted after job completes)
+-         output_base_dir = Path("simulation_outputs").resolve()
+-         output_base_dir.mkdir(exist_ok=True)
+-         temp_path = output_base_dir / task_id
+-         temp_path.mkdir(exist_ok=True)
++         # Create temporary directory for processing (automatically cleaned up after use)
++         with tempfile.TemporaryDirectory() as temp_dir:
++             temp_path = Path(temp_dir)
+  
+-         try:
+-             # Build pense config
+-             pense_config = _build_pense_simulation_config(
+-                 agent, personas, scenarios, metrics, simulation_type=simulation_type
+-             )
++             try:
++                 # Build pense config
++                 pense_config = _build_pense_simulation_config(
++                     agent, personas, scenarios, metrics, simulation_type=simulation_type
++                 )
+  
+-             # Create output directory
+-             output_dir = temp_path / "output"
+-             output_dir = output_dir.resolve()
++                 # Create output directory
++                 output_dir = temp_path / "output"
++                 output_dir = output_dir.resolve()
+  
+-             # Run pense simulation based on type
+-             results_prefix = f"simulations/runs/{task_id}"
+-             if simulation_type == "voice":
+-                 result = _run_pense_voice_simulation(
+-                     pense_config=pense_config,
+-                     output_dir=output_dir,
+-                     s3_bucket=s3_bucket,
+-                     s3_prefix=results_prefix,
+-                     log_prefix=f"Voice simulation {task_id}",
+-                 )
+-             else:
+-                 model_to_use = pense_config["params"]["model"]
+-                 result = _run_pense_chat_simulation(
+-                     model=model_to_use,
+-                     pense_config=pense_config,
+-                     output_dir=output_dir,
+-                     s3_bucket=s3_bucket,
+-                     s3_prefix=results_prefix,
+-                     log_prefix=f"Chat simulation {task_id}",
+-                 )
++                 # Run pense simulation based on type
++                 results_prefix = f"simulations/runs/{task_id}"
++                 if simulation_type == "voice":
++                     result = _run_pense_voice_simulation(
++                         pense_config=pense_config,
++                         output_dir=output_dir,
++                         s3_bucket=s3_bucket,
++                         s3_prefix=results_prefix,
++                         log_prefix=f"Voice simulation {task_id}",
++                     )
++                 else:
++                     model_to_use = pense_config["params"]["model"]
++                     result = _run_pense_chat_simulation(
++                         model=model_to_use,
++                         pense_config=pense_config,
++                         output_dir=output_dir,
++                         s3_bucket=s3_bucket,
++                         s3_prefix=results_prefix,
++                         log_prefix=f"Chat simulation {task_id}",
++                     )
+  
+-             # Prepare results dict
+-             results_dict = {
+-                 "total_simulations": result["total_simulations"],
+-                 "metrics": result["metrics"],
+-                 "simulation_results": result["simulation_results"],
+-                 "results_s3_prefix": results_prefix,
+-                 "error": result.get("error"),
+-             }
++                 # Prepare results dict
++                 results_dict = {
++                     "total_simulations": result["total_simulations"],
++                     "metrics": result["metrics"],
++                     "simulation_results": result["simulation_results"],
++                     "results_s3_prefix": results_prefix,
++                     "error": result.get("error"),
++                 }
+  
+-             # Update job with results
+-             update_simulation_job(
+-                 task_id,
+-                 status=TaskStatus.DONE.value,
+-                 results=results_dict,
+-             )
++                 # Update job with results
++                 update_simulation_job(
++                     task_id,
++                     status=TaskStatus.DONE.value,
++                     results=results_dict,
++                 )
+  
+-             logger.info(
+-                 f"{simulation_type.capitalize()} simulation task {task_id} completed: "
+-                 f"{result['total_simulations']} simulation(s) run"
+-             )
++                 logger.info(
++                     f"{simulation_type.capitalize()} simulation task {task_id} completed: "
++                     f"{result['total_simulations']} simulation(s) run"
++                 )
+  
+-         except Exception as e:
+-             traceback.print_exc()
+-             update_simulation_job(
+-                 task_id,
+-                 status=TaskStatus.DONE.value,
+-                 results={"error": f"Unexpected error during simulation: {str(e)}"},
+-             )
++             except Exception as e:
++                 traceback.print_exc()
++                 update_simulation_job(
++                     task_id,
++                     status=TaskStatus.DONE.value,
++                     results={"error": f"Unexpected error during simulation: {str(e)}"},
++                 )
++         # Temporary directory is automatically cleaned up here
+  
+      except Exception as e:
+```
 
 </details>
 
@@ -2940,7 +3071,60 @@ Status: **loading**
 
 ---
 
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
 
+- `src/routers/simulations.py`
+
+Lint results
+
+Lint errors for `src/routers/simulations.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Variable "results_data" is not accessed | 785:5-785:17 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "results_data" is not accessed | 802:13-802:25 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "results_data" is not accessed | 948:5-948:17 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "results_data" is not accessed | 965:13-965:25 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+
+
+---
+
+
+## Summary
+
+1. **Added tempfile import**: Added `import tempfile` to use Python's temporary directory functionality.
+
+2. **Replaced persistent directory with temporary directory**: Changed from:
+   - Creating a persistent `simulation_outputs` directory
+   - Creating a subdirectory for each task ID
+   
+   To:
+   - Using `tempfile.TemporaryDirectory()` which automatically creates and cleans up a temporary directory
+   - The temporary directory is automatically deleted when the context manager exits
+
+3. **Maintained S3 upload functionality**: All files are still uploaded to S3 before the temporary directory is cleaned up, ensuring no data loss.
+
+4. **Consistent with other routers**: This matches the pattern used in `stt.py` and `tts.py` routers, which also use `tempfile.TemporaryDirectory()`.
+
+Benefits:
+- Automatic cleanup: Temporary directories are automatically deleted after the simulation completes
+- No disk space accumulation: Old simulation outputs won't accumulate on disk
+- All data preserved: Files are uploaded to S3 before cleanup
+- Cleaner code: No need to manually manage directory cleanup
+
+The temporary directory is created at the start of the task, used for all simulation outputs, and automatically cleaned up when the task completes (whether successful or failed).
 
 ---
 

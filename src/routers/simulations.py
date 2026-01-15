@@ -705,8 +705,24 @@ def _build_pense_simulation_config(
     }
 
     config["system_prompt"] = agent_config.get("system_prompt", "")
+
     if simulation_type == "chat":
         config["params"] = {"model": model}
+    else:
+        # For voice simulations, include stt, tts, and llm configurations
+        # Get STT config from agent config (default: google)
+        stt_config = agent_config.get("stt", {})
+        if stt_config:
+            config["stt"] = stt_config
+
+        # Get TTS config from agent config (default: google)
+        tts_config = agent_config.get("tts", {})
+        if tts_config:
+            config["tts"] = tts_config
+
+        # Get LLM config from agent config (includes provider and model)
+        if llm_config:
+            config["llm"] = llm_config
 
     return config
 
