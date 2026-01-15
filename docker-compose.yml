@@ -8,6 +8,10 @@ services:
     ports:
       - "${PORT}:8000"
     environment:
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-168}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - CARTESIA_API_KEY=${CARTESIA_API_KEY}
@@ -21,4 +25,4 @@ services:
       - S3_OUTPUT_BUCKET=${S3_OUTPUT_BUCKET}
       - DB_ROOT_DIR=${DB_ROOT_DIR}
     volumes:
-      - /appdata:/appdata
+      - ${APP_FOLDER_PATH}:/appdata
