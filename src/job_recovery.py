@@ -304,7 +304,7 @@ def _recover_simulation_job(job_id: str, details: dict, job_type: str):
 
     thread = threading.Thread(
         target=run_simulation_task,
-        args=(job_id, agent, personas, scenarios, metrics, s3_bucket),
+        args=(job_id, agent, personas, scenarios, metrics, s3_bucket, job_type),
         daemon=True,
     )
     thread.start()

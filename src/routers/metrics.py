@@ -40,6 +40,10 @@ class MetricCreateResponse(BaseModel):
     message: str
 
 
+class MetricDuplicateRequest(BaseModel):
+    name: str
+
+
 @router.post("", response_model=MetricCreateResponse)
 async def create_metric_endpoint(metric: MetricCreate):
     """Create a new metric."""
@@ -95,3 +99,18 @@ async def delete_metric_endpoint(metric_uuid: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Metric not found")
     return {"message": "Metric deleted successfully"}
+
+
+@router.post("/{metric_uuid}/duplicate", response_model=MetricCreateResponse)
+async def duplicate_metric_endpoint(metric_uuid: str, request: MetricDuplicateRequest):
+    """Duplicate a metric and return the new metric UUID."""
+    existing_metric = get_metric(metric_uuid)
+    if not existing_metric:
+        raise HTTPException(status_code=404, detail="Metric not found")
+    
+    new_metric_uuid = create_metric(
+        name=request.name,
+        description=existing_metric.get("description"),
+        config=existing_metric.get("config"),
+    )
+    return MetricCreateResponse(uuid=new_metric_uuid, message="Metric duplicated successfully")

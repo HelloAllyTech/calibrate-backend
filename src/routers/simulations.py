@@ -4,6 +4,7 @@ import subprocess
 import traceback
 import threading
 import logging
+import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -46,6 +47,88 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/simulations", tags=["simulations"])
+
+
+def _get_audio_urls_from_s3_key(s3_key_prefix: str, s3_bucket: str) -> List[str]:
+    """
+    List all audio files in an S3 key prefix and generate presigned URLs for them.
+
+    Args:
+        s3_key_prefix: S3 key prefix (e.g., "simulations/runs/task_id/simulation_persona_1_scenario_1/audios")
+        s3_bucket: S3 bucket name
+
+    Returns:
+        List of presigned URLs for audio files, sorted by filename
+    """
+    try:
+        s3 = get_s3_client()
+
+        # Ensure prefix ends with / for directory listing
+        if s3_key_prefix and not s3_key_prefix.endswith("/"):
+            s3_key_prefix += "/"
+
+        # List objects in the S3 prefix
+        audio_extensions = {".wav", ".mp3", ".ogg"}
+        audio_files = []
+
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=s3_bucket, Prefix=s3_key_prefix):
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    key = obj["Key"]
+                    # Skip if it's a directory marker
+                    if key.endswith("/"):
+                        continue
+                    # Check if it's an audio file
+                    file_ext = Path(key).suffix.lower()
+                    if file_ext in audio_extensions:
+                        audio_files.append(key)
+
+        # Sort audio files by filename (natural sort for numbered files)
+        # Files are typically named like: 0_user.wav, 1_bot.wav, 1_user.wav, 2_bot.wav
+        def natural_sort_key(key: str) -> tuple:
+            """Extract numeric parts for natural sorting"""
+            filename = Path(key).name
+            # Extract leading number if present
+            parts = filename.split("_", 1)
+            if len(parts) > 1 and parts[0].isdigit():
+                # Has numeric prefix: sort by number first, then by rest of filename
+                return (int(parts[0]), parts[1])
+            else:
+                # No numeric prefix: sort alphabetically
+                return (float("inf"), filename)
+
+        audio_files.sort(key=natural_sort_key)
+
+        # Generate presigned URLs
+        expiration = 3600  # 1 hour expiration
+        presigned_urls = []
+        for audio_key in audio_files:
+            try:
+                presigned_url = s3.generate_presigned_url(
+                    "get_object",
+                    Params={
+                        "Bucket": s3_bucket,
+                        "Key": audio_key,
+                    },
+                    ExpiresIn=expiration,
+                )
+                presigned_urls.append(presigned_url)
+                logger.info(f"Generated presigned URL for {audio_key}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to generate presigned URL for {audio_key}: {str(e)}"
+                )
+                # Fallback to S3 path if presigned URL generation fails
+                presigned_urls.append(f"s3://{s3_bucket}/{audio_key}")
+
+        return presigned_urls
+
+    except Exception as e:
+        logger.error(
+            f"Error listing audio files from S3 key prefix {s3_key_prefix}: {str(e)}"
+        )
+        return []
 
 
 class SimulationCreate(BaseModel):
@@ -135,7 +218,7 @@ class RunSimulationRequest(BaseModel):
 
 class EvaluationCriterionResult(BaseModel):
     name: str
-    match: bool
+    value: float
     reasoning: str
 
 
@@ -152,6 +235,10 @@ class SimulationCaseResult(BaseModel):
     evaluation_results: Optional[List[EvaluationCriterionResult]] = None
     transcript: Optional[List[Dict[str, Any]]] = None
 
+    audio_urls: Optional[List[str]] = (
+        None  # List of presigned URLs for audio files in order (for voice simulations)
+    )
+
 
 class SimulationRunStatusResponse(BaseModel):
     task_id: str
@@ -162,7 +249,6 @@ class SimulationRunStatusResponse(BaseModel):
     total_simulations: Optional[int] = None
     metrics: Optional[Dict[str, Any]] = None
     simulation_results: Optional[List[SimulationCaseResult]] = None
-    results_s3_prefix: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -293,6 +379,26 @@ async def get_simulation_run_status(task_id: str):
                 break
 
     results = job.get("results") or {}
+    simulation_results = results.get("simulation_results") or []
+
+    # If this is a voice simulation, generate presigned URLs for audio files
+    if job.get("type") == "voice" and simulation_results:
+        try:
+            s3_bucket = get_s3_output_config()
+            # Update each simulation result with audio URLs if audios_s3_path (S3 key prefix) is present
+            for sim_result in simulation_results:
+                audios_s3_key_prefix = sim_result.get("audios_s3_path")
+                if audios_s3_key_prefix:
+                    audio_urls = _get_audio_urls_from_s3_key(
+                        audios_s3_key_prefix, s3_bucket
+                    )
+                    sim_result["audio_urls"] = audio_urls
+                    logger.info(
+                        f"Generated {len(audio_urls)} presigned URLs for simulation {sim_result.get('simulation_name')}"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to generate audio URLs: {str(e)}")
+            # Continue without audio URLs if generation fails
 
     return SimulationRunStatusResponse(
         task_id=task_id,
@@ -302,8 +408,7 @@ async def get_simulation_run_status(task_id: str):
         updated_at=job["updated_at"],
         total_simulations=results.get("total_simulations"),
         metrics=results.get("metrics"),
-        simulation_results=results.get("simulation_results"),
-        results_s3_prefix=results.get("results_s3_prefix"),
+        simulation_results=simulation_results,
         error=results.get("error"),
     )
 
@@ -524,6 +629,7 @@ def _build_pense_simulation_config(
     personas: List[Dict[str, Any]],
     scenarios: List[Dict[str, Any]],
     metrics: List[Dict[str, Any]],
+    simulation_type: str = "chat",
 ) -> Dict[str, Any]:
     """
     Build the pense simulation config from agent, personas, scenarios, and metrics.
@@ -533,6 +639,7 @@ def _build_pense_simulation_config(
         personas: List of persona dicts with description and config (containing gender, language)
         scenarios: List of scenario dicts with description
         metrics: List of metric dicts with name and description (for evaluation_criteria)
+        simulation_type: Type of simulation - "chat" or "voice"
     """
     agent_config = agent.get("config") or {}
 
@@ -561,6 +668,13 @@ def _build_pense_simulation_config(
             "gender": persona_config.get("gender", "female"),
             "language": persona_config.get("language", "english"),
         }
+        # For voice simulations, add interruption_sensitivity if present
+        if simulation_type == "voice":
+            interruption_sensitivity = persona_config.get(
+                "interruption_sensitivity", "medium"
+            )
+            persona_obj["interruption_sensitivity"] = interruption_sensitivity
+
         if persona_obj["characteristics"]:
             persona_list.append(persona_obj)
 
@@ -583,17 +697,21 @@ def _build_pense_simulation_config(
         if metric.get("name")
     ]
 
-    return {
-        "params": {"model": model},
-        "agent_system_prompt": agent_config.get("system_prompt", ""),
+    config = {
         "tools": tool_configs,
         "personas": persona_list,
         "scenarios": scenario_list,
         "evaluation_criteria": evaluation_criteria,
     }
 
+    config["system_prompt"] = agent_config.get("system_prompt", "")
+    if simulation_type == "chat":
+        config["params"] = {"model": model}
 
-def _run_pense_simulation(
+    return config
+
+
+def _run_pense_chat_simulation(
     model: str,
     pense_config: Dict[str, Any],
     output_dir: Path,
@@ -704,7 +822,7 @@ def _run_pense_simulation(
                             eval_results.append(
                                 {
                                     "name": row.get("name"),
-                                    "match": row.get("match", "").lower() == "true",
+                                    "value": row.get("value"),
                                     "reasoning": row.get("reasoning", ""),
                                 }
                             )
@@ -765,6 +883,207 @@ def _run_pense_simulation(
     }
 
 
+def _run_pense_voice_simulation(
+    pense_config: Dict[str, Any],
+    output_dir: Path,
+    s3_bucket: str,
+    s3_prefix: str,
+    log_prefix: str = "Voice simulation",
+) -> Dict[str, Any]:
+    """
+    Run pense agent simulation command and return parsed results.
+
+    Args:
+        pense_config: The pense config dict (for voice simulations)
+        output_dir: Directory to write output files
+        s3_bucket: S3 bucket name
+        s3_prefix: S3 key prefix for uploading results
+        log_prefix: Prefix for log messages
+
+    Returns:
+        Dict with keys: success, total_simulations, metrics, simulation_results, error, audios_s3_path
+    """
+    s3 = get_s3_client()
+
+    # Resolve output directory to absolute path
+    output_dir = output_dir.resolve()
+
+    # Create output directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write config to temp file
+    config_file_name = "simulation_config"
+    config_file = output_dir / f"{config_file_name}.json"
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(pense_config, f, indent=2)
+
+    # Run pense agent simulation command
+    # Use absolute paths for config and output
+    run_cmd = [
+        "pense",
+        "agent",
+        "simulation",
+        "-c",
+        str(config_file),
+        "-o",
+        str(output_dir),
+    ]
+
+    logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
+
+    result = subprocess.run(
+        run_cmd,
+        capture_output=True,
+        text=True,
+        cwd=str(output_dir),
+    )
+
+    if result.stdout:
+        logger.info(f"{log_prefix} stdout: {result.stdout}")
+    if result.stderr:
+        logger.info(f"{log_prefix} stderr: {result.stderr}")
+
+    # Parse results
+    metrics_data = None
+    results_data = None
+    simulation_results = []
+
+    # Find metrics.json and results.csv files
+    metrics_file = output_dir / "metrics.json"
+    results_file = output_dir / "results.csv"
+
+    if metrics_file.exists():
+        with open(metrics_file, "r", encoding="utf-8") as f:
+            metrics_data = json.load(f)
+
+    # Parse results.csv for aggregated scores
+    if results_file.exists():
+        import csv
+
+        with open(results_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            results_data = list(reader)
+
+    # Find simulation directories and parse their results
+    # Search recursively for simulation directories (they might be nested)
+    audios_s3_paths = {}
+    uploaded_audio_files = set()  # Track uploaded audio files to avoid duplicates
+
+    # First pass: Find all simulation directories and parse results
+    simulation_dirs = []
+    for root, dirs, files in os.walk(output_dir):
+        for dir_name in dirs:
+            if dir_name.startswith("simulation_persona_"):
+                sim_dir = Path(root) / dir_name
+                simulation_dirs.append(sim_dir)
+
+    # Process each simulation directory
+    for sim_dir in simulation_dirs:
+        sim_name = sim_dir.name
+        eval_results_file = sim_dir / "evaluation_results.csv"
+        transcript_file = sim_dir / "transcript.json"
+        config_file = sim_dir / "config.json"
+        audios_dir = sim_dir / "audios"
+
+        eval_results = []
+        if eval_results_file.exists():
+            import csv
+
+            with open(eval_results_file, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    eval_results.append(
+                        {
+                            "name": row.get("name"),
+                            "value": row.get("value"),
+                            "reasoning": row.get("reasoning", ""),
+                        }
+                    )
+
+        # Parse transcript.json if it exists
+        transcript = None
+        if transcript_file.exists():
+            try:
+                with open(transcript_file, "r", encoding="utf-8") as f:
+                    transcript = json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to parse transcript.json for {sim_name}: {e}")
+
+        # Parse config.json to get persona and scenario data
+        persona_data = None
+        scenario_data = None
+        if config_file.exists():
+            try:
+                with open(config_file, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                    persona_data = config_data.get("persona")
+                    scenario_data = config_data.get("scenario")
+            except Exception as e:
+                logger.warning(f"Failed to parse config.json for {sim_name}: {e}")
+
+        # Upload audios folder for this simulation to S3
+        if audios_dir.exists() and audios_dir.is_dir():
+            audios_s3_prefix = f"{s3_prefix}/{sim_name}/audios"
+            audio_files_uploaded = 0
+            for audio_file in audios_dir.iterdir():
+                if audio_file.is_file() and (
+                    audio_file.suffix == ".wav"
+                    or audio_file.suffix == ".mp3"
+                    or audio_file.suffix == ".ogg"
+                ):
+                    relative_audio_path = audio_file.relative_to(output_dir)
+                    audio_s3_key = f"{s3_prefix}/{relative_audio_path}"
+                    s3.upload_file(str(audio_file), s3_bucket, audio_s3_key)
+                    uploaded_audio_files.add(str(audio_file))
+                    audio_files_uploaded += 1
+                    logger.info(
+                        f"Uploaded audio file {audio_file.name} to S3: {audio_s3_key}"
+                    )
+            if audio_files_uploaded > 0:
+                # Store just the S3 key prefix, not the full s3:// path
+                audios_s3_paths[sim_name] = audios_s3_prefix
+                logger.info(
+                    f"Uploaded {audio_files_uploaded} audio file(s) for {sim_name} to s3://{s3_bucket}/{audios_s3_prefix}"
+                )
+
+        simulation_results.append(
+            {
+                "simulation_name": sim_name,
+                "persona": persona_data,
+                "scenario": scenario_data,
+                "evaluation_results": eval_results,
+                "transcript": transcript,
+                "audios_s3_path": audios_s3_paths.get(sim_name),
+            }
+        )
+
+    # Upload all other results to S3 (excluding audios which are already uploaded)
+    for root, dirs, files in os.walk(output_dir):
+        # Skip audios directories as they're already uploaded
+        if "audios" in root.split(os.sep):
+            continue
+        for file in files:
+            local_file_path = Path(root) / file
+            # Skip audio files that were already uploaded
+            if str(local_file_path) in uploaded_audio_files:
+                continue
+            relative_path = local_file_path.relative_to(output_dir)
+            s3_key = f"{s3_prefix}/{relative_path}"
+            s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+
+    error = None
+    if result.returncode != 0:
+        error = f"Command failed: {result.stderr}"
+
+    return {
+        "success": result.returncode == 0,
+        "total_simulations": len(simulation_results),
+        "metrics": metrics_data,
+        "simulation_results": simulation_results,
+        "error": error,
+    }
+
+
 def run_simulation_task(
     task_id: str,
     agent: Dict[str, Any],
@@ -772,69 +1091,81 @@ def run_simulation_task(
     scenarios: List[Dict[str, Any]],
     metrics: List[Dict[str, Any]],
     s3_bucket: str,
+    simulation_type: str = "chat",
 ):
-    """Run the LLM simulation in the background."""
+    """Run the simulation in the background (chat or voice)."""
     try:
         logger.info(
-            f"Running simulation task {task_id} for agent {agent['uuid']} "
+            f"Running {simulation_type} simulation task {task_id} for agent {agent['uuid']} "
             f"with {len(personas)} persona(s), {len(scenarios)} scenario(s), "
             f"and {len(metrics)} metric(s)"
         )
         update_simulation_job(task_id, status=TaskStatus.IN_PROGRESS.value)
 
-        # Create persistent output directory (not deleted after job completes)
-        output_base_dir = Path("simulation_outputs").resolve()
-        output_base_dir.mkdir(exist_ok=True)
-        temp_path = output_base_dir / task_id
-        temp_path.mkdir(exist_ok=True)
+        # Create temporary directory for processing (automatically cleaned up after use)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
 
-        try:
-            # Build pense config
-            pense_config = _build_pense_simulation_config(
-                agent, personas, scenarios, metrics
-            )
-            model_to_use = pense_config["params"]["model"]
+            try:
+                # Build pense config
+                pense_config = _build_pense_simulation_config(
+                    agent, personas, scenarios, metrics, simulation_type=simulation_type
+                )
 
-            # Create output directory
-            output_dir = temp_path / "output"
-            output_dir = output_dir.resolve()
+                # Create output directory
+                output_dir = temp_path / "output"
+                output_dir = output_dir.resolve()
 
-            # Run pense simulation
-            results_prefix = f"simulations/runs/{task_id}"
-            result = _run_pense_simulation(
-                model=model_to_use,
-                pense_config=pense_config,
-                output_dir=output_dir,
-                s3_bucket=s3_bucket,
-                s3_prefix=results_prefix,
-                log_prefix=f"Simulation {task_id}",
-            )
+                # Run pense simulation based on type
+                results_prefix = f"simulations/runs/{task_id}"
+                if simulation_type == "voice":
+                    result = _run_pense_voice_simulation(
+                        pense_config=pense_config,
+                        output_dir=output_dir,
+                        s3_bucket=s3_bucket,
+                        s3_prefix=results_prefix,
+                        log_prefix=f"Voice simulation {task_id}",
+                    )
+                else:
+                    model_to_use = pense_config["params"]["model"]
+                    result = _run_pense_chat_simulation(
+                        model=model_to_use,
+                        pense_config=pense_config,
+                        output_dir=output_dir,
+                        s3_bucket=s3_bucket,
+                        s3_prefix=results_prefix,
+                        log_prefix=f"Chat simulation {task_id}",
+                    )
 
-            # Update job with results
-            update_simulation_job(
-                task_id,
-                status=TaskStatus.DONE.value,
-                results={
+                # Prepare results dict
+                results_dict = {
                     "total_simulations": result["total_simulations"],
                     "metrics": result["metrics"],
                     "simulation_results": result["simulation_results"],
                     "results_s3_prefix": results_prefix,
-                    "error": result["error"],
-                },
-            )
+                    "error": result.get("error"),
+                }
 
-            logger.info(
-                f"Simulation task {task_id} completed: "
-                f"{result['total_simulations']} simulation(s) run"
-            )
+                # Update job with results
+                update_simulation_job(
+                    task_id,
+                    status=TaskStatus.DONE.value,
+                    results=results_dict,
+                )
 
-        except Exception as e:
-            traceback.print_exc()
-            update_simulation_job(
-                task_id,
-                status=TaskStatus.DONE.value,
-                results={"error": f"Unexpected error during simulation: {str(e)}"},
-            )
+                logger.info(
+                    f"{simulation_type.capitalize()} simulation task {task_id} completed: "
+                    f"{result['total_simulations']} simulation(s) run"
+                )
+
+            except Exception as e:
+                traceback.print_exc()
+                update_simulation_job(
+                    task_id,
+                    status=TaskStatus.DONE.value,
+                    results={"error": f"Unexpected error during simulation: {str(e)}"},
+                )
+        # Temporary directory is automatically cleaned up here
 
     except Exception as e:
         traceback.print_exc()
@@ -914,7 +1245,7 @@ async def run_simulation_endpoint(simulation_uuid: str, request: RunSimulationRe
     # Start background task in a separate thread
     thread = threading.Thread(
         target=run_simulation_task,
-        args=(job_id, agent, personas, scenarios, metrics, s3_bucket),
+        args=(job_id, agent, personas, scenarios, metrics, s3_bucket, request.type),
         daemon=True,
     )
     thread.start()

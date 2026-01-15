@@ -1,5 +1,0 @@
-name,match,reasoning
-tool_calls,False,"No tool call includes the required indices (1–22). The tool messages only show generic statuses (""received"", ""COMPLETED"") and do not indicate which questions were answered or what the next unanswered question index is. Therefore the required indexing/hand-off behavior is not met at any step."
-answer_completeness,False,"Only three fields were collected in the dialogue: patient name, address, and telephone number. None of the remaining required form items (age thresholds, obstetric history, medical conditions, etc.) were captured."
-assistant_behavior,True,"The assistant asks one concise question per turn (name, then address, then phone). Tone is polite/empathetic. The assistant does not repeat the user’s address or phone number back; repeating the user’s name for acknowledgment is acceptable under the rubric. No unnecessary repetition is present."
-question_completeness,False,"The conversation covers only Name, Address, and Telephone. It does not cover the rest of the form questions (age, pregnancy history, risk factors, medical conditions, substance use, etc.), so the form is not fully completed."
