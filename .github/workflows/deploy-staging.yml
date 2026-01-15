@@ -1,4 +1,4 @@
-name: Deploy to Production
+name: Deploy to Staging
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    environment: Production
+    environment: Staging
     permissions:
       contents: read
     env:
@@ -43,9 +43,9 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           source: "docker-compose.yml"
-          target: "/tmp/pense-production/"
+          target: "/tmp/pense-staging/"
 
-      - name: Deploy to Production EC2
+      - name: Deploy to Staging EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -78,15 +78,15 @@ jobs:
             export APP_FOLDER_PATH="${{ secrets.APP_FOLDER_PATH }}"
 
             # Navigate to directory with docker-compose.yml
-            cd /tmp/pense-production
+            cd /tmp/pense-staging
 
             # Run new container with docker compose (pull always to ensure latest image)
-            docker compose -p pense-production pull && docker compose -p pense-production up -d
+            docker compose -p pense-staging pull && docker compose -p pense-staging up -d
 
             # Clean up old images
             docker image prune -f
 
-            echo "🎉 Production deployment completed successfully!"
+            echo "🎉 Staging deployment completed successfully!"
 
       - name: Verify deployment
         uses: appleboy/ssh-action@v1.0.3
@@ -98,10 +98,10 @@ jobs:
             export CONTAINER="${{ env.CONTAINER_NAME }}"
             sleep 10
             if docker ps | grep -q $CONTAINER; then
-              echo "✅ Deployment successful!"
+              echo "✅ Staging deployment successful!"
               docker logs --tail 20 $CONTAINER
             else
-              echo "❌ Deployment failed!"
+              echo "❌ Staging deployment failed!"
               docker logs $CONTAINER
               exit 1
             fi
