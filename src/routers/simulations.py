@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, field_validator
 
 from db import (
@@ -42,6 +42,7 @@ from utils import (
     get_s3_client,
     get_s3_output_config,
 )
+from auth_utils import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +269,9 @@ class SimulationRunsResponse(BaseModel):
 
 
 @router.post("", response_model=SimulationCreateResponse)
-async def create_simulation_endpoint(simulation: SimulationCreate):
+async def create_simulation_endpoint(
+    simulation: SimulationCreate, user_id: str = Depends(get_current_user_id)
+):
     """Create a new simulation with optional linked agent, personas, scenarios, and metrics."""
     # Verify agent exists if provided
     if simulation.agent_uuid:
@@ -305,7 +308,7 @@ async def create_simulation_endpoint(simulation: SimulationCreate):
 
     # Create the simulation
     simulation_uuid = create_simulation(
-        name=simulation.name, agent_id=simulation.agent_uuid
+        name=simulation.name, agent_id=simulation.agent_uuid, user_id=user_id
     )
 
     # Add personas to simulation
@@ -329,9 +332,9 @@ async def create_simulation_endpoint(simulation: SimulationCreate):
 
 
 @router.get("", response_model=List[SimulationListResponse])
-async def list_simulations():
-    """List all simulations with their linked agents."""
-    simulations = get_all_simulations()
+async def list_simulations(user_id: str = Depends(get_current_user_id)):
+    """List all simulations for the authenticated user."""
+    simulations = get_all_simulations(user_id=user_id)
     result = []
     for sim in simulations:
         agent = None
@@ -358,7 +361,9 @@ async def list_simulations():
 
 
 @router.get("/run/{task_id}", response_model=SimulationRunStatusResponse)
-async def get_simulation_run_status(task_id: str):
+async def get_simulation_run_status(
+    task_id: str, user_id: str = Depends(get_current_user_id)
+):
     """
     Get the status of a simulation run.
 
@@ -418,7 +423,9 @@ async def get_simulation_run_status(task_id: str):
 
 
 @router.get("/{simulation_uuid}/runs", response_model=SimulationRunsResponse)
-async def get_simulation_runs(simulation_uuid: str):
+async def get_simulation_runs(
+    simulation_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """
     Get all runs for a simulation.
 
@@ -428,6 +435,10 @@ async def get_simulation_runs(simulation_uuid: str):
     simulation = get_simulation(simulation_uuid)
     if not simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Verify user owns this simulation
+    if simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Get all jobs for this simulation
     jobs = get_simulation_jobs_for_simulation(simulation_uuid)
@@ -460,11 +471,17 @@ async def get_simulation_runs(simulation_uuid: str):
 
 
 @router.get("/{simulation_uuid}", response_model=SimulationDetailResponse)
-async def get_simulation_endpoint(simulation_uuid: str):
+async def get_simulation_endpoint(
+    simulation_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Get a simulation by UUID with all linked agent, personas, scenarios, and metrics."""
     simulation = get_simulation(simulation_uuid)
     if not simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Verify user owns this simulation
+    if simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Get linked agent
     agent = None
@@ -498,12 +515,18 @@ async def get_simulation_endpoint(simulation_uuid: str):
 
 @router.put("/{simulation_uuid}", response_model=SimulationDetailResponse)
 async def update_simulation_endpoint(
-    simulation_uuid: str, simulation: SimulationUpdate
+    simulation_uuid: str,
+    simulation: SimulationUpdate,
+    user_id: str = Depends(get_current_user_id),
 ):
     """Update a simulation with optional linked agent, personas, scenarios, and metrics."""
     existing_simulation = get_simulation(simulation_uuid)
     if not existing_simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Verify user owns this simulation
+    if existing_simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Verify agent exists if provided
     if simulation.agent_uuid is not None and simulation.agent_uuid != "":
@@ -617,8 +640,17 @@ async def update_simulation_endpoint(
 
 
 @router.delete("/{simulation_uuid}")
-async def delete_simulation_endpoint(simulation_uuid: str):
+async def delete_simulation_endpoint(
+    simulation_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Delete a simulation."""
+    # Check if simulation exists and user owns it
+    existing_simulation = get_simulation(simulation_uuid)
+    if not existing_simulation:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if existing_simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     deleted = delete_simulation(simulation_uuid)
     if not deleted:
         raise HTTPException(status_code=404, detail="Simulation not found")
@@ -1333,7 +1365,11 @@ def run_simulation_task(
 
 
 @router.post("/{simulation_uuid}/run", response_model=TaskCreateResponse)
-async def run_simulation_endpoint(simulation_uuid: str, request: RunSimulationRequest):
+async def run_simulation_endpoint(
+    simulation_uuid: str,
+    request: RunSimulationRequest,
+    user_id: str = Depends(get_current_user_id),
+):
     """
     Run a simulation with personas, scenarios, and metrics.
 
@@ -1348,6 +1384,10 @@ async def run_simulation_endpoint(simulation_uuid: str, request: RunSimulationRe
     simulation = get_simulation(simulation_uuid)
     if not simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Verify user owns this simulation
+    if simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Get agent from simulation
     agent_uuid = simulation.get("agent_id")

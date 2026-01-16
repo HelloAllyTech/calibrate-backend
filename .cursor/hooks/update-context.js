@@ -10,7 +10,18 @@ async function main() {
     return;
   }
   
-  // Only trigger if codebase-context.md was NOT the only file changed
+  // Check if any .py files were changed
+  const changedFiles = input.changed_files || input.files || [];
+  const hasPyFileChanges = changedFiles.some(file => 
+    typeof file === 'string' ? file.endsWith('.py') : (file.path || '').endsWith('.py')
+  );
+  
+  if (!hasPyFileChanges) {
+    console.log(JSON.stringify({}));
+    return;
+  }
+  
+  // Only trigger if .py files were changed
   console.log(JSON.stringify({
     followup_message: `Only go ahead if you made code changes (not just updated ${CONTEXT_FILE}):
     

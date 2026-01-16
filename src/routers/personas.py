@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from db import (
@@ -9,6 +9,7 @@ from db import (
     update_persona,
     delete_persona,
 )
+from auth_utils import get_current_user_id
 
 
 router = APIRouter(prefix="/personas", tags=["personas"])
@@ -41,38 +42,56 @@ class PersonaCreateResponse(BaseModel):
 
 
 @router.post("", response_model=PersonaCreateResponse)
-async def create_persona_endpoint(persona: PersonaCreate):
+async def create_persona_endpoint(
+    persona: PersonaCreate, user_id: str = Depends(get_current_user_id)
+):
     """Create a new persona."""
     persona_uuid = create_persona(
         name=persona.name,
         description=persona.description,
         config=persona.config,
+        user_id=user_id,
     )
-    return PersonaCreateResponse(uuid=persona_uuid, message="Persona created successfully")
+    return PersonaCreateResponse(
+        uuid=persona_uuid, message="Persona created successfully"
+    )
 
 
 @router.get("", response_model=List[PersonaResponse])
-async def list_personas():
-    """List all personas."""
-    personas = get_all_personas()
+async def list_personas(user_id: str = Depends(get_current_user_id)):
+    """List all personas for the authenticated user."""
+    personas = get_all_personas(user_id=user_id)
     return personas
 
 
 @router.get("/{persona_uuid}", response_model=PersonaResponse)
-async def get_persona_endpoint(persona_uuid: str):
+async def get_persona_endpoint(
+    persona_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Get a persona by UUID."""
     persona = get_persona(persona_uuid)
     if not persona:
         raise HTTPException(status_code=404, detail="Persona not found")
+    # Verify user owns this persona
+    if persona.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
     return persona
 
 
 @router.put("/{persona_uuid}", response_model=PersonaResponse)
-async def update_persona_endpoint(persona_uuid: str, persona: PersonaUpdate):
+async def update_persona_endpoint(
+    persona_uuid: str,
+    persona: PersonaUpdate,
+    user_id: str = Depends(get_current_user_id),
+):
     """Update a persona."""
     existing_persona = get_persona(persona_uuid)
     if not existing_persona:
         raise HTTPException(status_code=404, detail="Persona not found")
+
+    # Verify user owns this persona
+    if existing_persona.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     updated = update_persona(
         persona_uuid=persona_uuid,
@@ -89,8 +108,17 @@ async def update_persona_endpoint(persona_uuid: str, persona: PersonaUpdate):
 
 
 @router.delete("/{persona_uuid}")
-async def delete_persona_endpoint(persona_uuid: str):
+async def delete_persona_endpoint(
+    persona_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Delete a persona."""
+    # Check if persona exists and user owns it
+    existing_persona = get_persona(persona_uuid)
+    if not existing_persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    if existing_persona.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     deleted = delete_persona(persona_uuid)
     if not deleted:
         raise HTTPException(status_code=404, detail="Persona not found")

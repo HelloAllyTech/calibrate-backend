@@ -5,11 +5,16 @@ from typing import Literal
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from db import init_db
+from routers.auth import router as auth_router
+from routers.users import router as users_router
 from routers.agents import router as agents_router
 from routers.tools import router as tools_router
 from routers.agent_tools import router as agent_tools_router
@@ -24,7 +29,6 @@ from routers.simulations import router as simulations_router
 from utils import get_s3_client
 from job_recovery import recover_pending_jobs
 
-load_dotenv()
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -48,6 +52,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # Include routers
+app.include_router(auth_router)
+app.include_router(users_router)
 app.include_router(agents_router)
 app.include_router(tools_router)
 app.include_router(agent_tools_router)
@@ -60,9 +66,15 @@ app.include_router(scenarios_router)
 app.include_router(metrics_router)
 app.include_router(simulations_router)
 
+# Configure CORS allowed origins from environment variable
+# CORS_ALLOWED_ORIGINS can be comma-separated list (e.g., "http://localhost:3000,https://app.example.com")
+# Defaults to ["*"] if not set
+cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "*")
+cors_allowed_origins = [origin.strip() for origin in cors_origins_env.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
