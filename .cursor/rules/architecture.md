@@ -170,8 +170,14 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 #### Simulations
 
 - `POST /simulations/{uuid}/run` - Start simulation (chat or voice)
-- `GET /simulations/run/{task_id}` - Get simulation run status
+- `GET /simulations/run/{task_id}` - Get simulation run status (includes partial results for voice simulations)
 - `GET /simulations/{uuid}/runs` - List all runs for a simulation
+
+**Status API Response Fields:**
+- `total_simulations` - Expected number of simulations (personas × scenarios)
+- `completed_simulations` - Number of completed simulations (voice only, while in_progress)
+- `simulation_results` - Array of completed simulation results (partial for in_progress voice simulations)
+- `metrics` - Aggregated evaluation metrics (only populated when status is `done`)
 
 #### Utilities
 
@@ -197,14 +203,44 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 1. **Creation**: Job created with `in_progress` status and `details` JSON containing recovery info
 2. **Execution**: Background thread runs the task
-3. **Completion**: Job updated with `done` status and `results` JSON
-4. **Recovery**: On app startup, `job_recovery.py` restarts any `in_progress` jobs
+3. **Process Tracking** (voice simulations only): PID and PGID stored in job details for cleanup
+4. **Incremental Updates** (voice simulations only): Results updated in DB as each simulation completes
+5. **Completion**: Job updated with `done` status and `results` JSON
+6. **Recovery**: On app startup, `job_recovery.py` kills orphaned processes and restarts any `in_progress` jobs
 
 ### Job Status Values
 
-- `in_progress` - Job is running
+- `in_progress` - Job is running (may have partial results for voice simulations)
 - `done` - Job completed (check `results.error` for failure)
 - `cancelled` - Job was cancelled (not currently used)
+
+### Process Management for Long-Running Jobs
+
+STT, TTS, and voice simulation jobs spawn subprocesses that run on specific ports. To handle server restarts gracefully:
+
+- **Process isolation**: All subprocesses started with `start_new_session=True` (creates new process group)
+- **PID tracking**: Process PIDs stored in job `details`:
+  - Voice simulations: Single `pid` and `pgid` fields
+  - STT/TTS evaluations: `running_pids` dict mapping provider name to PID (e.g., `{"deepgram": 12345, "openai": 12346}`)
+- **Orphan cleanup**: On recovery, `job_recovery.py` kills process groups using `os.killpg()` before restarting
+- **Graceful termination**: Sends SIGTERM first, waits briefly, then SIGKILL if still running
+
+This prevents orphaned processes from accumulating across server restarts and frees up ports.
+
+### Voice Simulation Incremental Updates
+
+Voice simulations (`pense agent simulation`) run multiple persona-scenario combinations sequentially. Each combination creates a folder named `simulation_persona_<n>_scenario_<m>`. The backend monitors for these folders during execution and updates the database incrementally:
+
+- **Completion marker**: A simulation folder is considered complete when `evaluation_results.csv` exists (created after the LLM judge evaluation step finishes)
+- **During execution**: Status API returns partial `simulation_results` for completed simulations, each including:
+  - `persona` and `scenario` data from `config.json`
+  - `transcript` from `transcript.json`
+  - `evaluation_results` with per-criterion metrics (name, value, reasoning) from `evaluation_results.csv`
+  - `audio_urls` (presigned S3 URLs for audio files)
+  - Plus `completed_simulations` count for progress tracking
+- **On completion**: Final aggregated `metrics` (from `metrics.json`) are added to the response
+
+This allows clients to display progress and per-simulation evaluation results without waiting for all simulations to complete.
 
 ---
 
@@ -488,6 +524,45 @@ async def start_task(request: TaskRequest):
 
     return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)
 ```
+
+### Incremental Job Processing Pattern (Voice Simulations)
+
+For long-running jobs that produce multiple outputs (like voice simulations), use non-blocking subprocess execution with directory monitoring:
+
+```python
+def run_incremental_task(task_id: str, output_dir: Path):
+    # Start process without blocking
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    processed_items = set()
+    results = []
+    
+    # Monitor for new outputs while process runs
+    while process.poll() is None:
+        for item in output_dir.iterdir():
+            if item.name not in processed_items and is_item_complete(item):
+                result = parse_item(item)
+                results.append(result)
+                processed_items.add(item.name)
+                
+                # Update DB with partial results
+                update_job(task_id, status="in_progress", results={
+                    "completed": len(results),
+                    "items": results
+                })
+        
+        time.sleep(2)  # Poll interval
+    
+    # Final update with all results
+    update_job(task_id, status="done", results={"items": results, "metrics": ...})
+```
+
+Key aspects:
+- Use `subprocess.Popen` instead of `subprocess.run` for non-blocking execution
+- Write stdout/stderr to log files instead of pipes to avoid deadlocks
+- Check for completion markers (e.g., `evaluation_results.csv` exists) before processing - this ensures the evaluation step has finished
+- Update DB incrementally so status API can return partial results including per-simulation evaluation metrics
+- Final aggregated metrics only computed after all items complete
 
 ---
 

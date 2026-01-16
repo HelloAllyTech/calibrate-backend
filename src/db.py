@@ -1717,8 +1717,12 @@ def update_job(
     job_uuid: str,
     status: Optional[str] = None,
     results: Optional[Dict[str, Any]] = None,
+    details: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Update a job. Returns True if the job was found and updated."""
+    """Update a job. Returns True if the job was found and updated.
+
+    If details is provided, it will be merged with existing details (not replaced).
+    """
     updates = []
     params = []
 
@@ -1728,6 +1732,21 @@ def update_job(
     if results is not None:
         updates.append("results = ?")
         params.append(json.dumps(results))
+
+    # For details, we need to merge with existing details
+    if details is not None:
+        # First, fetch existing details
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT details FROM jobs WHERE uuid = ?", (job_uuid,))
+            row = cursor.fetchone()
+            if row and row[0]:
+                existing_details = json.loads(row[0])
+                # Merge new details into existing
+                existing_details.update(details)
+                details = existing_details
+        updates.append("details = ?")
+        params.append(json.dumps(details))
 
     if not updates:
         return False
@@ -2019,8 +2038,12 @@ def update_simulation_job(
     job_uuid: str,
     status: Optional[str] = None,
     results: Optional[Dict[str, Any]] = None,
+    details: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Update a simulation job. Returns True if the job was found and updated."""
+    """Update a simulation job. Returns True if the job was found and updated.
+
+    If details is provided, it will be merged with existing details (not replaced).
+    """
     updates = []
     params = []
 
@@ -2030,6 +2053,23 @@ def update_simulation_job(
     if results is not None:
         updates.append("results = ?")
         params.append(json.dumps(results))
+
+    # For details, we need to merge with existing details
+    if details is not None:
+        # First, fetch existing details
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT details FROM simulation_jobs WHERE uuid = ?", (job_uuid,)
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                existing_details = json.loads(row[0])
+                # Merge new details into existing
+                existing_details.update(details)
+                details = existing_details
+        updates.append("details = ?")
+        params.append(json.dumps(details))
 
     if not updates:
         return False

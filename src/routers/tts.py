@@ -46,6 +46,8 @@ def evaluate_tts_provider(
     output_dir: Path,
     port: int,
     s3_bucket: str,
+    task_id: str,
+    running_pids: dict,
 ) -> ProviderResult:
     """Evaluate a single TTS provider."""
     try:
@@ -70,13 +72,34 @@ def evaluate_tts_provider(
 
         logger.info(f"Running TTS eval {run_id} with command: {' '.join(eval_cmd)}")
 
-        subprocess.run(
+        # Use Popen with start_new_session to create a process group for cleanup
+        process = subprocess.Popen(
             eval_cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=True,
+            start_new_session=True,  # Create new process group for cleanup
             cwd=str(output_dir.parent),
         )
+
+        # Track the process PID for cleanup on server restart
+        running_pids[provider] = process.pid
+        logger.info(f"TTS eval for {provider} started with PID {process.pid}")
+
+        # Update job details with current running PIDs
+        update_job(task_id, details={"running_pids": dict(running_pids)})
+
+        # Wait for process to complete
+        stdout, stderr = process.communicate()
+
+        # Remove from running PIDs
+        running_pids.pop(provider, None)
+        update_job(task_id, details={"running_pids": dict(running_pids)})
+
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(
+                process.returncode, eval_cmd, stdout, stderr
+            )
 
         # Find the provider-specific output directory
         provider_output_dir = None
@@ -252,6 +275,9 @@ def run_tts_evaluation_task(
                     f"Running {len(request.providers)} TTS providers in parallel"
                 )
 
+                # Shared dict to track running process PIDs for cleanup
+                running_pids = {}
+
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(request.providers)
                 ) as executor:
@@ -265,6 +291,8 @@ def run_tts_evaluation_task(
                             output_dir,
                             provider_ports[provider],
                             s3_bucket,
+                            task_id,
+                            running_pids,
                         ): provider
                         for provider in request.providers
                     }

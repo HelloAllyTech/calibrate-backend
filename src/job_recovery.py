@@ -1,5 +1,7 @@
 """Job recovery module - restarts in_progress jobs on app startup."""
 
+import os
+import signal
 import threading
 import logging
 
@@ -23,6 +25,133 @@ from db import (
 from utils import TaskStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _kill_orphaned_processes_from_dict(pids_dict: dict, job_id: str) -> None:
+    """
+    Kill multiple orphaned processes from a dict mapping (e.g., provider -> PID).
+
+    Args:
+        pids_dict: Dict mapping names to PIDs (e.g., {"deepgram": 12345, "openai": 12346})
+        job_id: Job ID for logging
+    """
+    if not pids_dict:
+        logger.info(f"Job {job_id}: No running PIDs to kill")
+        return
+
+    for name, pid in pids_dict.items():
+        if not pid:
+            continue
+        try:
+            # Kill the process group (PID equals PGID when start_new_session=True)
+            os.killpg(pid, signal.SIGTERM)
+            logger.info(f"Job {job_id}: Sent SIGTERM to process group {pid} ({name})")
+
+            import time
+
+            time.sleep(0.5)
+
+            try:
+                os.killpg(pid, signal.SIGKILL)
+                logger.info(
+                    f"Job {job_id}: Sent SIGKILL to process group {pid} ({name})"
+                )
+            except ProcessLookupError:
+                logger.info(
+                    f"Job {job_id}: Process group {pid} ({name}) already terminated"
+                )
+        except ProcessLookupError:
+            logger.info(f"Job {job_id}: Process group {pid} ({name}) not found")
+        except PermissionError:
+            logger.warning(
+                f"Job {job_id}: No permission to kill process group {pid} ({name})"
+            )
+        except Exception as e:
+            logger.error(
+                f"Job {job_id}: Error killing process group {pid} ({name}): {e}"
+            )
+
+
+def _kill_orphaned_process(details: dict, job_id: str) -> bool:
+    """
+    Kill an orphaned process from a previous run.
+
+    Args:
+        details: Job details containing 'pid' and/or 'pgid'
+        job_id: Job ID for logging
+
+    Returns:
+        True if process was killed or didn't exist, False on error
+    """
+    pgid = details.get("pgid")
+    pid = details.get("pid")
+
+    if not pgid and not pid:
+        logger.info(f"Job {job_id}: No PID/PGID stored, nothing to kill")
+        return True
+
+    # Try to kill the process group first (kills all child processes)
+    if pgid:
+        try:
+            # Kill the entire process group
+            os.killpg(pgid, signal.SIGTERM)
+            logger.info(f"Job {job_id}: Sent SIGTERM to process group {pgid}")
+
+            # Give it a moment to terminate gracefully
+            import time
+
+            time.sleep(1)
+
+            # Check if still running and force kill
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+                logger.info(f"Job {job_id}: Sent SIGKILL to process group {pgid}")
+            except ProcessLookupError:
+                logger.info(f"Job {job_id}: Process group {pgid} already terminated")
+            except PermissionError:
+                logger.warning(
+                    f"Job {job_id}: No permission to kill process group {pgid}"
+                )
+
+            return True
+        except ProcessLookupError:
+            logger.info(f"Job {job_id}: Process group {pgid} not found (already dead)")
+            return True
+        except PermissionError:
+            logger.warning(f"Job {job_id}: No permission to kill process group {pgid}")
+            # Fall through to try killing by PID
+        except Exception as e:
+            logger.error(f"Job {job_id}: Error killing process group {pgid}: {e}")
+            # Fall through to try killing by PID
+
+    # Fallback: try to kill by PID
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.info(f"Job {job_id}: Sent SIGTERM to process {pid}")
+
+            import time
+
+            time.sleep(1)
+
+            try:
+                os.kill(pid, signal.SIGKILL)
+                logger.info(f"Job {job_id}: Sent SIGKILL to process {pid}")
+            except ProcessLookupError:
+                logger.info(f"Job {job_id}: Process {pid} already terminated")
+
+            return True
+        except ProcessLookupError:
+            logger.info(f"Job {job_id}: Process {pid} not found (already dead)")
+            return True
+        except PermissionError:
+            logger.warning(f"Job {job_id}: No permission to kill process {pid}")
+            return False
+        except Exception as e:
+            logger.error(f"Job {job_id}: Error killing process {pid}: {e}")
+            return False
+
+    return True
 
 
 def recover_pending_jobs():
@@ -170,6 +299,9 @@ def _recover_stt_job(job_id: str, details: dict):
 
     logger.info(f"Recovering STT job {job_id}")
 
+    # Kill any orphaned processes from previous run
+    _kill_orphaned_processes_from_dict(details.get("running_pids", {}), job_id)
+
     request = STTEvaluationRequest(
         audio_paths=details["audio_paths"],
         texts=details["texts"],
@@ -192,6 +324,9 @@ def _recover_tts_job(job_id: str, details: dict):
     from routers.tts import run_tts_evaluation_task, TTSEvaluationRequest
 
     logger.info(f"Recovering TTS job {job_id}")
+
+    # Kill any orphaned processes from previous run
+    _kill_orphaned_processes_from_dict(details.get("running_pids", {}), job_id)
 
     request = TTSEvaluationRequest(
         texts=details["texts"],
@@ -277,6 +412,11 @@ def _recover_simulation_job(job_id: str, details: dict, job_type: str):
     from routers.simulations import run_simulation_task
 
     logger.info(f"Recovering simulation job {job_id} (type: {job_type})")
+
+    # For voice simulations, kill any orphaned processes first
+    if job_type == "voice":
+        logger.info(f"Killing orphaned processes for voice simulation job {job_id}")
+        _kill_orphaned_process(details, job_id)
 
     simulation_uuid = details["simulation_uuid"]
     agent_uuid = details["agent_uuid"]
