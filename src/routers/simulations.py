@@ -742,6 +742,11 @@ def _build_pense_simulation_config(
 
     config["system_prompt"] = agent_config.get("system_prompt", "")
 
+    # Copy settings from agent config if present
+    settings_config = agent_config.get("settings", {})
+    if settings_config:
+        config["settings"] = settings_config
+
     if simulation_type == "chat":
         config["params"] = {"model": model}
     else:
