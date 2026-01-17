@@ -7,14 +7,17 @@ import os
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
-from dotenv import load_dotenv
 
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 # Database path
 DB_PATH = Path(join(os.getenv("DB_ROOT_DIR"), "pense.db"))
+
+# Default user configuration
+DEFAULT_USER_EMAIL = "amandalmia18@gmail.com"
+DEFAULT_USER_FIRST_NAME = "Aman"
+DEFAULT_USER_LAST_NAME = "Dalmia"
 
 
 @contextmanager
@@ -35,6 +38,22 @@ def init_db():
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
+
+        # Create users table first (other tables reference it)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        )
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS agents (
@@ -42,9 +61,11 @@ def init_db():
                 uuid TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
                 config TEXT,
+                user_id TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                deleted_at TIMESTAMP DEFAULT NULL
+                deleted_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
             )
         """
         )
@@ -56,9 +77,11 @@ def init_db():
                 name TEXT NOT NULL,
                 description TEXT,
                 config TEXT,
+                user_id TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                deleted_at TIMESTAMP DEFAULT NULL
+                deleted_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
             )
         """
         )
@@ -86,9 +109,11 @@ def init_db():
                 name TEXT NOT NULL,
                 type TEXT NOT NULL,
                 config TEXT,
+                user_id TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                deleted_at TIMESTAMP DEFAULT NULL
+                deleted_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
             )
         """
         )
@@ -165,9 +190,11 @@ def init_db():
                 name TEXT NOT NULL,
                 description TEXT,
                 config TEXT,
+                user_id TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                deleted_at TIMESTAMP DEFAULT NULL
+                deleted_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
             )
         """
         )
@@ -179,9 +206,11 @@ def init_db():
                 uuid TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
                 description TEXT,
+                user_id TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                deleted_at TIMESTAMP DEFAULT NULL
+                deleted_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
             )
         """
         )
@@ -194,9 +223,11 @@ def init_db():
                 name TEXT NOT NULL,
                 description TEXT,
                 config TEXT,
+                user_id TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                deleted_at TIMESTAMP DEFAULT NULL
+                deleted_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
             )
         """
         )
@@ -208,10 +239,12 @@ def init_db():
                 uuid TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
                 agent_id TEXT DEFAULT NULL,
+                user_id TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 deleted_at TIMESTAMP DEFAULT NULL,
-                FOREIGN KEY (agent_id) REFERENCES agents(uuid)
+                FOREIGN KEY (agent_id) REFERENCES agents(uuid),
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
             )
         """
         )
@@ -294,12 +327,210 @@ def init_db():
             # Column already exists
             pass
 
+        # Add user_id column to all relevant tables if not present (migration)
+        tables_with_user_id = [
+            "agents",
+            "tools",
+            "tests",
+            "personas",
+            "scenarios",
+            "metrics",
+            "simulations",
+        ]
+        for table in tables_with_user_id:
+            try:
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN user_id TEXT DEFAULT NULL"
+                )
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
+
+        conn.commit()
+
+        # Create default user if not exists and update existing rows with NULL user_id
+        cursor.execute("SELECT uuid FROM users WHERE email = ?", (DEFAULT_USER_EMAIL,))
+        default_user_row = cursor.fetchone()
+
+        if default_user_row:
+            default_user_uuid = default_user_row["uuid"]
+            logger.info(f"Default user already exists with UUID: {default_user_uuid}")
+        else:
+            # Create the default user
+            default_user_uuid = str(uuid.uuid4())
+            cursor.execute(
+                """
+                INSERT INTO users (uuid, first_name, last_name, email)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    default_user_uuid,
+                    DEFAULT_USER_FIRST_NAME,
+                    DEFAULT_USER_LAST_NAME,
+                    DEFAULT_USER_EMAIL,
+                ),
+            )
+            conn.commit()
+            logger.info(f"Created default user with UUID: {default_user_uuid}")
+
+        # Update all existing rows with NULL user_id to use the default user
+        for table in tables_with_user_id:
+            cursor.execute(
+                f"UPDATE {table} SET user_id = ? WHERE user_id IS NULL",
+                (default_user_uuid,),
+            )
+            rows_updated = cursor.rowcount
+            if rows_updated > 0:
+                logger.info(
+                    f"Updated {rows_updated} row(s) in {table} with default user_id"
+                )
+
         conn.commit()
         logger.info("Database initialized successfully")
 
 
-def create_agent(name: str, config: Optional[Dict[str, Any]] = None) -> str:
-    """Create a new agent and return its UUID."""
+# ============ Users Functions ============
+
+
+def create_user(
+    first_name: str,
+    last_name: str,
+    email: str,
+) -> str:
+    """Create a new user and return its UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        user_uuid = str(uuid.uuid4())
+        cursor.execute(
+            """
+            INSERT INTO users (uuid, first_name, last_name, email)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_uuid, first_name, last_name, email),
+        )
+        conn.commit()
+        logger.info(f"Created user with UUID: {user_uuid}")
+        return user_uuid
+
+
+def get_user(user_uuid: str) -> Optional[Dict[str, Any]]:
+    """Get a user by UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE uuid = ?", (user_uuid,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Get a user by email."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+
+def get_all_users() -> List[Dict[str, Any]]:
+    """Get all users."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+def update_user(
+    user_uuid: str,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    email: Optional[str] = None,
+) -> bool:
+    """Update a user. Returns True if the user was found and updated."""
+    updates = []
+    params = []
+
+    if first_name is not None:
+        updates.append("first_name = ?")
+        params.append(first_name)
+    if last_name is not None:
+        updates.append("last_name = ?")
+        params.append(last_name)
+    if email is not None:
+        updates.append("email = ?")
+        params.append(email)
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(user_uuid)
+
+    query = f"UPDATE users SET {', '.join(updates)} WHERE uuid = ?"
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        conn.commit()
+        updated = cursor.rowcount > 0
+        if updated:
+            logger.info(f"Updated user with UUID: {user_uuid}")
+        return updated
+
+
+def delete_user(user_uuid: str) -> bool:
+    """Delete a user. Returns True if the user was found and deleted."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM users WHERE uuid = ?", (user_uuid,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"Deleted user with UUID: {user_uuid}")
+        return deleted
+
+
+def get_or_create_user(
+    email: str,
+    first_name: str,
+    last_name: str,
+) -> Dict[str, Any]:
+    """Get a user by email, or create a new one if not found."""
+    user = get_user_by_email(email)
+    if user:
+        # Update name if changed
+        if user["first_name"] != first_name or user["last_name"] != last_name:
+            update_user(user["uuid"], first_name=first_name, last_name=last_name)
+            user = get_user(user["uuid"])
+        return user
+
+    # Create new user
+    user_uuid = create_user(first_name=first_name, last_name=last_name, email=email)
+    return get_user(user_uuid)
+
+
+# ============ Agents Functions ============
+
+
+def create_agent(
+    name: str, config: Optional[Dict[str, Any]] = None, user_id: str = None
+) -> str:
+    """Create a new agent and return its UUID.
+
+    Args:
+        name: Name of the agent
+        config: Optional configuration dict
+        user_id: UUID of the user creating this agent (required)
+
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required when creating an agent")
     with get_db_connection() as conn:
         cursor = conn.cursor()
         # Generate UUID for the agent
@@ -308,10 +539,10 @@ def create_agent(name: str, config: Optional[Dict[str, Any]] = None) -> str:
         config_json = json.dumps(config) if config is not None else None
         cursor.execute(
             """
-            INSERT INTO agents (uuid, name, config)
-            VALUES (?, ?, ?)
+            INSERT INTO agents (uuid, name, config, user_id)
+            VALUES (?, ?, ?, ?)
             """,
-            (agent_uuid, name, config_json),
+            (agent_uuid, name, config_json, user_id),
         )
         conn.commit()
         logger.info(f"Created agent with UUID: {agent_uuid}")
@@ -341,13 +572,19 @@ def get_agent(agent_uuid: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_agents() -> List[Dict[str, Any]]:
-    """Get all agents."""
+def get_all_agents(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all agents, optionally filtered by user_id."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM agents WHERE deleted_at IS NULL ORDER BY created_at DESC"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT * FROM agents WHERE deleted_at IS NULL AND user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM agents WHERE deleted_at IS NULL ORDER BY created_at DESC"
+            )
         rows = cursor.fetchall()
         return [_parse_agent_row(row) for row in rows]
 
@@ -423,8 +660,21 @@ def create_tool(
     name: str,
     description: str,
     config: Optional[Dict[str, Any]] = None,
+    user_id: str = None,
 ) -> str:
-    """Create a new tool and return its UUID."""
+    """Create a new tool and return its UUID.
+
+    Args:
+        name: Name of the tool
+        description: Description of the tool
+        config: Optional configuration dict
+        user_id: UUID of the user creating this tool (required)
+
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required when creating a tool")
     with get_db_connection() as conn:
         cursor = conn.cursor()
         # Generate UUID for the tool
@@ -433,10 +683,10 @@ def create_tool(
         config_json = json.dumps(config) if config is not None else None
         cursor.execute(
             """
-            INSERT INTO tools (uuid, name, description, config)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO tools (uuid, name, description, config, user_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (tool_uuid, name, description, config_json),
+            (tool_uuid, name, description, config_json, user_id),
         )
         conn.commit()
         logger.info(f"Created tool with UUID: {tool_uuid}")
@@ -466,13 +716,19 @@ def get_tool(tool_uuid: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all tools."""
+def get_all_tools(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all tools, optionally filtered by user_id."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM tools WHERE deleted_at IS NULL ORDER BY created_at DESC"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT * FROM tools WHERE deleted_at IS NULL AND user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM tools WHERE deleted_at IS NULL ORDER BY created_at DESC"
+            )
         rows = cursor.fetchall()
         return [_parse_tool_row(row) for row in rows]
 
@@ -662,18 +918,31 @@ def create_test(
     name: str,
     type: str,
     config: Optional[Dict[str, Any]] = None,
+    user_id: str = None,
 ) -> str:
-    """Create a new test and return its UUID."""
+    """Create a new test and return its UUID.
+
+    Args:
+        name: Name of the test
+        type: Type of the test
+        config: Optional configuration dict
+        user_id: UUID of the user creating this test (required)
+
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required when creating a test")
     with get_db_connection() as conn:
         cursor = conn.cursor()
         test_uuid = str(uuid.uuid4())
         config_json = json.dumps(config) if config is not None else None
         cursor.execute(
             """
-            INSERT INTO tests (uuid, name, type, config)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO tests (uuid, name, type, config, user_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (test_uuid, name, type, config_json),
+            (test_uuid, name, type, config_json, user_id),
         )
         conn.commit()
         logger.info(f"Created test with UUID: {test_uuid}")
@@ -701,13 +970,19 @@ def get_test(test_uuid: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_tests() -> List[Dict[str, Any]]:
-    """Get all tests."""
+def get_all_tests(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all tests, optionally filtered by user_id."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM tests WHERE deleted_at IS NULL ORDER BY created_at DESC"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT * FROM tests WHERE deleted_at IS NULL AND user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM tests WHERE deleted_at IS NULL ORDER BY created_at DESC"
+            )
         rows = cursor.fetchall()
         return [_parse_test_row(row) for row in rows]
 
@@ -783,18 +1058,31 @@ def create_persona(
     name: str,
     description: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
+    user_id: str = None,
 ) -> str:
-    """Create a new persona and return its UUID."""
+    """Create a new persona and return its UUID.
+
+    Args:
+        name: Name of the persona
+        description: Optional description
+        config: Optional configuration dict
+        user_id: UUID of the user creating this persona (required)
+
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required when creating a persona")
     with get_db_connection() as conn:
         cursor = conn.cursor()
         persona_uuid = str(uuid.uuid4())
         config_json = json.dumps(config) if config is not None else None
         cursor.execute(
             """
-            INSERT INTO personas (uuid, name, description, config)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO personas (uuid, name, description, config, user_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (persona_uuid, name, description, config_json),
+            (persona_uuid, name, description, config_json, user_id),
         )
         conn.commit()
         logger.info(f"Created persona with UUID: {persona_uuid}")
@@ -823,13 +1111,19 @@ def get_persona(persona_uuid: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_personas() -> List[Dict[str, Any]]:
-    """Get all personas."""
+def get_all_personas(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all personas, optionally filtered by user_id."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM personas WHERE deleted_at IS NULL ORDER BY created_at DESC"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT * FROM personas WHERE deleted_at IS NULL AND user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM personas WHERE deleted_at IS NULL ORDER BY created_at DESC"
+            )
         rows = cursor.fetchall()
         return [_parse_persona_row(row) for row in rows]
 
@@ -895,17 +1189,29 @@ def delete_persona(persona_uuid: str) -> bool:
 def create_scenario(
     name: str,
     description: Optional[str] = None,
+    user_id: str = None,
 ) -> str:
-    """Create a new scenario and return its UUID."""
+    """Create a new scenario and return its UUID.
+
+    Args:
+        name: Name of the scenario
+        description: Optional description
+        user_id: UUID of the user creating this scenario (required)
+
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required when creating a scenario")
     with get_db_connection() as conn:
         cursor = conn.cursor()
         scenario_uuid = str(uuid.uuid4())
         cursor.execute(
             """
-            INSERT INTO scenarios (uuid, name, description)
-            VALUES (?, ?, ?)
+            INSERT INTO scenarios (uuid, name, description, user_id)
+            VALUES (?, ?, ?, ?)
             """,
-            (scenario_uuid, name, description),
+            (scenario_uuid, name, description, user_id),
         )
         conn.commit()
         logger.info(f"Created scenario with UUID: {scenario_uuid}")
@@ -926,13 +1232,19 @@ def get_scenario(scenario_uuid: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_scenarios() -> List[Dict[str, Any]]:
-    """Get all scenarios."""
+def get_all_scenarios(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all scenarios, optionally filtered by user_id."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM scenarios WHERE deleted_at IS NULL ORDER BY created_at DESC"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT * FROM scenarios WHERE deleted_at IS NULL AND user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM scenarios WHERE deleted_at IS NULL ORDER BY created_at DESC"
+            )
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
@@ -995,18 +1307,31 @@ def create_metric(
     name: str,
     description: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
+    user_id: str = None,
 ) -> str:
-    """Create a new metric and return its UUID."""
+    """Create a new metric and return its UUID.
+
+    Args:
+        name: Name of the metric
+        description: Optional description
+        config: Optional configuration dict
+        user_id: UUID of the user creating this metric (required)
+
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required when creating a metric")
     with get_db_connection() as conn:
         cursor = conn.cursor()
         metric_uuid = str(uuid.uuid4())
         config_json = json.dumps(config) if config is not None else None
         cursor.execute(
             """
-            INSERT INTO metrics (uuid, name, description, config)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO metrics (uuid, name, description, config, user_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (metric_uuid, name, description, config_json),
+            (metric_uuid, name, description, config_json, user_id),
         )
         conn.commit()
         logger.info(f"Created metric with UUID: {metric_uuid}")
@@ -1035,13 +1360,19 @@ def get_metric(metric_uuid: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_metrics() -> List[Dict[str, Any]]:
-    """Get all metrics."""
+def get_all_metrics(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all metrics, optionally filtered by user_id."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM metrics WHERE deleted_at IS NULL ORDER BY created_at DESC"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT * FROM metrics WHERE deleted_at IS NULL AND user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM metrics WHERE deleted_at IS NULL ORDER BY created_at DESC"
+            )
         rows = cursor.fetchall()
         return [_parse_metric_row(row) for row in rows]
 
@@ -1106,17 +1437,30 @@ def delete_metric(metric_uuid: str) -> bool:
 # ============ Simulations Functions ============
 
 
-def create_simulation(name: str, agent_id: Optional[str] = None) -> str:
-    """Create a new simulation and return its UUID."""
+def create_simulation(
+    name: str, agent_id: Optional[str] = None, user_id: str = None
+) -> str:
+    """Create a new simulation and return its UUID.
+
+    Args:
+        name: Name of the simulation
+        agent_id: Optional UUID of the linked agent
+        user_id: UUID of the user creating this simulation (required)
+
+    Raises:
+        ValueError: If user_id is not provided
+    """
+    if not user_id:
+        raise ValueError("user_id is required when creating a simulation")
     with get_db_connection() as conn:
         cursor = conn.cursor()
         simulation_uuid = str(uuid.uuid4())
         cursor.execute(
             """
-            INSERT INTO simulations (uuid, name, agent_id)
-            VALUES (?, ?, ?)
+            INSERT INTO simulations (uuid, name, agent_id, user_id)
+            VALUES (?, ?, ?, ?)
             """,
-            (simulation_uuid, name, agent_id),
+            (simulation_uuid, name, agent_id, user_id),
         )
         conn.commit()
         logger.info(f"Created simulation with UUID: {simulation_uuid}")
@@ -1137,13 +1481,19 @@ def get_simulation(simulation_uuid: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_simulations() -> List[Dict[str, Any]]:
-    """Get all simulations."""
+def get_all_simulations(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all simulations, optionally filtered by user_id."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM simulations WHERE deleted_at IS NULL ORDER BY created_at DESC"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT * FROM simulations WHERE deleted_at IS NULL AND user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM simulations WHERE deleted_at IS NULL ORDER BY created_at DESC"
+            )
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
@@ -1713,6 +2063,39 @@ def get_pending_jobs() -> List[Dict[str, Any]]:
         return [_parse_job_row(row) for row in rows]
 
 
+def get_queued_jobs(job_types: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Get all jobs with status 'queued', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT * FROM jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC"
+            )
+        rows = cursor.fetchall()
+        return [_parse_job_row(row) for row in rows]
+
+
+def count_running_jobs(job_types: Optional[List[str]] = None) -> int:
+    """Count jobs with status 'in_progress', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT COUNT(*) FROM jobs WHERE status = 'in_progress' AND type IN ({placeholders})",
+                job_types,
+            )
+        else:
+            cursor.execute("SELECT COUNT(*) FROM jobs WHERE status = 'in_progress'")
+        return cursor.fetchone()[0]
+
+
 def update_job(
     job_uuid: str,
     status: Optional[str] = None,
@@ -1883,6 +2266,43 @@ def get_pending_agent_test_jobs() -> List[Dict[str, Any]]:
         return [_parse_agent_test_job_row(row) for row in rows]
 
 
+def get_queued_agent_test_jobs(
+    job_types: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Get all agent test jobs with status 'queued', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT * FROM agent_test_jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM agent_test_jobs WHERE status = 'queued' ORDER BY created_at ASC"
+            )
+        rows = cursor.fetchall()
+        return [_parse_agent_test_job_row(row) for row in rows]
+
+
+def count_running_agent_test_jobs(job_types: Optional[List[str]] = None) -> int:
+    """Count agent test jobs with status 'in_progress', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT COUNT(*) FROM agent_test_jobs WHERE status = 'in_progress' AND type IN ({placeholders})",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM agent_test_jobs WHERE status = 'in_progress'"
+            )
+        return cursor.fetchone()[0]
+
+
 def update_agent_test_job(
     job_uuid: str,
     status: Optional[str] = None,
@@ -2032,6 +2452,43 @@ def get_pending_simulation_jobs() -> List[Dict[str, Any]]:
         )
         rows = cursor.fetchall()
         return [_parse_simulation_job_row(row) for row in rows]
+
+
+def get_queued_simulation_jobs(
+    job_types: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Get all simulation jobs with status 'queued', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT * FROM simulation_jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM simulation_jobs WHERE status = 'queued' ORDER BY created_at ASC"
+            )
+        rows = cursor.fetchall()
+        return [_parse_simulation_job_row(row) for row in rows]
+
+
+def count_running_simulation_jobs(job_types: Optional[List[str]] = None) -> int:
+    """Count simulation jobs with status 'in_progress', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT COUNT(*) FROM simulation_jobs WHERE status = 'in_progress' AND type IN ({placeholders})",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM simulation_jobs WHERE status = 'in_progress'"
+            )
+        return cursor.fetchone()[0]
 
 
 def update_simulation_job(

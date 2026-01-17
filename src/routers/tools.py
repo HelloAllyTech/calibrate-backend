@@ -1,8 +1,9 @@
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from db import create_tool, get_tool, get_all_tools, update_tool, delete_tool
+from auth_utils import get_current_user_id
 
 
 router = APIRouter(prefix="/tools", tags=["tools"])
@@ -35,39 +36,53 @@ class ToolCreateResponse(BaseModel):
 
 
 @router.post("", response_model=ToolCreateResponse)
-async def create_tool_endpoint(tool: ToolCreate):
+async def create_tool_endpoint(
+    tool: ToolCreate, user_id: str = Depends(get_current_user_id)
+):
     """Create a new tool."""
     tool_uuid = create_tool(
         name=tool.name,
         description=tool.description,
         config=tool.config,
+        user_id=user_id,
     )
     return ToolCreateResponse(uuid=tool_uuid, message="Tool created successfully")
 
 
 @router.get("", response_model=List[ToolResponse])
-async def list_tools():
-    """List all tools."""
-    tools = get_all_tools()
+async def list_tools(user_id: str = Depends(get_current_user_id)):
+    """List all tools for the authenticated user."""
+    tools = get_all_tools(user_id=user_id)
     return tools
 
 
 @router.get("/{tool_uuid}", response_model=ToolResponse)
-async def get_tool_endpoint(tool_uuid: str):
+async def get_tool_endpoint(
+    tool_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Get a tool by UUID."""
     tool = get_tool(tool_uuid)
     if not tool:
         raise HTTPException(status_code=404, detail="Tool not found")
+    # Verify user owns this tool
+    if tool.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
     return tool
 
 
 @router.put("/{tool_uuid}", response_model=ToolResponse)
-async def update_tool_endpoint(tool_uuid: str, tool: ToolUpdate):
+async def update_tool_endpoint(
+    tool_uuid: str, tool: ToolUpdate, user_id: str = Depends(get_current_user_id)
+):
     """Update a tool."""
     # Check if tool exists
     existing_tool = get_tool(tool_uuid)
     if not existing_tool:
         raise HTTPException(status_code=404, detail="Tool not found")
+
+    # Verify user owns this tool
+    if existing_tool.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Update only provided fields
     updated = update_tool(
@@ -86,8 +101,17 @@ async def update_tool_endpoint(tool_uuid: str, tool: ToolUpdate):
 
 
 @router.delete("/{tool_uuid}")
-async def delete_tool_endpoint(tool_uuid: str):
+async def delete_tool_endpoint(
+    tool_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Delete a tool."""
+    # Check if tool exists and user owns it
+    existing_tool = get_tool(tool_uuid)
+    if not existing_tool:
+        raise HTTPException(status_code=404, detail="Tool not found")
+    if existing_tool.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     deleted = delete_tool(tool_uuid)
     if not deleted:
         raise HTTPException(status_code=404, detail="Tool not found")

@@ -1,7 +1,7 @@
 import copy
 import logging
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from db import (
@@ -15,6 +15,7 @@ from db import (
     add_tool_to_agent,
     add_test_to_agent,
 )
+from auth_utils import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -55,38 +56,52 @@ class AgentDuplicateResponse(BaseModel):
 
 
 @router.post("", response_model=AgentCreateResponse)
-async def create_agent_endpoint(agent: AgentCreate):
+async def create_agent_endpoint(
+    agent: AgentCreate, user_id: str = Depends(get_current_user_id)
+):
     """Create a new agent."""
     agent_uuid = create_agent(
         name=agent.name,
         config=agent.config,
+        user_id=user_id,
     )
     return AgentCreateResponse(uuid=agent_uuid, message="Agent created successfully")
 
 
 @router.get("", response_model=List[AgentResponse])
-async def list_agents():
-    """List all agents."""
-    agents = get_all_agents()
+async def list_agents(user_id: str = Depends(get_current_user_id)):
+    """List all agents for the authenticated user."""
+    agents = get_all_agents(user_id=user_id)
     return agents
 
 
 @router.get("/{agent_uuid}", response_model=AgentResponse)
-async def get_agent_endpoint(agent_uuid: str):
+async def get_agent_endpoint(
+    agent_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Get an agent by UUID."""
     agent = get_agent(agent_uuid)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    # Verify user owns this agent
+    if agent.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
     return agent
 
 
 @router.put("/{agent_uuid}", response_model=AgentResponse)
-async def update_agent_endpoint(agent_uuid: str, agent: AgentUpdate):
+async def update_agent_endpoint(
+    agent_uuid: str, agent: AgentUpdate, user_id: str = Depends(get_current_user_id)
+):
     """Update an agent."""
     # Check if agent exists
     existing_agent = get_agent(agent_uuid)
     if not existing_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Verify user owns this agent
+    if existing_agent.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Update only provided fields
     updated = update_agent(
@@ -104,8 +119,17 @@ async def update_agent_endpoint(agent_uuid: str, agent: AgentUpdate):
 
 
 @router.delete("/{agent_uuid}")
-async def delete_agent_endpoint(agent_uuid: str):
+async def delete_agent_endpoint(
+    agent_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Delete an agent."""
+    # Check if agent exists and user owns it
+    existing_agent = get_agent(agent_uuid)
+    if not existing_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if existing_agent.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     deleted = delete_agent(agent_uuid)
     if not deleted:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -113,10 +137,14 @@ async def delete_agent_endpoint(agent_uuid: str):
 
 
 @router.post("/{agent_uuid}/duplicate", response_model=AgentDuplicateResponse)
-async def duplicate_agent_endpoint(agent_uuid: str, request: AgentDuplicateRequest):
+async def duplicate_agent_endpoint(
+    agent_uuid: str,
+    request: AgentDuplicateRequest,
+    user_id: str = Depends(get_current_user_id),
+):
     """
     Duplicate an agent with all its linked data.
-    
+
     This will:
     - Copy the agent (with the provided name, config including speaks_first, data extraction fields, etc.)
     - Copy all linked tools
@@ -128,9 +156,13 @@ async def duplicate_agent_endpoint(agent_uuid: str, request: AgentDuplicateReque
     if not original_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    # Verify user owns this agent
+    if original_agent.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     # Use the provided name
     new_name = request.name
-    
+
     # Copy the entire config (includes speaks_first, data extraction fields, llm config, etc.)
     new_config = original_agent.get("config")
     if new_config:
@@ -141,6 +173,7 @@ async def duplicate_agent_endpoint(agent_uuid: str, request: AgentDuplicateReque
     new_agent_uuid = create_agent(
         name=new_name,
         config=new_config,
+        user_id=user_id,
     )
 
     # Copy all linked tools
@@ -150,7 +183,9 @@ async def duplicate_agent_endpoint(agent_uuid: str, request: AgentDuplicateReque
             add_tool_to_agent(new_agent_uuid, tool["uuid"])
         except Exception as e:
             # Log but continue - don't fail the entire duplication
-            logger.warning(f"Failed to link tool {tool['uuid']} to duplicated agent: {e}")
+            logger.warning(
+                f"Failed to link tool {tool['uuid']} to duplicated agent: {e}"
+            )
 
     # Copy all linked tests
     linked_tests = get_tests_for_agent(agent_uuid)
@@ -159,7 +194,9 @@ async def duplicate_agent_endpoint(agent_uuid: str, request: AgentDuplicateReque
             add_test_to_agent(new_agent_uuid, test["uuid"])
         except Exception as e:
             # Log but continue - don't fail the entire duplication
-            logger.warning(f"Failed to link test {test['uuid']} to duplicated agent: {e}")
+            logger.warning(
+                f"Failed to link test {test['uuid']} to duplicated agent: {e}"
+            )
 
     return AgentDuplicateResponse(
         uuid=new_agent_uuid,

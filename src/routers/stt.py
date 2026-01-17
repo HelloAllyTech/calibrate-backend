@@ -20,10 +20,49 @@ from utils import (
     ProviderResult,
     TaskCreateResponse,
     TaskStatusResponse,
-    find_available_port,
+    reserve_port,
+    release_port,
     get_s3_client,
     get_s3_output_config,
+    can_start_job,
+    try_start_queued_job,
+    register_job_starter,
 )
+
+# Job types that share the same queue
+EVAL_JOB_TYPES = ["stt-eval", "tts-eval"]
+
+
+def _start_stt_job_from_queue(job: dict) -> bool:
+    """Start an STT evaluation job from the queue.
+
+    This is called by the job queue manager when there's capacity to run a new job.
+    """
+    job_id = job["uuid"]
+    details = job.get("details", {})
+
+    # Reconstruct request from job details
+    request = STTEvaluationRequest(
+        audio_paths=details.get("audio_paths", []),
+        texts=details.get("texts", []),
+        providers=details.get("providers", []),
+        language=details.get("language", ""),
+    )
+    s3_bucket = details.get("s3_bucket", "")
+
+    # Start background task in a separate thread
+    thread = threading.Thread(
+        target=run_evaluation_task,
+        args=(job_id, request, s3_bucket),
+        daemon=True,
+    )
+    thread.start()
+
+    return True
+
+
+# Register the job starter for STT evaluation jobs
+register_job_starter("stt-eval", _start_stt_job_from_queue)
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +207,7 @@ def run_evaluation_task(
     s3_bucket: str,
 ):
     """Run the STT evaluation in the background."""
+    provider_ports = {}  # Track reserved ports for cleanup
     try:
         logger.info(
             f"Running evaluation task {task_id} with {len(request.providers)} providers"
@@ -249,11 +289,10 @@ def run_evaluation_task(
                 output_dir = temp_path / "output"
                 output_dir.mkdir()
 
-                # Find available ports for each provider
-                provider_ports = {}
+                # Reserve ports for each provider
                 start_port = 8000
                 for provider in request.providers:
-                    port = find_available_port(start_port)
+                    port = reserve_port(f"{task_id}_{provider}", start_port)
                     provider_ports[provider] = port
                     start_port = port + 1
 
@@ -403,11 +442,12 @@ def run_evaluation_task(
                                 except Exception as e:
                                     traceback.print_exc()
                                     # If reading xlsx fails, continue without summary
-                                    pass
+                                    raise e
 
                 except subprocess.CalledProcessError as e:
-                    # Leaderboard failure is not critical, continue
-                    pass
+                    # Leaderboard failure is critical too
+                    traceback.print_exc()
+                    raise e
 
                 # Update job with results
                 update_job(
@@ -437,6 +477,13 @@ def run_evaluation_task(
             status=TaskStatus.DONE.value,
             results={"error": f"Task failed: {str(e)}"},
         )
+    finally:
+        # Release all reserved ports
+        for port in provider_ports.values():
+            release_port(port)
+
+        # Try to start the next queued job
+        try_start_queued_job(EVAL_JOB_TYPES)
 
 
 @router.post("/evaluate", response_model=TaskCreateResponse)
@@ -465,10 +512,16 @@ async def evaluate_stt(request: STTEvaluationRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Check if we can start immediately or need to queue
+    can_start = can_start_job(EVAL_JOB_TYPES)
+    initial_status = (
+        TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+    )
+
     # Create job in database with details for recovery
     job_id = create_job(
         job_type="stt-eval",
-        status=TaskStatus.IN_PROGRESS.value,
+        status=initial_status,
         details={
             "audio_paths": request.audio_paths,
             "texts": request.texts,
@@ -479,15 +532,19 @@ async def evaluate_stt(request: STTEvaluationRequest):
         results=None,
     )
 
-    # Start background task in a separate thread
-    thread = threading.Thread(
-        target=run_evaluation_task,
-        args=(job_id, request, s3_bucket),
-        daemon=True,
-    )
-    thread.start()
+    if can_start:
+        # Start background task in a separate thread
+        thread = threading.Thread(
+            target=run_evaluation_task,
+            args=(job_id, request, s3_bucket),
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"Started STT evaluation job {job_id} immediately")
+    else:
+        logger.info(f"Queued STT evaluation job {job_id}")
 
-    return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)
+    return TaskCreateResponse(task_id=job_id, status=initial_status)
 
 
 @router.get("/evaluate/{task_id}", response_model=TaskStatusResponse)

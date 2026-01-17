@@ -1,5 +1,5 @@
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from db import (
@@ -9,6 +9,7 @@ from db import (
     update_scenario,
     delete_scenario,
 )
+from auth_utils import get_current_user_id
 
 
 router = APIRouter(prefix="/scenarios", tags=["scenarios"])
@@ -38,37 +39,55 @@ class ScenarioCreateResponse(BaseModel):
 
 
 @router.post("", response_model=ScenarioCreateResponse)
-async def create_scenario_endpoint(scenario: ScenarioCreate):
+async def create_scenario_endpoint(
+    scenario: ScenarioCreate, user_id: str = Depends(get_current_user_id)
+):
     """Create a new scenario."""
     scenario_uuid = create_scenario(
         name=scenario.name,
         description=scenario.description,
+        user_id=user_id,
     )
-    return ScenarioCreateResponse(uuid=scenario_uuid, message="Scenario created successfully")
+    return ScenarioCreateResponse(
+        uuid=scenario_uuid, message="Scenario created successfully"
+    )
 
 
 @router.get("", response_model=List[ScenarioResponse])
-async def list_scenarios():
-    """List all scenarios."""
-    scenarios = get_all_scenarios()
+async def list_scenarios(user_id: str = Depends(get_current_user_id)):
+    """List all scenarios for the authenticated user."""
+    scenarios = get_all_scenarios(user_id=user_id)
     return scenarios
 
 
 @router.get("/{scenario_uuid}", response_model=ScenarioResponse)
-async def get_scenario_endpoint(scenario_uuid: str):
+async def get_scenario_endpoint(
+    scenario_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Get a scenario by UUID."""
     scenario = get_scenario(scenario_uuid)
     if not scenario:
         raise HTTPException(status_code=404, detail="Scenario not found")
+    # Verify user owns this scenario
+    if scenario.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
     return scenario
 
 
 @router.put("/{scenario_uuid}", response_model=ScenarioResponse)
-async def update_scenario_endpoint(scenario_uuid: str, scenario: ScenarioUpdate):
+async def update_scenario_endpoint(
+    scenario_uuid: str,
+    scenario: ScenarioUpdate,
+    user_id: str = Depends(get_current_user_id),
+):
     """Update a scenario."""
     existing_scenario = get_scenario(scenario_uuid)
     if not existing_scenario:
         raise HTTPException(status_code=404, detail="Scenario not found")
+
+    # Verify user owns this scenario
+    if existing_scenario.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     updated = update_scenario(
         scenario_uuid=scenario_uuid,
@@ -84,8 +103,17 @@ async def update_scenario_endpoint(scenario_uuid: str, scenario: ScenarioUpdate)
 
 
 @router.delete("/{scenario_uuid}")
-async def delete_scenario_endpoint(scenario_uuid: str):
+async def delete_scenario_endpoint(
+    scenario_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Delete a scenario."""
+    # Check if scenario exists and user owns it
+    existing_scenario = get_scenario(scenario_uuid)
+    if not existing_scenario:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    if existing_scenario.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     deleted = delete_scenario(scenario_uuid)
     if not deleted:
         raise HTTPException(status_code=404, detail="Scenario not found")

@@ -6,9 +6,8 @@
 
 _**User (2026-01-15 05:41Z)**_
 
-read the whole codebase and update @.cursor/rules/architecture.md 
-with the details around what the project does, the different choices that have been made 
-
+read the whole codebase and update @.cursor/rules/architecture.md
+with the details around what the project does, the different choices that have been made
 
 ---
 
@@ -228,12 +227,14 @@ Let me also read the agent_tools and users routers:
 Now I have a complete understanding of the codebase. Let me create a comprehensive architecture documentation file.
 
 The project is a FastAPI backend called "pense-backend" that serves as a backend for:
+
 1. Agent testing/evaluation platform
 2. Speech-to-Text (STT) evaluation
 3. Text-to-Speech (TTS) evaluation
 4. Voice/Chat agent simulations with personas and scenarios
 
 Key components:
+
 1. FastAPI application with multiple routers
 2. SQLite database with soft-delete pattern
 3. AWS S3 integration for file storage
@@ -263,24 +264,24 @@ Lines added: 457, lines removed: 1
 + description: "Pense Backend Architecture - AI Agent Testing &amp; Evaluation Platform"
   alwaysApply: true
   ---
-+ 
++
 + # Pense Backend Architecture
-+ 
++
 + ## Project Overview
-+ 
++
 + **Pense Backend** is a FastAPI-based REST API that serves as the backend for an AI agent testing and evaluation platform. It provides capabilities for:
-+ 
++
 + 1. **Speech-to-Text (STT) Evaluation** - Benchmark multiple STT providers against ground truth transcriptions
 + 2. **Text-to-Speech (TTS) Evaluation** - Benchmark multiple TTS providers for quality metrics
 + 3. **LLM Agent Testing** - Run unit tests and benchmarks on LLM-based agents
 + 4. **Voice/Chat Simulations** - Run simulated conversations between AI agents and personas across various scenarios
-+ 
++
 + The backend wraps the &#96;pense&#96; CLI tool and orchestrates evaluation jobs while providing a RESTful API interface.
-+ 
++
 + ---
-+ 
++
 + ## Technology Stack
-+ 
++
 + | Component | Technology | Purpose |
 + |-----------|------------|---------|
 + | **Framework** | FastAPI | Async REST API framework |
@@ -290,11 +291,11 @@ Lines added: 457, lines removed: 1
 + | **Package Manager** | uv | Python dependency management |
 + | **Containerization** | Docker | Deployment |
 + | **CLI Tool** | pense | Core evaluation/simulation engine |
-+ 
++
 + ---
-+ 
++
 + ## Project Structure
-+ 
++
 + &#96;&#96;&#96;
 + pense-backend/
 + ├── src/
@@ -322,13 +323,13 @@ Lines added: 457, lines removed: 1
 + ├── Dockerfile               # Container build configuration
 + └── docker-compose.yml       # Container orchestration
 + &#96;&#96;&#96;
-+ 
++
 + ---
-+ 
++
 + ## Database Schema
-+ 
++
 + ### Entity Relationship
-+ 
++
 + &#96;&#96;&#96;
 + users
 +   ├── agents (user_id FK)
@@ -338,22 +339,22 @@ Lines added: 457, lines removed: 1
 +   ├── scenarios (user_id FK)
 +   ├── metrics (user_id FK)
 +   └── simulations (user_id FK)
-+ 
++
 + agents
 +   ├── agent_tools (many-to-many with tools)
 +   ├── agent_tests (many-to-many with tests)
 +   ├── agent_test_jobs
 +   └── simulations (agent_id FK)
-+ 
++
 + simulations
 +   ├── simulation_personas (many-to-many with personas)
 +   ├── simulation_scenarios (many-to-many with scenarios)
 +   ├── simulation_metrics (many-to-many with metrics)
 +   └── simulation_jobs
 + &#96;&#96;&#96;
-+ 
++
 + ### Core Tables
-+ 
++
 + | Table | Purpose |
 + |-------|---------|
 + | &#96;users&#96; | User accounts (Google OAuth) |
@@ -367,30 +368,30 @@ Lines added: 457, lines removed: 1
 + | &#96;jobs&#96; | Generic STT/TTS evaluation jobs |
 + | &#96;agent_test_jobs&#96; | LLM unit test and benchmark jobs |
 + | &#96;simulation_jobs&#96; | Chat/voice simulation jobs |
-+ 
++
 + ### Design Patterns
-+ 
++
 + 1. **Soft Deletes**: All entity tables use &#96;deleted_at&#96; timestamp for soft deletion
 + 2. **UUIDs**: All entities use UUID as primary identifier (separate from auto-increment id)
 + 3. **JSON Config**: Complex configurations stored as JSON strings in &#96;config&#96; columns
 + 4. **Pivot Tables**: Many-to-many relationships use dedicated pivot tables with soft delete support
-+ 
++
 + ---
-+ 
++
 + ## API Architecture
-+ 
++
 + ### Router Organization
-+ 
++
 + Each router follows a consistent pattern:
 + - Pydantic models for request/response validation
 + - CRUD endpoints following REST conventions
 + - Background job execution for long-running tasks
-+ 
++
 + ### API Endpoints
-+ 
++
 + #### Authentication
 + - &#96;POST /auth/google&#96; - Google OAuth login
-+ 
++
 + #### Entity Management (CRUD)
 + - &#96;/agents&#96; - Agent management
 + - &#96;/tools&#96; - Tool definitions
@@ -400,11 +401,11 @@ Lines added: 457, lines removed: 1
 + - &#96;/metrics&#96; - Evaluation metrics
 + - &#96;/simulations&#96; - Simulation configurations
 + - &#96;/users&#96; - User management (read-only)
-+ 
++
 + #### Relationship Management
 + - &#96;/agent-tools&#96; - Link/unlink tools to agents
 + - &#96;/agent-tests&#96; - Link/unlink tests to agents
-+ 
++
 + #### Evaluation &amp; Testing
 + - &#96;POST /stt/evaluate&#96; - Start STT evaluation task
 + - &#96;GET /stt/evaluate/{task_id}&#96; - Get STT evaluation status
@@ -414,22 +415,22 @@ Lines added: 457, lines removed: 1
 + - &#96;POST /agent-tests/agent/{uuid}/benchmark&#96; - Run multi-model benchmark
 + - &#96;GET /agent-tests/run/{task_id}&#96; - Get test run status
 + - &#96;GET /agent-tests/benchmark/{task_id}&#96; - Get benchmark status
-+ 
++
 + #### Simulations
 + - &#96;POST /simulations/{uuid}/run&#96; - Start simulation (chat or voice)
 + - &#96;GET /simulations/run/{task_id}&#96; - Get simulation run status
 + - &#96;GET /simulations/{uuid}/runs&#96; - List all runs for a simulation
-+ 
++
 + #### Utilities
 + - &#96;GET /&#96; - Health check
 + - &#96;POST /presigned-url&#96; - Generate S3 presigned URL for uploads
-+ 
++
 + ---
-+ 
++
 + ## Background Job System
-+ 
++
 + ### Job Types
-+ 
++
 + | Job Type | Table | Description |
 + |----------|-------|-------------|
 + | &#96;stt-eval&#96; | &#96;jobs&#96; | STT provider evaluation |
@@ -438,87 +439,87 @@ Lines added: 457, lines removed: 1
 + | &#96;llm-benchmark&#96; | &#96;agent_test_jobs&#96; | Multi-model benchmarking |
 + | &#96;chat&#96; | &#96;simulation_jobs&#96; | Chat-based simulation |
 + | &#96;voice&#96; | &#96;simulation_jobs&#96; | Voice-based simulation |
-+ 
++
 + ### Job Lifecycle
-+ 
++
 + 1. **Creation**: Job created with &#96;in_progress&#96; status and &#96;details&#96; JSON containing recovery info
 + 2. **Execution**: Background thread runs the task
 + 3. **Completion**: Job updated with &#96;done&#96; status and &#96;results&#96; JSON
 + 4. **Recovery**: On app startup, &#96;job_recovery.py&#96; restarts any &#96;in_progress&#96; jobs
-+ 
++
 + ### Job Status Values
 + - &#96;in_progress&#96; - Job is running
 + - &#96;done&#96; - Job completed (check &#96;results.error&#96; for failure)
 + - &#96;cancelled&#96; - Job was cancelled (not currently used)
-+ 
++
 + ---
-+ 
++
 + ## External Integrations
-+ 
++
 + ### Pense CLI
-+ 
++
 + The backend orchestrates the &#96;pense&#96; CLI tool for actual evaluations:
-+ 
++
 + &#96;&#96;&#96;bash
 + # STT Evaluation
 + pense stt eval -p &lt;provider&gt; -l &lt;language&gt; -i &lt;input_dir&gt; -o &lt;output_dir&gt;
 + pense stt leaderboard -o &lt;output_dir&gt; -s &lt;summary_dir&gt;
-+ 
++
 + # TTS Evaluation
 + pense tts eval -p &lt;provider&gt; -l &lt;language&gt; -i &lt;input_csv&gt; -o &lt;output_dir&gt;
 + pense tts leaderboard -o &lt;output_dir&gt; -s &lt;summary_dir&gt;
-+ 
++
 + # LLM Tests
 + pense llm tests run -c &lt;config.json&gt; -o &lt;output_dir&gt; -m &lt;model&gt;
 + pense llm tests leaderboard -o &lt;output_dir&gt; -s &lt;summary_dir&gt;
-+ 
++
 + # LLM Simulations
 + pense llm simulations run -c &lt;config.json&gt; -o &lt;output_dir&gt; -m &lt;model&gt;
-+ 
++
 + # Voice Agent Simulation
 + pense agent simulation -c &lt;config.json&gt; -o &lt;output_dir&gt;
 + &#96;&#96;&#96;
-+ 
++
 + ### AWS S3
-+ 
++
 + Used for:
 + - Storing input audio files (STT evaluation)
 + - Storing generated audio files (TTS evaluation, voice simulations)
 + - Storing evaluation results (JSON, CSV, Excel files)
 + - Presigned URLs for secure file access
-+ 
++
 + Required environment variables:
 + - &#96;S3_OUTPUT_BUCKET&#96; - Target bucket for outputs
 + - &#96;AWS_ACCESS_KEY_ID&#96; / &#96;AWS_SECRET_ACCESS_KEY&#96; (optional, falls back to IAM role)
 + - &#96;AWS_REGION&#96; - Default: &#96;ap-south-1&#96;
-+ 
++
 + ### Supported Providers
-+ 
++
 + **STT Providers**: deepgram, openai, sarvam, google, etc.
-+ 
++
 + **TTS Providers**: smallest, cartesia, openai, google, elevenlabs, etc.
-+ 
++
 + **LLM Providers**: OpenAI, Groq, OpenRouter, Google (via respective API keys)
-+ 
++
 + ---
-+ 
++
 + ## Configuration
-+ 
++
 + ### Environment Variables
-+ 
++
 + &#96;&#96;&#96;bash
 + # Database
 + DB_ROOT_DIR=/appdata/db          # Directory containing pense.db
-+ 
++
 + # AWS
 + S3_OUTPUT_BUCKET=your-bucket
 + AWS_ACCESS_KEY_ID=xxx
 + AWS_SECRET_ACCESS_KEY=xxx
 + AWS_REGION=ap-south-1
-+ 
++
 + # Authentication
 + GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
-+ 
++
 + # Provider API Keys
 + OPENAI_API_KEY=xxx
 + DEEPGRAM_API_KEY=xxx
@@ -531,9 +532,9 @@ Lines added: 457, lines removed: 1
 + ELEVENLABS_API_KEY=xxx
 + OPENROUTER_API_KEY=xxx
 + &#96;&#96;&#96;
-+ 
++
 + ### Agent Configuration Schema
-+ 
++
 + &#96;&#96;&#96;json
 + {
 +   "system_prompt": "You are a helpful assistant...",
@@ -552,9 +553,9 @@ Lines added: 457, lines removed: 1
 +   "speaks_first": true
 + }
 + &#96;&#96;&#96;
-+ 
++
 + ### Test Case Configuration Schema
-+ 
++
 + &#96;&#96;&#96;json
 + {
 +   "input": "What's the weather in Mumbai?",
@@ -570,9 +571,9 @@ Lines added: 457, lines removed: 1
 +   }
 + }
 + &#96;&#96;&#96;
-+ 
++
 + ### Persona Configuration Schema
-+ 
++
 + &#96;&#96;&#96;json
 + {
 +   "gender": "female",
@@ -580,43 +581,43 @@ Lines added: 457, lines removed: 1
 +   "interruption_sensitivity": "medium"
 + }
 + &#96;&#96;&#96;
-+ 
++
 + ---
-+ 
++
 + ## Key Design Decisions
-+ 
++
 + ### 1. SQLite over PostgreSQL
 + - **Rationale**: Simpler deployment, no external database service needed
 + - **Trade-off**: Single-writer limitation, not horizontally scalable
 + - **Mitigation**: Using connection context manager for proper cleanup
-+ 
++
 + ### 2. Threading over Async Tasks
 + - **Rationale**: Long-running subprocess calls to &#96;pense&#96; CLI
 + - **Implementation**: Python &#96;threading.Thread&#96; with &#96;daemon=True&#96;
 + - **Recovery**: Job details stored in DB, recovered on app restart
-+ 
++
 + ### 3. Soft Deletes
 + - **Rationale**: Data preservation, audit trail, easy recovery
 + - **Implementation**: &#96;deleted_at&#96; timestamp, queries filter &#96;deleted_at IS NULL&#96;
-+ 
++
 + ### 4. JSON Configuration Columns
 + - **Rationale**: Flexible schemas for agent/tool/test configs
 + - **Trade-off**: No database-level validation
 + - **Mitigation**: Pydantic validation at API layer
-+ 
++
 + ### 5. Presigned URLs for S3
 + - **Rationale**: Secure, time-limited access without exposing credentials
 + - **Implementation**: 1-hour expiration for generated URLs
-+ 
++
 + ### 6. Background Job Pattern
 + - **Rationale**: STT/TTS/LLM evaluations are long-running (minutes)
 + - **Pattern**: Create job → Return task_id → Poll for status
 + - **Recovery**: Jobs with &#96;in_progress&#96; status restarted on app boot
-+ 
++
 + ---
-+ 
++
 + ## Dependencies
-+ 
++
 + Key Python packages:
 + - &#96;fastapi&gt;=0.127.0&#96; - Web framework
 + - &#96;uvicorn&gt;=0.40.0&#96; - ASGI server
@@ -625,45 +626,45 @@ Lines added: 457, lines removed: 1
 + - &#96;python-dotenv&gt;=1.0.0&#96; - Environment variable loading
 + - &#96;openpyxl&gt;=3.1.5&#96; - Excel file parsing for leaderboards
 + - &#96;httpx&#96; - Async HTTP client for Google OAuth
-+ 
++
 + External:
 + - &#96;pense&#96; CLI (installed via wheel file: &#96;pense-0.1.0-py3-none-any.whl&#96;)
 + - &#96;ffmpeg&#96; - Audio format conversion
-+ 
++
 + ---
-+ 
++
 + ## Deployment
-+ 
++
 + ### Docker Build
-+ 
++
 + &#96;&#96;&#96;bash
 + docker build -t pense-backend .
 + &#96;&#96;&#96;
-+ 
++
 + ### Docker Compose
-+ 
++
 + &#96;&#96;&#96;bash
 + docker-compose up -d
 + &#96;&#96;&#96;
-+ 
++
 + The container:
 + - Exposes port 8000
 + - Mounts &#96;/appdata&#96; volume for database and credentials
 + - Requires environment variables via &#96;.env&#96; file or docker-compose
-+ 
++
 + ### Development
-+ 
++
 + &#96;&#96;&#96;bash
 + cd src
 + uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 + &#96;&#96;&#96;
-+ 
++
 + ---
-+ 
++
 + ## Common Patterns in Codebase
-+ 
++
 + ### Database Function Pattern
-+ 
++
 + &#96;&#96;&#96;python
 + def get_entity(uuid: str) -&gt; Optional[Dict[str, Any]]:
 +     with get_db_connection() as conn:
@@ -677,9 +678,9 @@ Lines added: 457, lines removed: 1
 +             return _parse_entity_row(row)
 +         return None
 + &#96;&#96;&#96;
-+ 
++
 + ### Router Endpoint Pattern
-+ 
++
 + &#96;&#96;&#96;python
 + @router.get("/{uuid}", response_model=EntityResponse)
 + async def get_entity_endpoint(uuid: str):
@@ -688,9 +689,9 @@ Lines added: 457, lines removed: 1
 +         raise HTTPException(status_code=404, detail="Entity not found")
 +     return entity
 + &#96;&#96;&#96;
-+ 
++
 + ### Background Task Pattern
-+ 
++
 + &#96;&#96;&#96;python
 + @router.post("/run", response_model=TaskCreateResponse)
 + async def start_task(request: TaskRequest):
@@ -699,27 +700,27 @@ Lines added: 457, lines removed: 1
 +         status=TaskStatus.IN_PROGRESS.value,
 +         details={"param": value, "s3_bucket": bucket},
 +     )
-+     
++
 +     thread = threading.Thread(
 +         target=run_task,
 +         args=(job_id, request, s3_bucket),
 +         daemon=True,
 +     )
 +     thread.start()
-+     
++
 +     return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)
 + &#96;&#96;&#96;
-+ 
++
 + ---
-+ 
++
 + ## Future Considerations
-+ 
++
 + 1. **Scalability**: Consider PostgreSQL + Redis for multi-instance deployment
 + 2. **Task Queue**: Consider Celery/RQ for more robust job management
 + 3. **Caching**: Add Redis caching for frequently accessed data
 + 4. **Rate Limiting**: Add rate limiting for API protection
 + 5. **Pagination**: Implement pagination for list endpoints as data grows
-  
+
 ```
 
 </details>
@@ -754,6 +755,7 @@ I've updated the `architecture.md` file with comprehensive documentation about t
 8. **Configuration** - Environment variables, agent config schema, test case schema, persona config schema
 
 9. **Key Design Decisions** - Rationale for:
+
    - SQLite over PostgreSQL
    - Threading over async tasks
    - Soft deletes
@@ -794,6 +796,7 @@ The user wants to add support for configuring CORS allowed origins via environme
 
 <think><details><summary>Thought Process</summary>
 Now I'll update the CORS configuration to read allowed origins from an environment variable. The pattern will be:
+
 - Read `CORS_ALLOWED_ORIGINS` env var
 - If set, split by comma to get list of origins
 - If not set, default to `["*"]` for backwards compatibility</details></think>
@@ -811,13 +814,13 @@ Lines added: 7, lines removed: 1
 @@ -66,8 +66,14 @@
   app.include_router(metrics_router)
   app.include_router(simulations_router)
-+ 
++
 + # Configure CORS allowed origins from environment variable
 + # CORS_ALLOWED_ORIGINS can be comma-separated list (e.g., "http://localhost:3000,https://app.example.com")
 + # Defaults to ["*"] if not set
 + cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "*")
 + cors_allowed_origins = [origin.strip() for origin in cors_origins_env.split(",")]
-  
+
   app.add_middleware(
       CORSMiddleware,
 -     allow_origins=["*"],  # Allow all origins
@@ -865,10 +868,10 @@ Lines added: 3, lines removed: undefined
 @@ -259,4 +259,7 @@
   # Database
   DB_ROOT_DIR=/appdata/db          # Directory containing pense.db
-+ 
++
 + # CORS
 + CORS_ALLOWED_ORIGINS=*           # Comma-separated origins (e.g., "http://localhost:3000,https://app.example.com")
-  
+
   # AWS
 ```
 
@@ -913,6 +916,7 @@ Done! Let me verify the changes were applied correctly by reading the modified f
 Done! I've added CORS allowed origins configuration via environment variables. Here's what changed:
 
 ### `src/main.py`
+
 ```python
 # Configure CORS allowed origins from environment variable
 # CORS_ALLOWED_ORIGINS can be comma-separated list (e.g., "http://localhost:3000,https://app.example.com")
@@ -943,6 +947,7 @@ CORS_ALLOWED_ORIGINS=http://localhost:3000,https://app.example.com,https://admin
 ```
 
 ### Updates Made
+
 1. **`src/main.py`** - Added environment variable parsing for CORS origins
 2. **`docker-compose.yml`** - Added `CORS_ALLOWED_ORIGINS` with default value `*`
 3. **`.cursor/rules/architecture.md`** - Documented the new environment variable
@@ -961,6 +966,7 @@ _**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
 
 <think><details><summary>Thought Process</summary>
 The user wants me to:
+
 1. Create a default user when the users table is created (email: amandalmia18@gmail.com, first name: Aman, last name: Dalmia)
 2. Update all existing rows in tables with user_id to set them to this default user's UUID
 3. Make user_id mandatory for all future rows in those tables
@@ -979,12 +985,14 @@ Let me first read the db.py file to understand the current schema and then make 
 
 <think><details><summary>Thought Process</summary>
 Now I need to:
+
 1. Add a default user constant
 2. Create the default user when the users table is created (during init_db)
 3. Update all existing rows in tables with user_id to use this default user's UUID
 4. Make user_id mandatory in all create functions (remove Optional, raise error if not provided)
 
 The tables that have user_id are:
+
 - agents
 - tools
 - tests
@@ -998,6 +1006,7 @@ Let me update the db.py file.</details></think>
 ---
 
 I'll update `db.py` to:
+
 1. Create a default user during initialization
 2. Update existing rows with NULL user_id to use the default user
 3. Make user_id mandatory for all future creates
@@ -1015,13 +1024,13 @@ Lines added: 5, lines removed: undefined
 @@ -14,4 +14,9 @@
   # Database path
   DB_PATH = Path(join(os.getenv("DB_ROOT_DIR"), "pense.db"))
-+ 
++
 + # Default user configuration
 + DEFAULT_USER_EMAIL = "amandalmia18@gmail.com"
 + DEFAULT_USER_FIRST_NAME = "Aman"
 + DEFAULT_USER_LAST_NAME = "Dalmia"
-  
-  
+
+
 ```
 
 </details>
@@ -1045,15 +1054,15 @@ Lines added: 34, lines removed: undefined
 ```diff
 @@ -347,4 +347,38 @@
                   pass
-  
+
 +         conn.commit()
-+ 
++
 +         # Create default user if not exists and update existing rows with NULL user_id
 +         cursor.execute(
 +             "SELECT uuid FROM users WHERE email = ?", (DEFAULT_USER_EMAIL,)
 +         )
 +         default_user_row = cursor.fetchone()
-+ 
++
 +         if default_user_row:
 +             default_user_uuid = default_user_row["uuid"]
 +             logger.info(f"Default user already exists with UUID: {default_user_uuid}")
@@ -1069,7 +1078,7 @@ Lines added: 34, lines removed: undefined
 +             )
 +             conn.commit()
 +             logger.info(f"Created default user with UUID: {default_user_uuid}")
-+ 
++
 +         # Update all existing rows with NULL user_id to use the default user
 +         for table in tables_with_user_id:
 +             cursor.execute(
@@ -1079,7 +1088,7 @@ Lines added: 34, lines removed: undefined
 +             rows_updated = cursor.rowcount
 +             if rows_updated &gt; 0:
 +                 logger.info(f"Updated {rows_updated} row(s) in {table} with default user_id")
-+ 
++
           conn.commit()
           logger.info("Database initialized successfully")
 ```
@@ -1092,6 +1101,7 @@ Lines added: 34, lines removed: undefined
 
 <think><details><summary>Thought Process</summary>
 Now I need to make user_id mandatory for all create functions. Let me update each create function:
+
 1. create_agent
 2. create_tool
 3. create_test
@@ -1117,19 +1127,19 @@ Lines added: 13, lines removed: 2
 
 ```diff
 @@ -513,7 +513,18 @@
-  
+
   def create_agent(
 -     name: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None
 +     name: str, config: Optional[Dict[str, Any]] = None, user_id: str = None
   ) -&gt; str:
 -     """Create a new agent and return its UUID."""
 +     """Create a new agent and return its UUID.
-+     
++
 +     Args:
 +         name: Name of the agent
 +         config: Optional configuration dict
 +         user_id: UUID of the user creating this agent (required)
-+     
++
 +     Raises:
 +         ValueError: If user_id is not provided
 +     """
@@ -1166,13 +1176,13 @@ Lines added: 14, lines removed: 2
   ) -&gt; str:
 -     """Create a new tool and return its UUID."""
 +     """Create a new tool and return its UUID.
-+     
++
 +     Args:
 +         name: Name of the tool
 +         description: Description of the tool
 +         config: Optional configuration dict
 +         user_id: UUID of the user creating this tool (required)
-+     
++
 +     Raises:
 +         ValueError: If user_id is not provided
 +     """
@@ -1209,13 +1219,13 @@ Lines added: 14, lines removed: 2
   ) -&gt; str:
 -     """Create a new test and return its UUID."""
 +     """Create a new test and return its UUID.
-+     
++
 +     Args:
 +         name: Name of the test
 +         type: Type of the test
 +         config: Optional configuration dict
 +         user_id: UUID of the user creating this test (required)
-+     
++
 +     Raises:
 +         ValueError: If user_id is not provided
 +     """
@@ -1252,13 +1262,13 @@ Lines added: 14, lines removed: 2
   ) -&gt; str:
 -     """Create a new persona and return its UUID."""
 +     """Create a new persona and return its UUID.
-+     
++
 +     Args:
 +         name: Name of the persona
 +         description: Optional description
 +         config: Optional configuration dict
 +         user_id: UUID of the user creating this persona (required)
-+     
++
 +     Raises:
 +         ValueError: If user_id is not provided
 +     """
@@ -1295,12 +1305,12 @@ Lines added: 13, lines removed: 2
   ) -&gt; str:
 -     """Create a new scenario and return its UUID."""
 +     """Create a new scenario and return its UUID.
-+     
++
 +     Args:
 +         name: Name of the scenario
 +         description: Optional description
 +         user_id: UUID of the user creating this scenario (required)
-+     
++
 +     Raises:
 +         ValueError: If user_id is not provided
 +     """
@@ -1337,13 +1347,13 @@ Lines added: 14, lines removed: 2
   ) -&gt; str:
 -     """Create a new metric and return its UUID."""
 +     """Create a new metric and return its UUID.
-+     
++
 +     Args:
 +         name: Name of the metric
 +         description: Optional description
 +         config: Optional configuration dict
 +         user_id: UUID of the user creating this metric (required)
-+     
++
 +     Raises:
 +         ValueError: If user_id is not provided
 +     """
@@ -1373,19 +1383,19 @@ Lines added: 13, lines removed: 2
 
 ```diff
 @@ -1434,7 +1434,18 @@
-  
+
   def create_simulation(
 -     name: str, agent_id: Optional[str] = None, user_id: Optional[str] = None
 +     name: str, agent_id: Optional[str] = None, user_id: str = None
   ) -&gt; str:
 -     """Create a new simulation and return its UUID."""
 +     """Create a new simulation and return its UUID.
-+     
++
 +     Args:
 +         name: Name of the simulation
 +         agent_id: Optional UUID of the linked agent
 +         user_id: UUID of the user creating this simulation (required)
-+     
++
 +     Raises:
 +         ValueError: If user_id is not provided
 +     """
@@ -1403,6 +1413,7 @@ Lines added: 13, lines removed: 2
 
 <think><details><summary>Thought Process</summary>
 Now I need to update the routers to require user_id in the API requests. Let me check the routers and update them to make user_id required.The routers affected are:
+
 - agents.py- tools.py- tests.py- personas.py- scenarios.py- metrics.py- simulations.py
 
 I also need to update the duplicate_metric endpoint in metrics.py since it calls create_metric without user_id.
@@ -1425,6 +1436,7 @@ Now I need to update the routers to make `user_id` required. Let me update each 
 
 <think><details><summary>Thought Process</summary>
 I need to update the agents router to:
+
 1. Make user_id required in AgentCreate
 2. Add user_id to AgentDuplicateRequest and pass it to create_agent in the duplicate endpoint</details></think>
 
@@ -1443,8 +1455,8 @@ Lines added: 1, lines removed: 1
       config: Optional[Dict[str, Any]] = None
 -     user_id: Optional[str] = None
 +     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -1470,8 +1482,8 @@ Lines added: 1, lines removed: undefined
   class AgentDuplicateRequest(BaseModel):
       name: str
 +     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -1498,7 +1510,7 @@ Lines added: 1, lines removed: undefined
           config=new_config,
 +         user_id=request.user_id,
       )
-  
+
 ```
 
 </details>
@@ -1542,8 +1554,8 @@ Lines added: 1, lines removed: 1
       config: Optional[Dict[str, Any]] = None
 -     user_id: Optional[str] = None
 +     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -1583,8 +1595,8 @@ Lines added: 1, lines removed: 1
       config: Optional[Dict[str, Any]] = None
 -     user_id: Optional[str] = None
 +     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -1624,8 +1636,8 @@ Lines added: 1, lines removed: 1
       config: Optional[Dict[str, Any]] = None
 -     user_id: Optional[str] = None
 +     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -1665,8 +1677,8 @@ Lines added: 1, lines removed: 1
       description: Optional[str] = None
 -     user_id: Optional[str] = None
 +     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -1706,8 +1718,8 @@ Lines added: 1, lines removed: 1
       config: Optional[Dict[str, Any]] = None
 -     user_id: Optional[str] = None
 +     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -1733,8 +1745,8 @@ Lines added: 1, lines removed: undefined
   class MetricDuplicateRequest(BaseModel):
       name: str
 +     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -1805,8 +1817,8 @@ Lines added: 1, lines removed: 1
       metric_uuids: Optional[List[str]] = None
 -     user_id: Optional[str] = None
 +     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -1843,14 +1855,12 @@ Lint results
 
 Lint errors for `src/routers/simulations.py`
 
-
-| Message | Range | Severity |
-|-------|-------|----------|
-| Variable "results_data" is not accessed | 802:5-802:17 | DIAGNOSTIC_SEVERITY_HINT |
+| Message                                 | Range         | Severity                 |
+| --------------------------------------- | ------------- | ------------------------ |
+| Variable "results_data" is not accessed | 802:5-802:17  | DIAGNOSTIC_SEVERITY_HINT |
 | Variable "results_data" is not accessed | 819:13-819:25 | DIAGNOSTIC_SEVERITY_HINT |
-| Variable "results_data" is not accessed | 965:5-965:17 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "results_data" is not accessed | 965:5-965:17  | DIAGNOSTIC_SEVERITY_HINT |
 | Variable "results_data" is not accessed | 982:13-982:25 | DIAGNOSTIC_SEVERITY_HINT |
-
 
 </details>
 </tool-use>
@@ -1863,10 +1873,12 @@ All changes are done. Let me summarize what I did:
 1. Added a default user configuration (email: amandalmia18@gmail.com, first_name: Aman, last_name: Dalmia)
 
 2. In init_db():
+
    - Create the default user if it doesn't exist
    - Update all existing rows in tables with user_id=NULL to use the default user's UUID
 
 3. Made user_id mandatory in all create functions in db.py:
+
    - create_agent
    - create_tool
    - create_test
@@ -1874,7 +1886,7 @@ All changes are done. Let me summarize what I did:
    - create_scenario
    - create_metric
    - create_simulation
-   
+
    Each now raises a ValueError if user_id is not provided.
 
 4. Updated all routers to make user_id required in request models:
@@ -1891,7 +1903,9 @@ All changes are done. Let me summarize what I did:
 Done! Here's a summary of all the changes:
 
 ### 1. Default User Configuration (`db.py`)
+
 Added constants for the default user:
+
 ```python
 DEFAULT_USER_EMAIL = "amandalmia18@gmail.com"
 DEFAULT_USER_FIRST_NAME = "Aman"
@@ -1899,12 +1913,15 @@ DEFAULT_USER_LAST_NAME = "Dalmia"
 ```
 
 ### 2. Database Initialization (`db.py` - `init_db()`)
+
 - Creates the default user if it doesn't exist
 - Updates all existing rows with `NULL` user_id to use the default user's UUID
 - Tables affected: `agents`, `tools`, `tests`, `personas`, `scenarios`, `metrics`, `simulations`
 
 ### 3. Made `user_id` Mandatory in Create Functions (`db.py`)
+
 All create functions now require `user_id` and raise `ValueError` if not provided:
+
 - `create_agent()`
 - `create_tool()`
 - `create_test()`
@@ -1914,17 +1931,18 @@ All create functions now require `user_id` and raise `ValueError` if not provide
 - `create_simulation()`
 
 ### 4. Updated API Request Models (routers)
+
 Made `user_id` a required field in all create request models:
 
-| Router | Model(s) Updated |
-|--------|------------------|
-| `agents.py` | `AgentCreate`, `AgentDuplicateRequest` |
-| `tools.py` | `ToolCreate` |
-| `tests.py` | `TestCreate` |
-| `personas.py` | `PersonaCreate` |
-| `scenarios.py` | `ScenarioCreate` |
-| `metrics.py` | `MetricCreate`, `MetricDuplicateRequest` |
-| `simulations.py` | `SimulationCreate` |
+| Router           | Model(s) Updated                         |
+| ---------------- | ---------------------------------------- |
+| `agents.py`      | `AgentCreate`, `AgentDuplicateRequest`   |
+| `tools.py`       | `ToolCreate`                             |
+| `tests.py`       | `TestCreate`                             |
+| `personas.py`    | `PersonaCreate`                          |
+| `scenarios.py`   | `ScenarioCreate`                         |
+| `metrics.py`     | `MetricCreate`, `MetricDuplicateRequest` |
+| `simulations.py` | `SimulationCreate`                       |
 
 All API clients will now need to provide `user_id` when creating any of these entities. Existing data will be automatically migrated to the default user on the next app startup.
 
@@ -1950,6 +1968,7 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 ---
 
 ### **POST /agents** - Create Agent
+
 **File:** `src/routers/agents.py`
 
 ```diff
@@ -1963,6 +1982,7 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 ---
 
 ### **POST /agents/{agent_uuid}/duplicate** - Duplicate Agent
+
 **File:** `src/routers/agents.py`
 
 ```diff
@@ -1974,6 +1994,7 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 ---
 
 ### **POST /tools** - Create Tool
+
 **File:** `src/routers/tools.py`
 
 ```diff
@@ -1988,6 +2009,7 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 ---
 
 ### **POST /tests** - Create Test
+
 **File:** `src/routers/tests.py`
 
 ```diff
@@ -2002,6 +2024,7 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 ---
 
 ### **POST /personas** - Create Persona
+
 **File:** `src/routers/personas.py`
 
 ```diff
@@ -2016,6 +2039,7 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 ---
 
 ### **POST /scenarios** - Create Scenario
+
 **File:** `src/routers/scenarios.py`
 
 ```diff
@@ -2029,6 +2053,7 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 ---
 
 ### **POST /metrics** - Create Metric
+
 **File:** `src/routers/metrics.py`
 
 ```diff
@@ -2043,6 +2068,7 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 ---
 
 ### **POST /metrics/{metric_uuid}/duplicate** - Duplicate Metric
+
 **File:** `src/routers/metrics.py`
 
 ```diff
@@ -2054,6 +2080,7 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 ---
 
 ### **POST /simulations** - Create Simulation
+
 **File:** `src/routers/simulations.py`
 
 ```diff
@@ -2071,17 +2098,17 @@ Here are all the API endpoints that **now require `user_id`** in the request bod
 
 ## Quick Reference Table
 
-| HTTP Method | Endpoint | Request Body Field | Change |
-|-------------|----------|-------------------|--------|
-| `POST` | `/agents` | `user_id` | Optional → **Required** |
-| `POST` | `/agents/{uuid}/duplicate` | `user_id` | **NEW Required** |
-| `POST` | `/tools` | `user_id` | Optional → **Required** |
-| `POST` | `/tests` | `user_id` | Optional → **Required** |
-| `POST` | `/personas` | `user_id` | Optional → **Required** |
-| `POST` | `/scenarios` | `user_id` | Optional → **Required** |
-| `POST` | `/metrics` | `user_id` | Optional → **Required** |
-| `POST` | `/metrics/{uuid}/duplicate` | `user_id` | **NEW Required** |
-| `POST` | `/simulations` | `user_id` | Optional → **Required** |
+| HTTP Method | Endpoint                    | Request Body Field | Change                  |
+| ----------- | --------------------------- | ------------------ | ----------------------- |
+| `POST`      | `/agents`                   | `user_id`          | Optional → **Required** |
+| `POST`      | `/agents/{uuid}/duplicate`  | `user_id`          | **NEW Required**        |
+| `POST`      | `/tools`                    | `user_id`          | Optional → **Required** |
+| `POST`      | `/tests`                    | `user_id`          | Optional → **Required** |
+| `POST`      | `/personas`                 | `user_id`          | Optional → **Required** |
+| `POST`      | `/scenarios`                | `user_id`          | Optional → **Required** |
+| `POST`      | `/metrics`                  | `user_id`          | Optional → **Required** |
+| `POST`      | `/metrics/{uuid}/duplicate` | `user_id`          | **NEW Required**        |
+| `POST`      | `/simulations`              | `user_id`          | Optional → **Required** |
 
 ---
 
@@ -2117,7 +2144,7 @@ Yes! The auth API does return the user's UUID. Let me show the user exactly wher
 
 ---
 
-**Yes!** The authentication API **does return the user's UUID**. 
+**Yes!** The authentication API **does return the user's UUID**.
 
 ## Endpoint: `POST /auth/google`
 
@@ -2181,6 +2208,7 @@ When the frontend calls `POST /auth/google`, they get back:
 ---
 
 **Frontend flow:**
+
 1. Call `POST /auth/google` with Google ID token
 2. Store `response.user.uuid` (e.g., in localStorage or state)
 3. Use that UUID as `user_id` in all subsequent create API calls
@@ -2199,11 +2227,13 @@ _**Agent (model claude-4.5-opus-high-thinking, mode Ask)**_
 The user is asking about implementing proper authentication using JWT tokens instead of passing user_id in the request body. This is a great question about security best practices. Let me explain the recommended approach.
 
 Currently the system:
+
 1. Authenticates via Google OAuth (`POST /auth/google`)
 2. Returns user info including UUID
 3. Requires frontend to send `user_id` in every create request body
 
 The better approach would be:
+
 1. After Google OAuth, generate a JWT token containing the user's UUID
 2. Frontend stores this JWT and sends it in the `Authorization` header
 3. Backend extracts user_id from the JWT token automatically
@@ -2221,12 +2251,14 @@ Great question! The current approach of sending `user_id` in the request body is
 ## Recommended Architecture
 
 ### Current Flow (Insecure)
+
 ```
 Frontend → POST /auth/google → Get user.uuid
 Frontend → POST /agents { name: "...", user_id: "uuid" }  ← Can be spoofed!
 ```
 
 ### Proper JWT Flow (Secure)
+
 ```
 Frontend → POST /auth/google → Get JWT token
 Frontend → POST /agents { name: "..." }
@@ -2292,13 +2324,13 @@ async def get_current_user_id(
     """FastAPI dependency to extract user_id from JWT token."""
     token = credentials.credentials
     user_id = decode_token(token)
-    
+
     if not user_id:
         raise HTTPException(
             status_code=401,
             detail="Invalid or expired token"
         )
-    
+
     return user_id
 ```
 
@@ -2320,16 +2352,16 @@ class LoginResponse(BaseModel):
 @router.post("/google", response_model=LoginResponse)
 async def google_login(request: GoogleLoginRequest):
     # ... existing Google verification code ...
-    
+
     user = get_or_create_user(
         email=email,
         first_name=given_name,
         last_name=family_name,
     )
-    
+
     # Generate JWT token
     access_token = create_access_token(user["uuid"])
-    
+
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
@@ -2381,11 +2413,11 @@ async def get_agent_endpoint(
     agent = get_agent(agent_uuid)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    
+
     # Optional: verify user owns this agent
     if agent.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
     return agent
 ```
 
@@ -2404,22 +2436,22 @@ JWT_SECRET_KEY=your-super-secret-key-at-least-32-characters-long
 
 ```javascript
 // After login
-const response = await fetch('/auth/google', {
-  method: 'POST',
-  body: JSON.stringify({ id_token: googleIdToken })
+const response = await fetch("/auth/google", {
+  method: "POST",
+  body: JSON.stringify({ id_token: googleIdToken }),
 });
 const { access_token } = await response.json();
-localStorage.setItem('token', access_token);
+localStorage.setItem("token", access_token);
 
 // For all subsequent API calls
-const token = localStorage.getItem('token');
-await fetch('/agents', {
-  method: 'POST',
+const token = localStorage.getItem("token");
+await fetch("/agents", {
+  method: "POST",
   headers: {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json'
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
   },
-  body: JSON.stringify({ name: 'My Agent', config: {} })
+  body: JSON.stringify({ name: "My Agent", config: {} }),
   // No user_id needed!
 });
 ```
@@ -2428,10 +2460,10 @@ await fetch('/agents', {
 
 ## Summary
 
-| Aspect | Current | With JWT |
-|--------|---------|----------|
+| Aspect         | Current                 | With JWT           |
+| -------------- | ----------------------- | ------------------ |
 | User ID source | Request body (insecure) | JWT token (secure) |
-| Can be spoofed | Yes
+| Can be spoofed | Yes                     |
 
 ---
 
@@ -2442,8 +2474,6 @@ Implement the JWT token approach and then change me. Tell me what I need to chan
 ---
 
 _**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
-
-
 
 ---
 
@@ -2581,7 +2611,7 @@ Lines added: 2, lines removed: undefined
 +     "python-jose[cryptography]&gt;=3.3.0",
 +     "httpx&gt;=0.27.0",
   ]
-  
+
 ```
 
 </details>
@@ -2623,40 +2653,40 @@ Lines added: 136, lines removed: 1
 
 ```diff
 @@ -1,1 +1,136 @@
-- 
+-
 + """JWT Authentication Utilities.
-+ 
++
 + This module provides JWT token creation and validation for securing API endpoints.
 + """
-+ 
++
 + import os
 + import logging
 + from datetime import datetime, timedelta
 + from typing import Optional
-+ 
++
 + from jose import JWTError, jwt
 + from fastapi import HTTPException, Depends
 + from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-+ 
++
 + logger = logging.getLogger(__name__)
-+ 
++
 + # JWT Configuration
 + JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-this-secret-key-in-production")
 + JWT_ALGORITHM = "HS256"
 + JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", "168"))  # 7 days default
-+ 
++
 + # Security scheme for Bearer token authentication
 + security = HTTPBearer(auto_error=True)
-+ 
-+ 
++
++
 + def create_access_token(user_uuid: str, email: str) -&gt; str:
 +     """
 +     Create a JWT access token containing the user's UUID.
-+ 
++
 +     Args:
 +         user_uuid: The unique identifier of the user
 +         email: The user's email (for logging/debugging)
-+ 
++
 +     Returns:
 +         Encoded JWT token string
 +     """
@@ -2670,15 +2700,15 @@ Lines added: 136, lines removed: 1
 +     token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 +     logger.debug(f"Created access token for user {user_uuid} (expires: {expire})")
 +     return token
-+ 
-+ 
++
++
 + def decode_token(token: str) -&gt; Optional[dict]:
 +     """
 +     Decode and validate a JWT token.
-+ 
++
 +     Args:
 +         token: The JWT token string
-+ 
++
 +     Returns:
 +         Decoded payload dict if valid, None if invalid/expired
 +     """
@@ -2688,39 +2718,39 @@ Lines added: 136, lines removed: 1
 +     except JWTError as e:
 +         logger.debug(f"Token decode failed: {e}")
 +         return None
-+ 
-+ 
++
++
 + async def get_current_user_id(
 +     credentials: HTTPAuthorizationCredentials = Depends(security),
 + ) -&gt; str:
 +     """
 +     FastAPI dependency to extract and validate user_id from JWT token.
-+ 
++
 +     Usage:
 +         @router.post("/endpoint")
 +         async def endpoint(user_id: str = Depends(get_current_user_id)):
 +             # user_id is now available and validated
 +             pass
-+ 
++
 +     Args:
 +         credentials: HTTP Authorization header credentials (injected by FastAPI)
-+ 
++
 +     Returns:
 +         The user UUID extracted from the token
-+ 
++
 +     Raises:
 +         HTTPException: 401 if token is missing, invalid, or expired
 +     """
 +     token = credentials.credentials
 +     payload = decode_token(token)
-+ 
++
 +     if not payload:
 +         raise HTTPException(
 +             status_code=401,
 +             detail="Invalid or expired token",
 +             headers={"WWW-Authenticate": "Bearer"},
 +         )
-+ 
++
 +     user_id = payload.get("sub")
 +     if not user_id:
 +         raise HTTPException(
@@ -2728,10 +2758,10 @@ Lines added: 136, lines removed: 1
 +             detail="Token missing user information",
 +             headers={"WWW-Authenticate": "Bearer"},
 +         )
-+ 
++
 +     return user_id
-+ 
-+ 
++
++
 + # Optional dependency that doesn't require authentication
 + # Useful for endpoints that work with or without auth
 + async def get_optional_user_id(
@@ -2741,25 +2771,25 @@ Lines added: 136, lines removed: 1
 + ) -&gt; Optional[str]:
 +     """
 +     FastAPI dependency to optionally extract user_id from JWT token.
-+ 
++
 +     Returns None if no token is provided or token is invalid.
 +     Useful for endpoints that should work for both authenticated and anonymous users.
-+ 
++
 +     Args:
 +         credentials: Optional HTTP Authorization header credentials
-+ 
++
 +     Returns:
 +         The user UUID if token is valid, None otherwise
 +     """
 +     if not credentials:
 +         return None
-+ 
++
 +     payload = decode_token(credentials.credentials)
 +     if not payload:
 +         return None
-+ 
++
 +     return payload.get("sub")
-+ 
++
 ```
 
 </details>
@@ -2782,10 +2812,10 @@ Lines added: 1, lines removed: undefined
 
 ```diff
 @@ -6,4 +6,5 @@
-  
+
   from db import get_or_create_user
 + from auth_utils import create_access_token
-  
+
   logger = logging.getLogger(__name__)
 ```
 
@@ -2795,7 +2825,7 @@ Lines added: 2, lines removed: undefined
 ```diff
 @@ -32,4 +33,6 @@
       """Response for successful login."""
-  
+
 +     access_token: str
 +     token_type: str = "bearer"
       user: UserResponse
@@ -2824,12 +2854,12 @@ Lines added: 5, lines removed: undefined
 @@ -112,8 +112,13 @@
           last_name=family_name,
       )
-+ 
++
 +     # Generate JWT access token
 +     access_token = create_access_token(user["uuid"], user["email"])
-  
+
       logger.info(f"User logged in: {email} (UUID: {user['uuid']})")
-  
+
       return LoginResponse(
 +         access_token=access_token,
 +         token_type="bearer",
@@ -2881,7 +2911,7 @@ Lines added: 1, lines removed: 1
 - from fastapi import APIRouter, HTTPException
 + from fastapi import APIRouter, HTTPException, Depends
   from pydantic import BaseModel
-  
+
 ```
 
 **Chunk 2**
@@ -2892,7 +2922,7 @@ Lines added: 1, lines removed: undefined
       add_test_to_agent,
   )
 + from auth_utils import get_current_user_id
-  
+
   logger = logging.getLogger(__name__)
 ```
 
@@ -2904,8 +2934,8 @@ Lines added: undefined, lines removed: 1
       name: str
       config: Optional[Dict[str, Any]] = None
 -     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -2931,8 +2961,8 @@ Lines added: undefined, lines removed: 1
   class AgentDuplicateRequest(BaseModel):
       name: str
 -     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -2950,7 +2980,7 @@ Lines added: 4, lines removed: 2
 
 ```diff
 @@ -57,10 +57,12 @@
-  
+
   @router.post("", response_model=AgentCreateResponse)
 - async def create_agent_endpoint(agent: AgentCreate):
 + async def create_agent_endpoint(
@@ -2981,7 +3011,7 @@ Lines added: 2, lines removed: 2
 
 ```diff
 @@ -70,6 +70,6 @@
-  
+
   @router.get("", response_model=List[AgentResponse])
 - async def list_agents(user_id: Optional[str] = None):
 -     """List all agents, optionally filtered by user_id."""
@@ -3006,7 +3036,7 @@ Lines added: 6, lines removed: 1
 
 ```diff
 @@ -77,9 +77,14 @@
-  
+
   @router.get("/{agent_uuid}", response_model=AgentResponse)
 - async def get_agent_endpoint(agent_uuid: str):
 + async def get_agent_endpoint(
@@ -3020,7 +3050,7 @@ Lines added: 6, lines removed: 1
 +     if agent.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
       return agent
-  
+
 ```
 
 </details>
@@ -3038,7 +3068,7 @@ Lines added: 3, lines removed: 1
 
 ```diff
 @@ -91,5 +91,7 @@
-  
+
   @router.put("/{agent_uuid}", response_model=AgentResponse)
 - async def update_agent_endpoint(agent_uuid: str, agent: AgentUpdate):
 + async def update_agent_endpoint(
@@ -3054,11 +3084,11 @@ Lines added: 4, lines removed: undefined
 ```diff
 @@ -98,4 +100,8 @@
           raise HTTPException(status_code=404, detail="Agent not found")
-  
+
 +     # Verify user owns this agent
 +     if existing_agent.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       # Update only provided fields
       updated = update_agent(
 ```
@@ -3078,7 +3108,7 @@ Lines added: 10, lines removed: 1
 
 ```diff
 @@ -120,6 +120,15 @@
-  
+
   @router.delete("/{agent_uuid}")
 - async def delete_agent_endpoint(agent_uuid: str):
 + async def delete_agent_endpoint(
@@ -3091,7 +3121,7 @@ Lines added: 10, lines removed: 1
 +         raise HTTPException(status_code=404, detail="Agent not found")
 +     if existing_agent.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       deleted = delete_agent(agent_uuid)
       if not deleted:
 ```
@@ -3111,7 +3141,7 @@ Lines added: 5, lines removed: 1
 
 ```diff
 @@ -138,5 +138,9 @@
-  
+
   @router.post("/{agent_uuid}/duplicate", response_model=AgentDuplicateResponse)
 - async def duplicate_agent_endpoint(agent_uuid: str, request: AgentDuplicateRequest):
 + async def duplicate_agent_endpoint(
@@ -3129,11 +3159,11 @@ Lines added: 4, lines removed: undefined
 ```diff
 @@ -153,4 +157,8 @@
           raise HTTPException(status_code=404, detail="Agent not found")
-  
+
 +     # Verify user owns this agent
 +     if original_agent.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       # Use the provided name
       new_name = request.name
 ```
@@ -3148,7 +3178,7 @@ Lines added: 1, lines removed: 1
 -         user_id=request.user_id,
 +         user_id=user_id,
       )
-  
+
 ```
 
 </details>
@@ -3194,11 +3224,11 @@ Lines added: 2, lines removed: 1
 - from fastapi import APIRouter, HTTPException
 + from fastapi import APIRouter, HTTPException, Depends
   from pydantic import BaseModel
-  
+
   from db import create_tool, get_tool, get_all_tools, update_tool, delete_tool
 + from auth_utils import get_current_user_id
-  
-  
+
+
 ```
 
 **Chunk 2**
@@ -3209,8 +3239,8 @@ Lines added: undefined, lines removed: 1
       description: str
       config: Optional[Dict[str, Any]] = None
 -     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -3232,11 +3262,11 @@ Lines added: 2, lines removed: 1
 - from fastapi import APIRouter, HTTPException
 + from fastapi import APIRouter, HTTPException, Depends
   from pydantic import BaseModel
-  
+
   from db import create_test, get_test, get_all_tests, update_test, delete_test
 + from auth_utils import get_current_user_id
-  
-  
+
+
 ```
 
 **Chunk 2**
@@ -3247,8 +3277,8 @@ Lines added: undefined, lines removed: 1
       type: str
       config: Optional[Dict[str, Any]] = None
 -     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -3270,7 +3300,7 @@ Lines added: 1, lines removed: 1
 - from fastapi import APIRouter, HTTPException
 + from fastapi import APIRouter, HTTPException, Depends
   from pydantic import BaseModel
-  
+
 ```
 
 **Chunk 2**
@@ -3281,8 +3311,8 @@ Lines added: 1, lines removed: undefined
       delete_persona,
   )
 + from auth_utils import get_current_user_id
-  
-  
+
+
 ```
 
 **Chunk 3**
@@ -3293,8 +3323,8 @@ Lines added: undefined, lines removed: 1
       description: Optional[str] = None
       config: Optional[Dict[str, Any]] = None
 -     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -3316,7 +3346,7 @@ Lines added: 1, lines removed: 1
 - from fastapi import APIRouter, HTTPException
 + from fastapi import APIRouter, HTTPException, Depends
   from pydantic import BaseModel
-  
+
 ```
 
 **Chunk 2**
@@ -3327,8 +3357,8 @@ Lines added: 1, lines removed: undefined
       delete_scenario,
   )
 + from auth_utils import get_current_user_id
-  
-  
+
+
 ```
 
 **Chunk 3**
@@ -3339,8 +3369,8 @@ Lines added: undefined, lines removed: 1
       name: str
       description: Optional[str] = None
 -     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -3362,7 +3392,7 @@ Lines added: 1, lines removed: 1
 - from fastapi import APIRouter, HTTPException
 + from fastapi import APIRouter, HTTPException, Depends
   from pydantic import BaseModel
-  
+
 ```
 
 **Chunk 2**
@@ -3373,8 +3403,8 @@ Lines added: 1, lines removed: undefined
       delete_metric,
   )
 + from auth_utils import get_current_user_id
-  
-  
+
+
 ```
 
 **Chunk 3**
@@ -3385,8 +3415,8 @@ Lines added: undefined, lines removed: 1
       description: Optional[str] = None
       config: Optional[Dict[str, Any]] = None
 -     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -3413,7 +3443,7 @@ Lines added: 15, lines removed: 6
 
 ```diff
 @@ -37,33 +37,42 @@
-  
+
   @router.post("", response_model=ToolCreateResponse)
 - async def create_tool_endpoint(tool: ToolCreate):
 + async def create_tool_endpoint(
@@ -3428,8 +3458,8 @@ Lines added: 15, lines removed: 6
 +         user_id=user_id,
       )
       return ToolCreateResponse(uuid=tool_uuid, message="Tool created successfully")
-  
-  
+
+
   @router.get("", response_model=List[ToolResponse])
 - async def list_tools(user_id: Optional[str] = None):
 -     """List all tools, optionally filtered by user_id."""
@@ -3437,8 +3467,8 @@ Lines added: 15, lines removed: 6
 +     """List all tools for the authenticated user."""
       tools = get_all_tools(user_id=user_id)
       return tools
-  
-  
+
+
   @router.get("/{tool_uuid}", response_model=ToolResponse)
 - async def get_tool_endpoint(tool_uuid: str):
 + async def get_tool_endpoint(
@@ -3452,8 +3482,8 @@ Lines added: 15, lines removed: 6
 +     if tool.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
       return tool
-  
-  
+
+
   @router.put("/{tool_uuid}", response_model=ToolResponse)
 - async def update_tool_endpoint(tool_uuid: str, tool: ToolUpdate):
 + async def update_tool_endpoint(
@@ -3469,11 +3499,11 @@ Lines added: 4, lines removed: undefined
 ```diff
 @@ -72,4 +81,8 @@
           raise HTTPException(status_code=404, detail="Tool not found")
-  
+
 +     # Verify user owns this tool
 +     if existing_tool.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       # Update only provided fields
       updated = update_tool(
 ```
@@ -3483,7 +3513,7 @@ Lines added: 10, lines removed: 1
 
 ```diff
 @@ -89,6 +102,15 @@
-  
+
   @router.delete("/{tool_uuid}")
 - async def delete_tool_endpoint(tool_uuid: str):
 + async def delete_tool_endpoint(
@@ -3496,7 +3526,7 @@ Lines added: 10, lines removed: 1
 +         raise HTTPException(status_code=404, detail="Tool not found")
 +     if existing_tool.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       deleted = delete_tool(tool_uuid)
       if not deleted:
 ```
@@ -3516,7 +3546,7 @@ Lines added: 19, lines removed: 6
 
 ```diff
 @@ -37,38 +37,51 @@
-  
+
   @router.post("", response_model=TestCreateResponse)
 - async def create_test_endpoint(test: TestCreate):
 + async def create_test_endpoint(
@@ -3531,8 +3561,8 @@ Lines added: 19, lines removed: 6
 +         user_id=user_id,
       )
       return TestCreateResponse(uuid=test_uuid, message="Test created successfully")
-  
-  
+
+
   @router.get("", response_model=List[TestResponse])
 - async def list_tests(user_id: Optional[str] = None):
 -     """List all tests, optionally filtered by user_id."""
@@ -3540,8 +3570,8 @@ Lines added: 19, lines removed: 6
 +     """List all tests for the authenticated user."""
       tests = get_all_tests(user_id=user_id)
       return tests
-  
-  
+
+
   @router.get("/{test_uuid}", response_model=TestResponse)
 - async def get_test_endpoint(test_uuid: str):
 + async def get_test_endpoint(
@@ -3555,8 +3585,8 @@ Lines added: 19, lines removed: 6
 +     if test.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
       return test
-  
-  
+
+
   @router.put("/{test_uuid}", response_model=TestResponse)
 - async def update_test_endpoint(test_uuid: str, test: TestUpdate):
 + async def update_test_endpoint(
@@ -3566,11 +3596,11 @@ Lines added: 19, lines removed: 6
       existing_test = get_test(test_uuid)
       if not existing_test:
           raise HTTPException(status_code=404, detail="Test not found")
-  
+
 +     # Verify user owns this test
 +     if existing_test.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       updated = update_test(
           test_uuid=test_uuid,
 ```
@@ -3580,7 +3610,7 @@ Lines added: 10, lines removed: 1
 
 ```diff
 @@ -86,6 +99,15 @@
-  
+
   @router.delete("/{test_uuid}")
 - async def delete_test_endpoint(test_uuid: str):
 + async def delete_test_endpoint(
@@ -3593,7 +3623,7 @@ Lines added: 10, lines removed: 1
 +         raise HTTPException(status_code=404, detail="Test not found")
 +     if existing_test.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       deleted = delete_test(test_uuid)
       if not deleted:
 ```
@@ -3613,7 +3643,7 @@ Lines added: 24, lines removed: 7
 
 ```diff
 @@ -43,38 +43,55 @@
-  
+
   @router.post("", response_model=PersonaCreateResponse)
 - async def create_persona_endpoint(persona: PersonaCreate):
 + async def create_persona_endpoint(
@@ -3631,8 +3661,8 @@ Lines added: 24, lines removed: 7
 +         uuid=persona_uuid, message="Persona created successfully"
       )
 -     return PersonaCreateResponse(uuid=persona_uuid, message="Persona created successfully")
-  
-  
+
+
   @router.get("", response_model=List[PersonaResponse])
 - async def list_personas(user_id: Optional[str] = None):
 -     """List all personas, optionally filtered by user_id."""
@@ -3640,8 +3670,8 @@ Lines added: 24, lines removed: 7
 +     """List all personas for the authenticated user."""
       personas = get_all_personas(user_id=user_id)
       return personas
-  
-  
+
+
   @router.get("/{persona_uuid}", response_model=PersonaResponse)
 - async def get_persona_endpoint(persona_uuid: str):
 + async def get_persona_endpoint(
@@ -3655,8 +3685,8 @@ Lines added: 24, lines removed: 7
 +     if persona.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
       return persona
-  
-  
+
+
   @router.put("/{persona_uuid}", response_model=PersonaResponse)
 - async def update_persona_endpoint(persona_uuid: str, persona: PersonaUpdate):
 + async def update_persona_endpoint(
@@ -3668,11 +3698,11 @@ Lines added: 24, lines removed: 7
       existing_persona = get_persona(persona_uuid)
       if not existing_persona:
           raise HTTPException(status_code=404, detail="Persona not found")
-  
+
 +     # Verify user owns this persona
 +     if existing_persona.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       updated = update_persona(
           persona_uuid=persona_uuid,
 ```
@@ -3682,7 +3712,7 @@ Lines added: 10, lines removed: 1
 
 ```diff
 @@ -92,6 +109,15 @@
-  
+
   @router.delete("/{persona_uuid}")
 - async def delete_persona_endpoint(persona_uuid: str):
 + async def delete_persona_endpoint(
@@ -3695,7 +3725,7 @@ Lines added: 10, lines removed: 1
 +         raise HTTPException(status_code=404, detail="Persona not found")
 +     if existing_persona.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       deleted = delete_persona(persona_uuid)
       if not deleted:
 ```
@@ -3715,7 +3745,7 @@ Lines added: 24, lines removed: 7
 
 ```diff
 @@ -40,37 +40,54 @@
-  
+
   @router.post("", response_model=ScenarioCreateResponse)
 - async def create_scenario_endpoint(scenario: ScenarioCreate):
 + async def create_scenario_endpoint(
@@ -3732,8 +3762,8 @@ Lines added: 24, lines removed: 7
 +         uuid=scenario_uuid, message="Scenario created successfully"
       )
 -     return ScenarioCreateResponse(uuid=scenario_uuid, message="Scenario created successfully")
-  
-  
+
+
   @router.get("", response_model=List[ScenarioResponse])
 - async def list_scenarios(user_id: Optional[str] = None):
 -     """List all scenarios, optionally filtered by user_id."""
@@ -3741,8 +3771,8 @@ Lines added: 24, lines removed: 7
 +     """List all scenarios for the authenticated user."""
       scenarios = get_all_scenarios(user_id=user_id)
       return scenarios
-  
-  
+
+
   @router.get("/{scenario_uuid}", response_model=ScenarioResponse)
 - async def get_scenario_endpoint(scenario_uuid: str):
 + async def get_scenario_endpoint(
@@ -3756,8 +3786,8 @@ Lines added: 24, lines removed: 7
 +     if scenario.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
       return scenario
-  
-  
+
+
   @router.put("/{scenario_uuid}", response_model=ScenarioResponse)
 - async def update_scenario_endpoint(scenario_uuid: str, scenario: ScenarioUpdate):
 + async def update_scenario_endpoint(
@@ -3769,11 +3799,11 @@ Lines added: 24, lines removed: 7
       existing_scenario = get_scenario(scenario_uuid)
       if not existing_scenario:
           raise HTTPException(status_code=404, detail="Scenario not found")
-  
+
 +     # Verify user owns this scenario
 +     if existing_scenario.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       updated = update_scenario(
           scenario_uuid=scenario_uuid,
 ```
@@ -3783,7 +3813,7 @@ Lines added: 10, lines removed: 1
 
 ```diff
 @@ -87,6 +104,15 @@
-  
+
   @router.delete("/{scenario_uuid}")
 - async def delete_scenario_endpoint(scenario_uuid: str):
 + async def delete_scenario_endpoint(
@@ -3796,7 +3826,7 @@ Lines added: 10, lines removed: 1
 +         raise HTTPException(status_code=404, detail="Scenario not found")
 +     if existing_scenario.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       deleted = delete_scenario(scenario_uuid)
       if not deleted:
 ```
@@ -3824,8 +3854,8 @@ Lines added: undefined, lines removed: 1
   class MetricDuplicateRequest(BaseModel):
       name: str
 -     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -3843,7 +3873,7 @@ Lines added: 19, lines removed: 6
 
 ```diff
 @@ -47,38 +47,51 @@
-  
+
   @router.post("", response_model=MetricCreateResponse)
 - async def create_metric_endpoint(metric: MetricCreate):
 + async def create_metric_endpoint(
@@ -3858,8 +3888,8 @@ Lines added: 19, lines removed: 6
 +         user_id=user_id,
       )
       return MetricCreateResponse(uuid=metric_uuid, message="Metric created successfully")
-  
-  
+
+
   @router.get("", response_model=List[MetricResponse])
 - async def list_metrics(user_id: Optional[str] = None):
 -     """List all metrics, optionally filtered by user_id."""
@@ -3867,8 +3897,8 @@ Lines added: 19, lines removed: 6
 +     """List all metrics for the authenticated user."""
       metrics = get_all_metrics(user_id=user_id)
       return metrics
-  
-  
+
+
   @router.get("/{metric_uuid}", response_model=MetricResponse)
 - async def get_metric_endpoint(metric_uuid: str):
 + async def get_metric_endpoint(
@@ -3882,8 +3912,8 @@ Lines added: 19, lines removed: 6
 +     if metric.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
       return metric
-  
-  
+
+
   @router.put("/{metric_uuid}", response_model=MetricResponse)
 - async def update_metric_endpoint(metric_uuid: str, metric: MetricUpdate):
 + async def update_metric_endpoint(
@@ -3893,11 +3923,11 @@ Lines added: 19, lines removed: 6
       existing_metric = get_metric(metric_uuid)
       if not existing_metric:
           raise HTTPException(status_code=404, detail="Metric not found")
-  
+
 +     # Verify user owns this metric
 +     if existing_metric.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       updated = update_metric(
           metric_uuid=metric_uuid,
 ```
@@ -3907,7 +3937,7 @@ Lines added: 10, lines removed: 1
 
 ```diff
 @@ -96,6 +109,15 @@
-  
+
   @router.delete("/{metric_uuid}")
 - async def delete_metric_endpoint(metric_uuid: str):
 + async def delete_metric_endpoint(
@@ -3920,7 +3950,7 @@ Lines added: 10, lines removed: 1
 +         raise HTTPException(status_code=404, detail="Metric not found")
 +     if existing_metric.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       deleted = delete_metric(metric_uuid)
       if not deleted:
 ```
@@ -3930,7 +3960,7 @@ Lines added: 14, lines removed: 4
 
 ```diff
 @@ -105,16 +127,26 @@
-  
+
   @router.post("/{metric_uuid}/duplicate", response_model=MetricCreateResponse)
 - async def duplicate_metric_endpoint(metric_uuid: str, request: MetricDuplicateRequest):
 + async def duplicate_metric_endpoint(
@@ -3942,12 +3972,12 @@ Lines added: 14, lines removed: 4
       existing_metric = get_metric(metric_uuid)
       if not existing_metric:
           raise HTTPException(status_code=404, detail="Metric not found")
--     
-+ 
+-
++
 +     # Verify user owns this metric
 +     if existing_metric.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       new_metric_uuid = create_metric(
           name=request.name,
           description=existing_metric.get("description"),
@@ -3959,7 +3989,7 @@ Lines added: 14, lines removed: 4
 +         uuid=new_metric_uuid, message="Metric duplicated successfully"
       )
 -     return MetricCreateResponse(uuid=new_metric_uuid, message="Metric duplicated successfully")
-  
+
 ```
 
 </details>
@@ -3987,11 +4017,11 @@ Lines added: 1, lines removed: 1
 ```diff
 @@ -9,5 +9,5 @@
   from typing import Optional, List, Dict, Any
-  
+
 - from fastapi import APIRouter, HTTPException
 + from fastapi import APIRouter, HTTPException, Depends
   from pydantic import BaseModel, Field, field_validator
-  
+
 ```
 
 </details>
@@ -4012,7 +4042,7 @@ Lines added: 1, lines removed: undefined
       get_s3_output_config,
   )
 + from auth_utils import get_current_user_id
-  
+
   logger = logging.getLogger(__name__)
 ```
 
@@ -4034,8 +4064,8 @@ Lines added: undefined, lines removed: 1
       scenario_uuids: Optional[List[str]] = None
       metric_uuids: Optional[List[str]] = None
 -     user_id: str  # Required
-  
-  
+
+
 ```
 
 </details>
@@ -4053,7 +4083,7 @@ Lines added: 3, lines removed: 1
 
 ```diff
 @@ -267,5 +267,7 @@
-  
+
   @router.post("", response_model=SimulationCreateResponse)
 - async def create_simulation_endpoint(simulation: SimulationCreate):
 + async def create_simulation_endpoint(
@@ -4073,7 +4103,7 @@ Lines added: 1, lines removed: 1
 -         name=simulation.name, agent_id=simulation.agent_uuid, user_id=simulation.user_id
 +         name=simulation.name, agent_id=simulation.agent_uuid, user_id=user_id
       )
-  
+
 ```
 
 </details>
@@ -4091,7 +4121,7 @@ Lines added: 2, lines removed: 2
 
 ```diff
 @@ -330,6 +330,6 @@
-  
+
   @router.get("", response_model=List[SimulationListResponse])
 - async def list_simulations(user_id: Optional[str] = None):
 -     """List all simulations with their linked agents, optionally filtered by user_id."""
@@ -4116,7 +4146,7 @@ Lines added: 3, lines removed: 1
 
 ```diff
 @@ -359,5 +359,7 @@
-  
+
   @router.get("/run/{task_id}", response_model=SimulationRunStatusResponse)
 - async def get_simulation_run_status(task_id: str):
 + async def get_simulation_run_status(
@@ -4141,7 +4171,7 @@ Lines added: 3, lines removed: 1
 
 ```diff
 @@ -420,5 +420,7 @@
-  
+
   @router.get("/{simulation_uuid}/runs", response_model=SimulationRunsResponse)
 - async def get_simulation_runs(simulation_uuid: str):
 + async def get_simulation_runs(
@@ -4157,11 +4187,11 @@ Lines added: 4, lines removed: undefined
 ```diff
 @@ -431,4 +433,8 @@
           raise HTTPException(status_code=404, detail="Simulation not found")
-  
+
 +     # Verify user owns this simulation
 +     if simulation.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       # Get all jobs for this simulation
       jobs = get_simulation_jobs_for_simulation(simulation_uuid)
 ```
@@ -4181,7 +4211,7 @@ Lines added: 7, lines removed: 1
 
 ```diff
 @@ -468,10 +468,16 @@
-  
+
   @router.get("/{simulation_uuid}", response_model=SimulationDetailResponse)
 - async def get_simulation_endpoint(simulation_uuid: str):
 + async def get_simulation_endpoint(
@@ -4191,11 +4221,11 @@ Lines added: 7, lines removed: 1
       simulation = get_simulation(simulation_uuid)
       if not simulation:
           raise HTTPException(status_code=404, detail="Simulation not found")
-  
+
 +     # Verify user owns this simulation
 +     if simulation.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       # Get linked agent
       agent = None
 ```
@@ -4231,11 +4261,11 @@ Lines added: 4, lines removed: undefined
 ```diff
 @@ -519,4 +521,8 @@
           raise HTTPException(status_code=404, detail="Simulation not found")
-  
+
 +     # Verify user owns this simulation
 +     if existing_simulation.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       # Verify agent exists if provided
       if simulation.agent_uuid is not None and simulation.agent_uuid != "":
 ```
@@ -4255,7 +4285,7 @@ Lines added: 10, lines removed: 1
 
 ```diff
 @@ -637,6 +637,15 @@
-  
+
   @router.delete("/{simulation_uuid}")
 - async def delete_simulation_endpoint(simulation_uuid: str):
 + async def delete_simulation_endpoint(
@@ -4268,7 +4298,7 @@ Lines added: 10, lines removed: 1
 +         raise HTTPException(status_code=404, detail="Simulation not found")
 +     if existing_simulation.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       deleted = delete_simulation(simulation_uuid)
       if not deleted:
 ```
@@ -4288,7 +4318,7 @@ Lines added: 5, lines removed: 1
 
 ```diff
 @@ -1226,5 +1226,9 @@
-  
+
   @router.post("/{simulation_uuid}/run", response_model=TaskCreateResponse)
 - async def run_simulation_endpoint(simulation_uuid: str, request: RunSimulationRequest):
 + async def run_simulation_endpoint(
@@ -4306,11 +4336,11 @@ Lines added: 4, lines removed: undefined
 ```diff
 @@ -1242,4 +1246,8 @@
           raise HTTPException(status_code=404, detail="Simulation not found")
-  
+
 +     # Verify user owns this simulation
 +     if simulation.get("user_id") != user_id:
 +         raise HTTPException(status_code=403, detail="Access denied")
-+ 
++
       # Get agent from simulation
       agent_uuid = simulation.get("agent_id")
 ```
@@ -4431,17 +4461,17 @@ Lines added: 8, lines removed: 1
 ```diff
 @@ -131,5 +131,12 @@
   #### Authentication
-  
+
 - - &#96;POST /auth/google&#96; - Google OAuth login
 + - &#96;POST /auth/google&#96; - Google OAuth login (returns JWT access token)
-+ 
++
 + **JWT Token Usage**: After login, all API requests must include the JWT token in the Authorization header:
 + &#96;&#96;&#96;
 + Authorization: Bearer &lt;jwt_token&gt;
 + &#96;&#96;&#96;
-+ 
++
 + The JWT token contains the user's UUID and is validated on every protected endpoint.
-  
+
   #### Entity Management (CRUD)
 ```
 
@@ -4462,11 +4492,11 @@ Lines added: 4, lines removed: undefined
 @@ -269,4 +269,8 @@
   # CORS
   CORS_ALLOWED_ORIGINS=*           # Comma-separated origins (e.g., "http://localhost:3000,https://app.example.com")
-+ 
++
 + # JWT Authentication
 + JWT_SECRET_KEY=your-secret-key   # REQUIRED: At least 32 characters, change in production!
 + JWT_EXPIRATION_HOURS=168         # Token validity (default: 7 days)
-  
+
   # AWS
 ```
 
@@ -4490,7 +4520,7 @@ Lines added: 2, lines removed: 1
 - - &#96;httpx&#96; - Async HTTP client for Google OAuth
 + - &#96;httpx&gt;=0.27.0&#96; - Async HTTP client for Google OAuth
 + - &#96;python-jose[cryptography]&gt;=3.3.0&#96; - JWT token encoding/decoding
-  
+
   External:
 ```
 
@@ -4510,13 +4540,13 @@ Lines added: 7, lines removed: 2
 ```diff
 @@ -452,12 +452,17 @@
   &#96;&#96;&#96;
-  
+
 - ### Router Endpoint Pattern
 + ### Router Endpoint Pattern (with JWT Auth)
-  
+
   &#96;&#96;&#96;python
 + from auth_utils import get_current_user_id
-+ 
++
   @router.get("/{uuid}", response_model=EntityResponse)
 - async def get_entity_endpoint(uuid: str):
 + async def get_entity_endpoint(uuid: str, user_id: str = Depends(get_current_user_id)):
@@ -4573,15 +4603,13 @@ Lint results
 
 Lint errors for `src/routers/simulations.py`
 
-
-| Message | Range | Severity |
-|-------|-------|----------|
-| "user_id" is not accessed | 362:19-362:26 | DIAGNOSTIC_SEVERITY_HINT |
-| Variable "results_data" is not accessed | 833:5-833:17 | DIAGNOSTIC_SEVERITY_HINT |
-| Variable "results_data" is not accessed | 850:13-850:25 | DIAGNOSTIC_SEVERITY_HINT |
-| Variable "results_data" is not accessed | 996:5-996:17 | DIAGNOSTIC_SEVERITY_HINT |
+| Message                                 | Range           | Severity                 |
+| --------------------------------------- | --------------- | ------------------------ |
+| "user_id" is not accessed               | 362:19-362:26   | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "results_data" is not accessed | 833:5-833:17    | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "results_data" is not accessed | 850:13-850:25   | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "results_data" is not accessed | 996:5-996:17    | DIAGNOSTIC_SEVERITY_HINT |
 | Variable "results_data" is not accessed | 1013:13-1013:25 | DIAGNOSTIC_SEVERITY_HINT |
-
 
 </details>
 </tool-use>
@@ -4601,25 +4629,25 @@ I've implemented JWT authentication across the entire backend. Here's a summary 
 
 ### New Files Created
 
-| File | Purpose |
-|------|---------|
+| File                | Purpose                                                                                      |
+| ------------------- | -------------------------------------------------------------------------------------------- |
 | `src/auth_utils.py` | JWT utilities: `create_access_token()`, `decode_token()`, `get_current_user_id()` dependency |
 
 ### Files Modified
 
-| File | Changes |
-|------|---------|
-| `pyproject.toml` | Added `python-jose[cryptography]>=3.3.0`, `httpx>=0.27.0` |
-| `docker-compose.yml` | Added `JWT_SECRET_KEY`, `JWT_EXPIRATION_HOURS` env vars |
-| `src/routers/auth.py` | Login now returns `access_token` and `token_type: "bearer"` |
-| `src/routers/agents.py` | All endpoints now use JWT auth |
-| `src/routers/tools.py` | All endpoints now use JWT auth |
-| `src/routers/tests.py` | All endpoints now use JWT auth |
-| `src/routers/personas.py` | All endpoints now use JWT auth |
-| `src/routers/scenarios.py` | All endpoints now use JWT auth |
-| `src/routers/metrics.py` | All endpoints now use JWT auth |
-| `src/routers/simulations.py` | All endpoints now use JWT auth |
-| `.cursor/rules/architecture.md` | Updated documentation |
+| File                            | Changes                                                     |
+| ------------------------------- | ----------------------------------------------------------- |
+| `pyproject.toml`                | Added `python-jose[cryptography]>=3.3.0`, `httpx>=0.27.0`   |
+| `docker-compose.yml`            | Added `JWT_SECRET_KEY`, `JWT_EXPIRATION_HOURS` env vars     |
+| `src/routers/auth.py`           | Login now returns `access_token` and `token_type: "bearer"` |
+| `src/routers/agents.py`         | All endpoints now use JWT auth                              |
+| `src/routers/tools.py`          | All endpoints now use JWT auth                              |
+| `src/routers/tests.py`          | All endpoints now use JWT auth                              |
+| `src/routers/personas.py`       | All endpoints now use JWT auth                              |
+| `src/routers/scenarios.py`      | All endpoints now use JWT auth                              |
+| `src/routers/metrics.py`        | All endpoints now use JWT auth                              |
+| `src/routers/simulations.py`    | All endpoints now use JWT auth                              |
+| `.cursor/rules/architecture.md` | Updated documentation                                       |
 
 ---
 
@@ -4628,6 +4656,7 @@ I've implemented JWT authentication across the entire backend. Here's a summary 
 ### Authentication Response Changed
 
 **`POST /auth/google`** now returns:
+
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -4639,49 +4668,51 @@ I've implemented JWT authentication across the entire backend. Here's a summary 
 
 ### All Protected Endpoints Now Require JWT
 
-| HTTP Method | Endpoints | Request Body Change |
-|-------------|-----------|---------------------|
-| **POST** | `/agents`, `/tools`, `/tests`, `/personas`, `/scenarios`, `/metrics`, `/simulations` | Remove `user_id` from body |
-| **POST** | `/agents/{uuid}/duplicate`, `/metrics/{uuid}/duplicate` | Remove `user_id` from body |
-| **GET** | All list endpoints (`/agents`, `/tools`, etc.) | Remove `?user_id=` query param |
-| **GET** | All single-resource endpoints | No body change, returns 403 if not owner |
-| **PUT** | All update endpoints | No body change, returns 403 if not owner |
-| **DELETE** | All delete endpoints | No body change, returns 403 if not owner |
-| **POST** | `/simulations/{uuid}/run` | No body change, returns 403 if not owner |
+| HTTP Method | Endpoints                                                                            | Request Body Change                      |
+| ----------- | ------------------------------------------------------------------------------------ | ---------------------------------------- |
+| **POST**    | `/agents`, `/tools`, `/tests`, `/personas`, `/scenarios`, `/metrics`, `/simulations` | Remove `user_id` from body               |
+| **POST**    | `/agents/{uuid}/duplicate`, `/metrics/{uuid}/duplicate`                              | Remove `user_id` from body               |
+| **GET**     | All list endpoints (`/agents`, `/tools`, etc.)                                       | Remove `?user_id=` query param           |
+| **GET**     | All single-resource endpoints                                                        | No body change, returns 403 if not owner |
+| **PUT**     | All update endpoints                                                                 | No body change, returns 403 if not owner |
+| **DELETE**  | All delete endpoints                                                                 | No body change, returns 403 if not owner |
+| **POST**    | `/simulations/{uuid}/run`                                                            | No body change, returns 403 if not owner |
 
 ---
 
 ## Frontend Changes Required
 
 ### 1. Store JWT After Login
+
 ```javascript
 // After login
-const response = await fetch('/auth/google', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ id_token: googleIdToken })
+const response = await fetch("/auth/google", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ id_token: googleIdToken }),
 });
 const { access_token, user } = await response.json();
-localStorage.setItem('token', access_token);
+localStorage.setItem("token", access_token);
 ```
 
 ### 2. Include JWT in All API Calls
+
 ```javascript
-const token = localStorage.getItem('token');
+const token = localStorage.getItem("token");
 
 // Create agent (no user_id in body)
-await fetch('/agents', {
-  method: 'POST',
+await fetch("/agents", {
+  method: "POST",
   headers: {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json'
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
   },
-  body: JSON.stringify({ name: 'My Agent', config: {} })
+  body: JSON.stringify({ name: "My Agent", config: {} }),
 });
 
 // List agents (no query param)
-await fetch('/agents', {
-  headers: { 'Authorization': `Bearer ${token}` }
+await fetch("/agents", {
+  headers: { Authorization: `Bearer ${token}` },
 });
 ```
 
@@ -4701,7 +4732,7 @@ JWT_EXPIRATION_HOURS=168
 
 _**User (2026-01-15 05:41Z)**_
 
- What will happen when the expiration or the GWT expires? What will the front-end receive and how will it do a re-query of it?
+What will happen when the expiration or the GWT expires? What will the front-end receive and how will it do a re-query of it?
 
 ---
 
@@ -4742,6 +4773,7 @@ When an expired token is used, the `get_current_user_id` dependency in `auth_uti
 **HTTP Status Code:** `401 Unauthorized`
 
 **Response Headers:**
+
 ```
 WWW-Authenticate: Bearer
 ```
@@ -4753,32 +4785,32 @@ The frontend should implement a **token refresh flow**:
 ```javascript
 // API call wrapper with automatic re-auth
 async function apiCall(url, options = {}) {
-  const token = localStorage.getItem('token');
-  
+  const token = localStorage.getItem("token");
+
   const response = await fetch(url, {
     ...options,
     headers: {
       ...options.headers,
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    }
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
   });
-  
+
   // If token expired, redirect to re-authenticate
   if (response.status === 401) {
     // Clear the old token
-    localStorage.removeItem('token');
-    
+    localStorage.removeItem("token");
+
     // Option 1: Redirect to login page
-    window.location.href = '/login';
-    
+    window.location.href = "/login";
+
     // Option 2: Trigger Google OAuth re-authentication silently
     // (if using Google Sign-In library with prompt: 'none')
     // await triggerGoogleReAuth();
-    
-    throw new Error('Session expired. Please log in again.');
+
+    throw new Error("Session expired. Please log in again.");
   }
-  
+
   return response;
 }
 ```
@@ -4827,25 +4859,25 @@ If you want seamless re-auth without user interaction, you can use Google's sile
 async function silentReAuth() {
   // Using Google Identity Services
   google.accounts.id.initialize({
-    client_id: 'YOUR_GOOGLE_CLIENT_ID',
+    client_id: "YOUR_GOOGLE_CLIENT_ID",
     callback: handleCredentialResponse,
-    auto_select: true  // Auto-select if only one account
+    auto_select: true, // Auto-select if only one account
   });
-  
+
   // Prompt for silent sign-in
   google.accounts.id.prompt();
 }
 
 async function handleCredentialResponse(response) {
   // Exchange Google ID token for new JWT
-  const result = await fetch('/auth/google', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id_token: response.credential })
+  const result = await fetch("/auth/google", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id_token: response.credential }),
   });
-  
+
   const { access_token } = await result.json();
-  localStorage.setItem('token', access_token);
+  localStorage.setItem("token", access_token);
 }
 ```
 
@@ -4853,12 +4885,12 @@ async function handleCredentialResponse(response) {
 
 ## Summary
 
-| Scenario | HTTP Status | Frontend Action |
-|----------|-------------|-----------------|
-| Token expired | `401` | Re-authenticate via Google OAuth |
-| Token invalid/malformed | `401` | Re-authenticate via Google OAuth |
-| Token missing | `401` | Redirect to login |
-| User doesn't own resource | `403` | Show "Access Denied" error |
+| Scenario                  | HTTP Status | Frontend Action                  |
+| ------------------------- | ----------- | -------------------------------- |
+| Token expired             | `401`       | Re-authenticate via Google OAuth |
+| Token invalid/malformed   | `401`       | Re-authenticate via Google OAuth |
+| Token missing             | `401`       | Redirect to login                |
+| User doesn't own resource | `403`       | Show "Access Denied" error       |
 
 The current implementation does **not** have a refresh token mechanism - when the JWT expires (default 7 days), the user must log in again via Google OAuth. If you want refresh tokens for longer sessions without re-auth, that would be an additional feature to implement.
 
@@ -4866,7 +4898,7 @@ The current implementation does **not** have a refresh token mechanism - when th
 
 _**User (2026-01-15 05:41Z)**_
 
-@uv (491-498) 
+@uv (491-498)
 
 ---
 
@@ -4892,6 +4924,7 @@ cd /Users/aman/Documents/repos/artpark/pense-backend && uv sync
 error: failed to open file &#96;/Users/aman/.cache/uv/sdists-v9/.git&#96;: Operation not permitted (os error 1)
 
 ```
+
 </details>
 </tool-use>
 
@@ -5106,6 +5139,7 @@ Installed 2 packages in 1ms
  - zipp==3.23.0
 
 ```
+
 </details>
 </tool-use>
 
@@ -5117,6 +5151,7 @@ The package has been installed. I can see that `python-jose==3.5.0` was added al
 ---
 
 Done! `python-jose` is now installed. You can see in the output:
+
 ```
 + python-jose==3.5.0
 + ecdsa==0.19.1
@@ -5147,16 +5182,19 @@ The user wants a command to generate a secure JWT secret key. I'll provide a few
 Here are a few ways to generate a secure JWT secret key:
 
 ### Option 1: Using Python (recommended)
+
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
 ### Option 2: Using OpenSSL
+
 ```bash
 openssl rand -base64 32
 ```
 
 ### Option 3: Using Python's UUID
+
 ```bash
 python -c "import uuid; print(uuid.uuid4().hex + uuid.uuid4().hex)"
 ```
@@ -5164,16 +5202,19 @@ python -c "import uuid; print(uuid.uuid4().hex + uuid.uuid4().hex)"
 ---
 
 **Example output:**
+
 ```
 Kx7mR9pQ2wLnF4hJ8vBt3yZc6dXe1gHs5iAo0uMq
 ```
 
 Then set it in your environment:
+
 ```bash
 export JWT_SECRET_KEY="your-generated-key-here"
 ```
 
 Or add to your `.env` file:
+
 ```
 JWT_SECRET_KEY=your-generated-key-here
 ```
@@ -5215,12 +5256,12 @@ Lines added: 106, lines removed: 1
 
 ```diff
 @@ -1,1 +1,106 @@
-- 
+-
 + name: Deploy to Staging
-+ 
++
 + on:
 +   workflow_dispatch:
-+ 
++
 + jobs:
 +   build-and-deploy:
 +     runs-on: ubuntu-latest
@@ -5231,20 +5272,20 @@ Lines added: 106, lines removed: 1
 +       IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.IMAGE_NAME }}
 +       IMAGE_TAG: ${{ vars.IMAGE_TAG }}
 +       CONTAINER_NAME: ${{ secrets.CONTAINER_NAME }}
-+ 
++
 +     steps:
 +       - name: Checkout repository
 +         uses: actions/checkout@v4
-+ 
++
 +       - name: Set up Docker Buildx
 +         uses: docker/setup-buildx-action@v3
-+ 
++
 +       - name: Log in to Docker Hub
 +         uses: docker/login-action@v3
 +         with:
 +           username: ${{ secrets.DOCKERHUB_USERNAME }}
 +           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-+ 
++
 +       - name: Build and push Docker image
 +         uses: docker/build-push-action@v5
 +         with:
@@ -5253,7 +5294,7 @@ Lines added: 106, lines removed: 1
 +           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 +           cache-from: type=gha
 +           cache-to: type=gha,mode=max
-+ 
++
 +       - name: Copy docker-compose.yml to EC2
 +         uses: appleboy/scp-action@v0.1.7
 +         with:
@@ -5262,7 +5303,7 @@ Lines added: 106, lines removed: 1
 +           key: ${{ secrets.EC2_SSH_KEY }}
 +           source: "docker-compose.yml"
 +           target: "/tmp/"
-+ 
++
 +       - name: Deploy to Staging EC2
 +         uses: appleboy/ssh-action@v1.0.3
 +         with:
@@ -5271,7 +5312,7 @@ Lines added: 106, lines removed: 1
 +           key: ${{ secrets.EC2_SSH_KEY }}
 +           script: |
 +             set -e  # Exit immediately if any command fails
-+ 
++
 +             # Set environment variables
 +             export IMAGE_NAME="${{ env.IMAGE_NAME }}"
 +             export IMAGE_TAG="${{ env.IMAGE_TAG }}"
@@ -5292,18 +5333,18 @@ Lines added: 106, lines removed: 1
 +             export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
 +             export S3_OUTPUT_BUCKET="${{ secrets.S3_OUTPUT_BUCKET }}"
 +             export DB_ROOT_DIR="${{ secrets.DB_ROOT_DIR }}"
-+ 
++
 +             # Navigate to directory with docker-compose.yml
 +             cd /tmp
-+ 
++
 +             # Run new container with docker compose (pull always to ensure latest image)
 +             docker compose pull &amp;&amp; docker compose up -d
-+ 
++
 +             # Clean up old images
 +             docker image prune -f
-+ 
++
 +             echo "🎉 Staging deployment completed successfully!"
-+ 
++
 +       - name: Verify deployment
 +         uses: appleboy/ssh-action@v1.0.3
 +         with:
@@ -5321,7 +5362,7 @@ Lines added: 106, lines removed: 1
 +               docker logs $CONTAINER
 +               exit 1
 +             fi
-+ 
++
 ```
 
 </details>
@@ -5365,6 +5406,7 @@ Lines added: 3, lines removed: undefined
 
 <think><details><summary>Thought Process</summary>
 Done! I've:
+
 1. Created a new `deploy-staging.yml` workflow file that uses the `Staging` environment
 2. Updated the production `deploy.yml` to include the new JWT and CORS environment variables
 
@@ -5377,11 +5419,13 @@ Done! I've created a new staging deployment workflow and updated the production 
 ## Changes Made
 
 ### New File: `.github/workflows/deploy-staging.yml`
+
 - Uses `environment: Staging`
 - Triggered via `workflow_dispatch` (manual trigger)
 - Includes all the new environment variables (`JWT_SECRET_KEY`, `CORS_ALLOWED_ORIGINS`, `JWT_EXPIRATION_HOURS`)
 
 ### Updated: `.github/workflows/deploy.yml`
+
 - Added the new JWT and CORS environment variables to production deployment
 
 ---
@@ -5391,25 +5435,27 @@ Done! I've created a new staging deployment workflow and updated the production 
 For the **Staging** environment in GitHub, you'll need to set up:
 
 ### Secrets (sensitive)
-| Secret | Description |
-|--------|-------------|
-| `EC2_HOST` | Staging EC2 instance IP/hostname |
-| `EC2_USER` | SSH username |
-| `EC2_SSH_KEY` | Private SSH key |
-| `DOCKERHUB_USERNAME` | Docker Hub username |
-| `DOCKERHUB_PASSWORD` | Docker Hub password |
-| `IMAGE_NAME` | Docker image name |
-| `CONTAINER_NAME` | Container name |
-| `PORT` | Application port |
-| `JWT_SECRET_KEY` | **NEW** - JWT signing secret |
-| `CORS_ALLOWED_ORIGINS` | **NEW** - Allowed CORS origins |
-| All API keys... | |
+
+| Secret                 | Description                      |
+| ---------------------- | -------------------------------- |
+| `EC2_HOST`             | Staging EC2 instance IP/hostname |
+| `EC2_USER`             | SSH username                     |
+| `EC2_SSH_KEY`          | Private SSH key                  |
+| `DOCKERHUB_USERNAME`   | Docker Hub username              |
+| `DOCKERHUB_PASSWORD`   | Docker Hub password              |
+| `IMAGE_NAME`           | Docker image name                |
+| `CONTAINER_NAME`       | Container name                   |
+| `PORT`                 | Application port                 |
+| `JWT_SECRET_KEY`       | **NEW** - JWT signing secret     |
+| `CORS_ALLOWED_ORIGINS` | **NEW** - Allowed CORS origins   |
+| All API keys...        |                                  |
 
 ### Variables (non-sensitive)
-| Variable | Description |
-|----------|-------------|
-| `IMAGE_TAG` | Docker image tag (e.g., `staging`, `latest`) |
-| `JWT_EXPIRATION_HOURS` | **NEW** - Token expiry (default: 168) |
+
+| Variable               | Description                                  |
+| ---------------------- | -------------------------------------------- |
+| `IMAGE_TAG`            | Docker image tag (e.g., `staging`, `latest`) |
+| `JWT_EXPIRATION_HOURS` | **NEW** - Token expiry (default: 168)        |
 
 ---
 
@@ -5425,6 +5471,7 @@ _**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
 
 <think><details><summary>Thought Process</summary>
 The user wants me to:
+
 1. Add GOOGLE_CLIENT_ID as an environment variable in docker-compose.yml and both deploy files
 2. Make the /appdata volume mount path configurable via a secret
 
@@ -5458,6 +5505,7 @@ Let me read the current docker-compose.yml and make the changes.</details></thin
 
 <think><details><summary>Thought Process</summary>
 Now I need to:
+
 1. Add GOOGLE_CLIENT_ID to docker-compose.yml
 2. Make the volume mount path configurable (using HOST_APPDATA_PATH or similar)
 3. Update both deploy files to export GOOGLE_CLIENT_ID and the volume path
@@ -5491,7 +5539,7 @@ Lines added: 1, lines removed: 1
       volumes:
 -       - /appdata:/appdata
 +       - ${HOST_APPDATA_PATH:-/appdata}:/appdata
-  
+
 ```
 
 </details>
@@ -5524,7 +5572,7 @@ Lines added: 1, lines removed: undefined
               export S3_OUTPUT_BUCKET="${{ secrets.S3_OUTPUT_BUCKET }}"
               export DB_ROOT_DIR="${{ secrets.DB_ROOT_DIR }}"
 +             export HOST_APPDATA_PATH="${{ secrets.HOST_APPDATA_PATH }}"
-  
+
               # Navigate to directory with docker-compose.yml
 ```
 
@@ -5558,7 +5606,7 @@ Lines added: 1, lines removed: undefined
               export S3_OUTPUT_BUCKET="${{ secrets.S3_OUTPUT_BUCKET }}"
               export DB_ROOT_DIR="${{ secrets.DB_ROOT_DIR }}"
 +             export HOST_APPDATA_PATH="${{ secrets.HOST_APPDATA_PATH }}"
-  
+
               # Navigate to directory with docker-compose.yml
 ```
 
@@ -5578,14 +5626,17 @@ Done! Here's a summary of the changes:
 ## Changes Made
 
 ### `docker-compose.yml`
+
 - Added `GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}` environment variable
 - Changed volume mount from `/appdata:/appdata` to `${HOST_APPDATA_PATH:-/appdata}:/appdata` (configurable, defaults to `/appdata`)
 
 ### `deploy.yml` (Production)
+
 - Added `export GOOGLE_CLIENT_ID="${{ secrets.GOOGLE_CLIENT_ID }}"`
 - Added `export HOST_APPDATA_PATH="${{ secrets.HOST_APPDATA_PATH }}"`
 
 ### `deploy-staging.yml` (Staging)
+
 - Added `export GOOGLE_CLIENT_ID="${{ secrets.GOOGLE_CLIENT_ID }}"`
 - Added `export HOST_APPDATA_PATH="${{ secrets.HOST_APPDATA_PATH }}"`
 
@@ -5593,16 +5644,16 @@ Done! Here's a summary of the changes:
 
 ## New Secrets to Add in GitHub
 
-| Secret | Description | Example |
-|--------|-------------|---------|
-| `GOOGLE_CLIENT_ID` | Google OAuth Client ID | `123456789.apps.googleusercontent.com` |
-| `HOST_APPDATA_PATH` | Host path for volume mount | `/appdata` or `/home/ubuntu/appdata` |
+| Secret              | Description                | Example                                |
+| ------------------- | -------------------------- | -------------------------------------- |
+| `GOOGLE_CLIENT_ID`  | Google OAuth Client ID     | `123456789.apps.googleusercontent.com` |
+| `HOST_APPDATA_PATH` | Host path for volume mount | `/appdata` or `/home/ubuntu/appdata`   |
 
 ---
 
 _**User (2026-01-15 05:41Z)**_
 
-@.github/workflows/deploy.yml @.github/workflows/deploy-staging.yml 
+@.github/workflows/deploy.yml @.github/workflows/deploy-staging.yml
 deploying one of them shuts down the container of the image - they both have different images and different container names - they both need to run simultaneously
 
 ---
@@ -5640,7 +5691,7 @@ Lines added: 1, lines removed: 1
             source: "docker-compose.yml"
 -           target: "/tmp/"
 +           target: "/tmp/pense-production/"
-  
+
         - name: Deploy to Production EC2
 ```
 
@@ -5659,15 +5710,15 @@ Lines added: 2, lines removed: 2
 
 ```diff
 @@ -79,8 +79,8 @@
-  
+
               # Navigate to directory with docker-compose.yml
 -             cd /tmp
 +             cd /tmp/pense-production
-  
+
               # Run new container with docker compose (pull always to ensure latest image)
 -             docker compose pull &amp;&amp; docker compose up -d
 +             docker compose -p pense-production pull &amp;&amp; docker compose -p pense-production up -d
-  
+
               # Clean up old images
 ```
 
@@ -5690,7 +5741,7 @@ Lines added: 1, lines removed: 1
             source: "docker-compose.yml"
 -           target: "/tmp/"
 +           target: "/tmp/pense-staging/"
-  
+
         - name: Deploy to Staging EC2
 ```
 
@@ -5709,15 +5760,15 @@ Lines added: 2, lines removed: 2
 
 ```diff
 @@ -79,8 +79,8 @@
-  
+
               # Navigate to directory with docker-compose.yml
 -             cd /tmp
 +             cd /tmp/pense-staging
-  
+
               # Run new container with docker compose (pull always to ensure latest image)
 -             docker compose pull &amp;&amp; docker compose up -d
 +             docker compose -p pense-staging pull &amp;&amp; docker compose -p pense-staging up -d
-  
+
               # Clean up old images
 ```
 
@@ -5730,7 +5781,8 @@ Lines added: 2, lines removed: 2
 <think><details><summary>Thought Process</summary>
 I fixed the issue. The key changes are:
 
-1. **Separate directories**: 
+1. **Separate directories**:
+
    - Production: `/tmp/pense-production/`
    - Staging: `/tmp/pense-staging/`
 
@@ -5746,16 +5798,16 @@ Done! The issue was that both workflows were using the same `/tmp/` directory an
 
 ## Changes Made
 
-| File | Change |
-|------|--------|
-| `deploy.yml` | Uses `/tmp/pense-production/` and project name `-p pense-production` |
-| `deploy-staging.yml` | Uses `/tmp/pense-staging/` and project name `-p pense-staging` |
+| File                 | Change                                                               |
+| -------------------- | -------------------------------------------------------------------- |
+| `deploy.yml`         | Uses `/tmp/pense-production/` and project name `-p pense-production` |
+| `deploy-staging.yml` | Uses `/tmp/pense-staging/` and project name `-p pense-staging`       |
 
 Now each environment has:
+
 1. **Separate directory** for its `docker-compose.yml`
 2. **Separate docker-compose project name** (`-p` flag)
 
 This ensures staging and production containers run independently without affecting each other.
 
 ---
-

@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, field_validator
 
 from db import (
@@ -41,7 +41,60 @@ from utils import (
     TaskCreateResponse,
     get_s3_client,
     get_s3_output_config,
+    reserve_port,
+    release_port,
+    can_start_simulation_job,
+    try_start_queued_simulation_job,
+    register_job_starter,
 )
+from auth_utils import get_current_user_id
+
+# Job types that share the same queue
+SIMULATION_JOB_TYPES = ["text", "voice"]
+
+
+def _start_simulation_job_from_queue(job: dict) -> bool:
+    """Start a simulation job from the queue."""
+    job_id = job["uuid"]
+    job_type = job.get("type")  # 'text' or 'voice'
+    details = job.get("details", {})
+
+    simulation_uuid = details.get("simulation_uuid")
+    agent_uuid = details.get("agent_uuid")
+    s3_bucket = details.get("s3_bucket", "")
+
+    # Get simulation details
+    simulation = get_simulation(simulation_uuid)
+    if not simulation:
+        return False
+
+    # Get agent
+    agent = get_agent(agent_uuid)
+    if not agent:
+        return False
+
+    # Get linked entities
+    personas = get_personas_for_simulation(simulation_uuid)
+    scenarios = get_scenarios_for_simulation(simulation_uuid)
+    metrics = get_metrics_for_simulation(simulation_uuid)
+
+    if not personas or not scenarios:
+        return False
+
+    # Start background task in a separate thread
+    thread = threading.Thread(
+        target=run_simulation_task,
+        args=(job_id, agent, personas, scenarios, metrics, s3_bucket, job_type),
+        daemon=True,
+    )
+    thread.start()
+
+    return True
+
+
+# Register the job starters for simulation jobs
+register_job_starter("text", _start_simulation_job_from_queue)
+register_job_starter("voice", _start_simulation_job_from_queue)
 
 logger = logging.getLogger(__name__)
 
@@ -206,13 +259,13 @@ class SimulationCreateResponse(BaseModel):
 
 
 class RunSimulationRequest(BaseModel):
-    type: str = Field(..., description="Type of simulation run: 'chat' or 'voice'")
+    type: str = Field(..., description="Type of simulation run: 'text' or 'voice'")
 
     @field_validator("type")
     @classmethod
     def validate_type(cls, v):
-        if v not in ["chat", "voice"]:
-            raise ValueError("type must be either 'chat' or 'voice'")
+        if v not in ["text", "voice"]:
+            raise ValueError("type must be either 'text' or 'voice'")
         return v
 
 
@@ -268,7 +321,9 @@ class SimulationRunsResponse(BaseModel):
 
 
 @router.post("", response_model=SimulationCreateResponse)
-async def create_simulation_endpoint(simulation: SimulationCreate):
+async def create_simulation_endpoint(
+    simulation: SimulationCreate, user_id: str = Depends(get_current_user_id)
+):
     """Create a new simulation with optional linked agent, personas, scenarios, and metrics."""
     # Verify agent exists if provided
     if simulation.agent_uuid:
@@ -305,7 +360,7 @@ async def create_simulation_endpoint(simulation: SimulationCreate):
 
     # Create the simulation
     simulation_uuid = create_simulation(
-        name=simulation.name, agent_id=simulation.agent_uuid
+        name=simulation.name, agent_id=simulation.agent_uuid, user_id=user_id
     )
 
     # Add personas to simulation
@@ -329,9 +384,9 @@ async def create_simulation_endpoint(simulation: SimulationCreate):
 
 
 @router.get("", response_model=List[SimulationListResponse])
-async def list_simulations():
-    """List all simulations with their linked agents."""
-    simulations = get_all_simulations()
+async def list_simulations(user_id: str = Depends(get_current_user_id)):
+    """List all simulations for the authenticated user."""
+    simulations = get_all_simulations(user_id=user_id)
     result = []
     for sim in simulations:
         agent = None
@@ -358,7 +413,9 @@ async def list_simulations():
 
 
 @router.get("/run/{task_id}", response_model=SimulationRunStatusResponse)
-async def get_simulation_run_status(task_id: str):
+async def get_simulation_run_status(
+    task_id: str, user_id: str = Depends(get_current_user_id)
+):
     """
     Get the status of a simulation run.
 
@@ -418,7 +475,9 @@ async def get_simulation_run_status(task_id: str):
 
 
 @router.get("/{simulation_uuid}/runs", response_model=SimulationRunsResponse)
-async def get_simulation_runs(simulation_uuid: str):
+async def get_simulation_runs(
+    simulation_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """
     Get all runs for a simulation.
 
@@ -428,6 +487,10 @@ async def get_simulation_runs(simulation_uuid: str):
     simulation = get_simulation(simulation_uuid)
     if not simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Verify user owns this simulation
+    if simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Get all jobs for this simulation
     jobs = get_simulation_jobs_for_simulation(simulation_uuid)
@@ -460,11 +523,17 @@ async def get_simulation_runs(simulation_uuid: str):
 
 
 @router.get("/{simulation_uuid}", response_model=SimulationDetailResponse)
-async def get_simulation_endpoint(simulation_uuid: str):
+async def get_simulation_endpoint(
+    simulation_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Get a simulation by UUID with all linked agent, personas, scenarios, and metrics."""
     simulation = get_simulation(simulation_uuid)
     if not simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Verify user owns this simulation
+    if simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Get linked agent
     agent = None
@@ -498,12 +567,18 @@ async def get_simulation_endpoint(simulation_uuid: str):
 
 @router.put("/{simulation_uuid}", response_model=SimulationDetailResponse)
 async def update_simulation_endpoint(
-    simulation_uuid: str, simulation: SimulationUpdate
+    simulation_uuid: str,
+    simulation: SimulationUpdate,
+    user_id: str = Depends(get_current_user_id),
 ):
     """Update a simulation with optional linked agent, personas, scenarios, and metrics."""
     existing_simulation = get_simulation(simulation_uuid)
     if not existing_simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Verify user owns this simulation
+    if existing_simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Verify agent exists if provided
     if simulation.agent_uuid is not None and simulation.agent_uuid != "":
@@ -617,8 +692,17 @@ async def update_simulation_endpoint(
 
 
 @router.delete("/{simulation_uuid}")
-async def delete_simulation_endpoint(simulation_uuid: str):
+async def delete_simulation_endpoint(
+    simulation_uuid: str, user_id: str = Depends(get_current_user_id)
+):
     """Delete a simulation."""
+    # Check if simulation exists and user owns it
+    existing_simulation = get_simulation(simulation_uuid)
+    if not existing_simulation:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if existing_simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     deleted = delete_simulation(simulation_uuid)
     if not deleted:
         raise HTTPException(status_code=404, detail="Simulation not found")
@@ -633,7 +717,7 @@ def _build_pense_simulation_config(
     personas: List[Dict[str, Any]],
     scenarios: List[Dict[str, Any]],
     metrics: List[Dict[str, Any]],
-    simulation_type: str = "chat",
+    simulation_type: str = "text",
 ) -> Dict[str, Any]:
     """
     Build the pense simulation config from agent, personas, scenarios, and metrics.
@@ -643,7 +727,7 @@ def _build_pense_simulation_config(
         personas: List of persona dicts with description and config (containing gender, language)
         scenarios: List of scenario dicts with description
         metrics: List of metric dicts with name and description (for evaluation_criteria)
-        simulation_type: Type of simulation - "chat" or "voice"
+        simulation_type: Type of simulation - "text" or "voice"
     """
     agent_config = agent.get("config") or {}
 
@@ -710,7 +794,12 @@ def _build_pense_simulation_config(
 
     config["system_prompt"] = agent_config.get("system_prompt", "")
 
-    if simulation_type == "chat":
+    # Copy settings from agent config if present
+    settings_config = agent_config.get("settings", {})
+    if settings_config:
+        config["settings"] = settings_config
+
+    if simulation_type == "text":
         config["params"] = {"model": model}
     else:
         # For voice simulations, include stt, tts, and llm configurations
@@ -731,9 +820,10 @@ def _build_pense_simulation_config(
     return config
 
 
-def _run_pense_chat_simulation(
+def _run_pense_text_simulation(
     model: str,
     pense_config: Dict[str, Any],
+    input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
     s3_prefix: str,
@@ -745,6 +835,7 @@ def _run_pense_chat_simulation(
     Args:
         model: Model name to use
         pense_config: The pense config dict
+        input_dir: Directory to write config files
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
         s3_prefix: S3 key prefix for uploading results
@@ -759,15 +850,17 @@ def _run_pense_chat_simulation(
     config = pense_config.copy()
     config["params"] = {"model": model}
 
-    # Resolve output directory to absolute path
+    # Resolve directories to absolute paths
+    input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
 
-    # Create output directory
+    # Create directories
+    input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write config to temp file
+    # Write config to input directory
     config_file_name = "simulation_config"
-    config_file = output_dir / f"{config_file_name}.json"
+    config_file = input_dir / f"{config_file_name}.json"
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
@@ -794,7 +887,6 @@ def _run_pense_chat_simulation(
         run_cmd,
         capture_output=True,
         text=True,
-        cwd=str(output_dir),
     )
 
     if result.stdout:
@@ -1019,10 +1111,12 @@ def _is_simulation_complete(sim_dir: Path) -> bool:
 
 def _run_pense_voice_simulation(
     pense_config: Dict[str, Any],
+    input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
     s3_prefix: str,
     task_id: str,
+    port: int,
     log_prefix: str = "Voice simulation",
 ) -> Dict[str, Any]:
     """
@@ -1031,10 +1125,12 @@ def _run_pense_voice_simulation(
 
     Args:
         pense_config: The pense config dict (for voice simulations)
+        input_dir: Directory to write config files
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
         s3_prefix: S3 key prefix for uploading results
         task_id: The task ID for updating the database with incremental results
+        port: Port number for the simulation server
         log_prefix: Prefix for log messages
 
     Returns:
@@ -1044,15 +1140,17 @@ def _run_pense_voice_simulation(
 
     s3 = get_s3_client()
 
-    # Resolve output directory to absolute path
+    # Resolve directories to absolute paths
+    input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
 
-    # Create output directory
+    # Create directories
+    input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write config to temp file
+    # Write config to input directory
     config_file_name = "simulation_config"
-    config_file = output_dir / f"{config_file_name}.json"
+    config_file = input_dir / f"{config_file_name}.json"
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(pense_config, f, indent=2)
 
@@ -1065,6 +1163,8 @@ def _run_pense_voice_simulation(
         str(config_file),
         "-o",
         str(output_dir),
+        "--port",
+        str(port),
     ]
 
     logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
@@ -1246,9 +1346,10 @@ def run_simulation_task(
     scenarios: List[Dict[str, Any]],
     metrics: List[Dict[str, Any]],
     s3_bucket: str,
-    simulation_type: str = "chat",
+    simulation_type: str = "text",
 ):
-    """Run the simulation in the background (chat or voice)."""
+    """Run the simulation in the background (text or voice)."""
+    reserved_port = None  # Track reserved port for cleanup
     try:
         logger.info(
             f"Running {simulation_type} simulation task {task_id} for agent {agent['uuid']} "
@@ -1256,6 +1357,11 @@ def run_simulation_task(
             f"and {len(metrics)} metric(s)"
         )
         update_simulation_job(task_id, status=TaskStatus.IN_PROGRESS.value)
+
+        # Reserve a port for voice simulations
+        if simulation_type == "voice":
+            reserved_port = reserve_port(task_id, start_port=8000)
+            logger.info(f"Reserved port {reserved_port} for voice simulation {task_id}")
 
         # Create temporary directory for processing (automatically cleaned up after use)
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1267,26 +1373,29 @@ def run_simulation_task(
                     agent, personas, scenarios, metrics, simulation_type=simulation_type
                 )
 
-                # Create output directory
+                # Create input and output directories
+                input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
-                output_dir = output_dir.resolve()
 
                 # Run pense simulation based on type
                 results_prefix = f"simulations/runs/{task_id}"
                 if simulation_type == "voice":
                     result = _run_pense_voice_simulation(
                         pense_config=pense_config,
+                        input_dir=input_dir,
                         output_dir=output_dir,
                         s3_bucket=s3_bucket,
                         s3_prefix=results_prefix,
                         task_id=task_id,
+                        port=reserved_port,
                         log_prefix=f"Voice simulation {task_id}",
                     )
                 else:
                     model_to_use = pense_config["params"]["model"]
-                    result = _run_pense_chat_simulation(
+                    result = _run_pense_text_simulation(
                         model=model_to_use,
                         pense_config=pense_config,
+                        input_dir=input_dir,
                         output_dir=output_dir,
                         s3_bucket=s3_bucket,
                         s3_prefix=results_prefix,
@@ -1330,10 +1439,21 @@ def run_simulation_task(
             status=TaskStatus.DONE.value,
             results={"error": f"Task failed: {str(e)}"},
         )
+    finally:
+        # Release reserved port
+        if reserved_port is not None:
+            release_port(reserved_port)
+
+        # Try to start the next queued job
+        try_start_queued_simulation_job(SIMULATION_JOB_TYPES)
 
 
 @router.post("/{simulation_uuid}/run", response_model=TaskCreateResponse)
-async def run_simulation_endpoint(simulation_uuid: str, request: RunSimulationRequest):
+async def run_simulation_endpoint(
+    simulation_uuid: str,
+    request: RunSimulationRequest,
+    user_id: str = Depends(get_current_user_id),
+):
     """
     Run a simulation with personas, scenarios, and metrics.
 
@@ -1348,6 +1468,10 @@ async def run_simulation_endpoint(simulation_uuid: str, request: RunSimulationRe
     simulation = get_simulation(simulation_uuid)
     if not simulation:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    # Verify user owns this simulation
+    if simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Get agent from simulation
     agent_uuid = simulation.get("agent_id")
@@ -1385,11 +1509,17 @@ async def run_simulation_endpoint(simulation_uuid: str, request: RunSimulationRe
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Check if we can start immediately or need to queue
+    can_start = can_start_simulation_job(SIMULATION_JOB_TYPES)
+    initial_status = (
+        TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+    )
+
     # Create job in database with details for recovery
     job_id = create_simulation_job(
         simulation_id=simulation_uuid,
         job_type=request.type,
-        status=TaskStatus.IN_PROGRESS.value,
+        status=initial_status,
         details={
             "simulation_uuid": simulation_uuid,
             "agent_uuid": agent_uuid,
@@ -1398,12 +1528,16 @@ async def run_simulation_endpoint(simulation_uuid: str, request: RunSimulationRe
         results=None,
     )
 
-    # Start background task in a separate thread
-    thread = threading.Thread(
-        target=run_simulation_task,
-        args=(job_id, agent, personas, scenarios, metrics, s3_bucket, request.type),
-        daemon=True,
-    )
-    thread.start()
+    if can_start:
+        # Start background task in a separate thread
+        thread = threading.Thread(
+            target=run_simulation_task,
+            args=(job_id, agent, personas, scenarios, metrics, s3_bucket, request.type),
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"Started {request.type} simulation job {job_id} immediately")
+    else:
+        logger.info(f"Queued {request.type} simulation job {job_id}")
 
-    return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)
+    return TaskCreateResponse(task_id=job_id, status=initial_status)

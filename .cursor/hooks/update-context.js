@@ -10,7 +10,7 @@ async function main() {
     return;
   }
   
-  // Only trigger if codebase-context.md was NOT the only file changed
+  // Only trigger if .py files were changed
   console.log(JSON.stringify({
     followup_message: `Only go ahead if you made code changes (not just updated ${CONTEXT_FILE}):
     
@@ -23,7 +23,9 @@ async function main() {
 
 Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
 
-Keep the file organized and don't remove existing relevant context.`
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.`
   }));
 }
 
