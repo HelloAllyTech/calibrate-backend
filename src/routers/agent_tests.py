@@ -255,6 +255,7 @@ def _build_pense_config(
 def _run_pense_test(
     model: str,
     pense_config: Dict[str, Any],
+    input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
     s3_prefix: str,
@@ -266,6 +267,7 @@ def _run_pense_test(
     Args:
         model: Model name to use
         pense_config: The pense config dict
+        input_dir: Directory to write config files
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
         s3_prefix: S3 key prefix for uploading results
@@ -280,15 +282,20 @@ def _run_pense_test(
     config = pense_config.copy()
     config["params"] = {"model": model}
 
-    # Create output directory
+    # Resolve directories to absolute paths
+    input_dir = input_dir.resolve()
+    output_dir = output_dir.resolve()
+
+    # Create directories
+    input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write config to temp file
-    config_file = output_dir / "test_config.json"
+    # Write config to input directory
+    config_file = input_dir / "test_config.json"
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
-    # Run pense llm tests run command
+    # Run pense llm tests run command (use absolute paths)
     run_cmd = [
         "pense",
         "llm",
@@ -308,7 +315,6 @@ def _run_pense_test(
         run_cmd,
         capture_output=True,
         text=True,
-        cwd=str(output_dir),
     )
 
     if result.stdout:
@@ -409,7 +415,8 @@ def run_llm_test_task(
                 pense_config = _build_pense_config(agent, tests)
                 model = pense_config["params"]["model"]
 
-                # Create output directory
+                # Create input and output directories
+                input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
 
                 # Run pense test
@@ -417,6 +424,7 @@ def run_llm_test_task(
                 result = _run_pense_test(
                     model=model,
                     pense_config=pense_config,
+                    input_dir=input_dir,
                     output_dir=output_dir,
                     s3_bucket=s3_bucket,
                     s3_prefix=results_prefix,
@@ -581,18 +589,23 @@ def run_model_benchmark(
     task_id: str,
     model: str,
     pense_config: Dict[str, Any],
+    input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
 ) -> ModelResult:
     """Run benchmark for a single model."""
     try:
-        s3_prefix = (
-            f"agent-tests/benchmarks/{task_id}/outputs/{model.replace('/', '_')}"
-        )
+        # Create model-specific directories to avoid race conditions in parallel runs
+        model_name = model.replace("/", "_")
+        model_input_dir = input_dir / model_name
+        model_input_dir.mkdir(parents=True, exist_ok=True)
+
+        s3_prefix = f"agent-tests/benchmarks/{task_id}/outputs/{model_name}"
 
         result = _run_pense_test(
             model=model,
             pense_config=pense_config,
+            input_dir=model_input_dir,
             output_dir=output_dir,
             s3_bucket=s3_bucket,
             s3_prefix=s3_prefix,
@@ -654,9 +667,11 @@ def run_benchmark_task(
                 pense_config = _build_pense_config(agent, tests, model=models[0])
                 pense_config["params"] = {}  # Clear model, will be set per-run
 
-                # Create output directory
+                # Create input and output directories
+                input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
-                output_dir.mkdir()
+                input_dir.mkdir(parents=True, exist_ok=True)
+                output_dir.mkdir(parents=True, exist_ok=True)
 
                 # Run benchmarks for all models in parallel
                 model_results = []
@@ -672,6 +687,7 @@ def run_benchmark_task(
                             task_id,
                             model,
                             pense_config,
+                            input_dir,
                             output_dir,
                             s3_bucket,
                         ): model
@@ -692,7 +708,7 @@ def run_benchmark_task(
 
                 # Run leaderboard command
                 leaderboard_dir = temp_path / "leaderboard"
-                leaderboard_dir.mkdir()
+                leaderboard_dir.mkdir(parents=True, exist_ok=True)
 
                 leaderboard_cmd = [
                     "pense",
@@ -716,7 +732,6 @@ def run_benchmark_task(
                         capture_output=True,
                         text=True,
                         check=True,
-                        cwd=temp_path,
                     )
 
                     logger.info("Leaderboard command completed successfully")

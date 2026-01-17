@@ -20,7 +20,8 @@ from utils import (
     ProviderResult,
     TaskCreateResponse,
     TaskStatusResponse,
-    find_available_port,
+    reserve_port,
+    release_port,
     get_s3_client,
     get_s3_output_config,
 )
@@ -235,6 +236,7 @@ def run_tts_evaluation_task(
     s3_bucket: str,
 ):
     """Run the TTS evaluation in the background."""
+    provider_ports = {}  # Track reserved ports for cleanup
     try:
         logger.info(
             f"Running TTS evaluation task {task_id} with {len(request.providers)} providers"
@@ -260,11 +262,10 @@ def run_tts_evaluation_task(
                 output_dir = temp_path / "output"
                 output_dir.mkdir()
 
-                # Find available ports for each provider
-                provider_ports = {}
+                # Reserve ports for each provider
                 start_port = 8000
                 for provider in request.providers:
-                    port = find_available_port(start_port)
+                    port = reserve_port(f"{task_id}_{provider}", start_port)
                     provider_ports[provider] = port
                     start_port = port + 1
 
@@ -452,6 +453,10 @@ def run_tts_evaluation_task(
             status=TaskStatus.DONE.value,
             results={"error": f"Task failed: {str(e)}"},
         )
+    finally:
+        # Release all reserved ports
+        for port in provider_ports.values():
+            release_port(port)
 
 
 @router.post("/evaluate", response_model=TaskCreateResponse)

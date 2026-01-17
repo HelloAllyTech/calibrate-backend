@@ -41,6 +41,8 @@ from utils import (
     TaskCreateResponse,
     get_s3_client,
     get_s3_output_config,
+    reserve_port,
+    release_port,
 )
 from auth_utils import get_current_user_id
 
@@ -771,6 +773,7 @@ def _build_pense_simulation_config(
 def _run_pense_chat_simulation(
     model: str,
     pense_config: Dict[str, Any],
+    input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
     s3_prefix: str,
@@ -782,6 +785,7 @@ def _run_pense_chat_simulation(
     Args:
         model: Model name to use
         pense_config: The pense config dict
+        input_dir: Directory to write config files
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
         s3_prefix: S3 key prefix for uploading results
@@ -796,15 +800,17 @@ def _run_pense_chat_simulation(
     config = pense_config.copy()
     config["params"] = {"model": model}
 
-    # Resolve output directory to absolute path
+    # Resolve directories to absolute paths
+    input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
 
-    # Create output directory
+    # Create directories
+    input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write config to temp file
+    # Write config to input directory
     config_file_name = "simulation_config"
-    config_file = output_dir / f"{config_file_name}.json"
+    config_file = input_dir / f"{config_file_name}.json"
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
@@ -831,7 +837,6 @@ def _run_pense_chat_simulation(
         run_cmd,
         capture_output=True,
         text=True,
-        cwd=str(output_dir),
     )
 
     if result.stdout:
@@ -1056,10 +1061,12 @@ def _is_simulation_complete(sim_dir: Path) -> bool:
 
 def _run_pense_voice_simulation(
     pense_config: Dict[str, Any],
+    input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
     s3_prefix: str,
     task_id: str,
+    port: int,
     log_prefix: str = "Voice simulation",
 ) -> Dict[str, Any]:
     """
@@ -1068,10 +1075,12 @@ def _run_pense_voice_simulation(
 
     Args:
         pense_config: The pense config dict (for voice simulations)
+        input_dir: Directory to write config files
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
         s3_prefix: S3 key prefix for uploading results
         task_id: The task ID for updating the database with incremental results
+        port: Port number for the simulation server
         log_prefix: Prefix for log messages
 
     Returns:
@@ -1081,15 +1090,17 @@ def _run_pense_voice_simulation(
 
     s3 = get_s3_client()
 
-    # Resolve output directory to absolute path
+    # Resolve directories to absolute paths
+    input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
 
-    # Create output directory
+    # Create directories
+    input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write config to temp file
+    # Write config to input directory
     config_file_name = "simulation_config"
-    config_file = output_dir / f"{config_file_name}.json"
+    config_file = input_dir / f"{config_file_name}.json"
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(pense_config, f, indent=2)
 
@@ -1102,6 +1113,8 @@ def _run_pense_voice_simulation(
         str(config_file),
         "-o",
         str(output_dir),
+        "--port",
+        str(port),
     ]
 
     logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
@@ -1286,6 +1299,7 @@ def run_simulation_task(
     simulation_type: str = "chat",
 ):
     """Run the simulation in the background (chat or voice)."""
+    reserved_port = None  # Track reserved port for cleanup
     try:
         logger.info(
             f"Running {simulation_type} simulation task {task_id} for agent {agent['uuid']} "
@@ -1293,6 +1307,11 @@ def run_simulation_task(
             f"and {len(metrics)} metric(s)"
         )
         update_simulation_job(task_id, status=TaskStatus.IN_PROGRESS.value)
+
+        # Reserve a port for voice simulations
+        if simulation_type == "voice":
+            reserved_port = reserve_port(task_id, start_port=8000)
+            logger.info(f"Reserved port {reserved_port} for voice simulation {task_id}")
 
         # Create temporary directory for processing (automatically cleaned up after use)
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1304,19 +1323,21 @@ def run_simulation_task(
                     agent, personas, scenarios, metrics, simulation_type=simulation_type
                 )
 
-                # Create output directory
+                # Create input and output directories
+                input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
-                output_dir = output_dir.resolve()
 
                 # Run pense simulation based on type
                 results_prefix = f"simulations/runs/{task_id}"
                 if simulation_type == "voice":
                     result = _run_pense_voice_simulation(
                         pense_config=pense_config,
+                        input_dir=input_dir,
                         output_dir=output_dir,
                         s3_bucket=s3_bucket,
                         s3_prefix=results_prefix,
                         task_id=task_id,
+                        port=reserved_port,
                         log_prefix=f"Voice simulation {task_id}",
                     )
                 else:
@@ -1324,6 +1345,7 @@ def run_simulation_task(
                     result = _run_pense_chat_simulation(
                         model=model_to_use,
                         pense_config=pense_config,
+                        input_dir=input_dir,
                         output_dir=output_dir,
                         s3_bucket=s3_bucket,
                         s3_prefix=results_prefix,
@@ -1367,6 +1389,10 @@ def run_simulation_task(
             status=TaskStatus.DONE.value,
             results={"error": f"Task failed: {str(e)}"},
         )
+    finally:
+        # Release reserved port
+        if reserved_port is not None:
+            release_port(reserved_port)
 
 
 @router.post("/{simulation_uuid}/run", response_model=TaskCreateResponse)

@@ -20,7 +20,8 @@ from utils import (
     ProviderResult,
     TaskCreateResponse,
     TaskStatusResponse,
-    find_available_port,
+    reserve_port,
+    release_port,
     get_s3_client,
     get_s3_output_config,
 )
@@ -168,6 +169,7 @@ def run_evaluation_task(
     s3_bucket: str,
 ):
     """Run the STT evaluation in the background."""
+    provider_ports = {}  # Track reserved ports for cleanup
     try:
         logger.info(
             f"Running evaluation task {task_id} with {len(request.providers)} providers"
@@ -249,11 +251,10 @@ def run_evaluation_task(
                 output_dir = temp_path / "output"
                 output_dir.mkdir()
 
-                # Find available ports for each provider
-                provider_ports = {}
+                # Reserve ports for each provider
                 start_port = 8000
                 for provider in request.providers:
-                    port = find_available_port(start_port)
+                    port = reserve_port(f"{task_id}_{provider}", start_port)
                     provider_ports[provider] = port
                     start_port = port + 1
 
@@ -403,11 +404,12 @@ def run_evaluation_task(
                                 except Exception as e:
                                     traceback.print_exc()
                                     # If reading xlsx fails, continue without summary
-                                    pass
+                                    raise e
 
                 except subprocess.CalledProcessError as e:
-                    # Leaderboard failure is not critical, continue
-                    pass
+                    # Leaderboard failure is critical too
+                    traceback.print_exc()
+                    raise e
 
                 # Update job with results
                 update_job(
@@ -437,6 +439,10 @@ def run_evaluation_task(
             status=TaskStatus.DONE.value,
             results={"error": f"Task failed: {str(e)}"},
         )
+    finally:
+        # Release all reserved ports
+        for port in provider_ports.values():
+            release_port(port)
 
 
 @router.post("/evaluate", response_model=TaskCreateResponse)

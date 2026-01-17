@@ -4,6 +4,7 @@ import os
 import signal
 import threading
 import logging
+import time
 
 from db import (
     get_pending_jobs,
@@ -46,8 +47,6 @@ def _kill_orphaned_processes_from_dict(pids_dict: dict, job_id: str) -> None:
             # Kill the process group (PID equals PGID when start_new_session=True)
             os.killpg(pid, signal.SIGTERM)
             logger.info(f"Job {job_id}: Sent SIGTERM to process group {pid} ({name})")
-
-            import time
 
             time.sleep(0.5)
 
@@ -98,8 +97,6 @@ def _kill_orphaned_process(details: dict, job_id: str) -> bool:
             logger.info(f"Job {job_id}: Sent SIGTERM to process group {pgid}")
 
             # Give it a moment to terminate gracefully
-            import time
-
             time.sleep(1)
 
             # Check if still running and force kill
@@ -129,8 +126,6 @@ def _kill_orphaned_process(details: dict, job_id: str) -> bool:
         try:
             os.kill(pid, signal.SIGTERM)
             logger.info(f"Job {job_id}: Sent SIGTERM to process {pid}")
-
-            import time
 
             time.sleep(1)
 
