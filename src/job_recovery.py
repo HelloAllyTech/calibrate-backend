@@ -22,10 +22,52 @@ from db import (
     get_scenarios_for_simulation,
     get_metrics_for_simulation,
     get_simulation,
+    get_queued_jobs,
+    get_queued_agent_test_jobs,
+    get_queued_simulation_jobs,
 )
-from utils import TaskStatus
+from utils import (
+    TaskStatus,
+    try_start_queued_job,
+    try_start_queued_agent_test_job,
+    try_start_queued_simulation_job,
+)
 
 logger = logging.getLogger(__name__)
+
+# Job type constants
+EVAL_JOB_TYPES = ["stt-eval", "tts-eval"]
+AGENT_TEST_JOB_TYPES = ["llm-unit-test", "llm-benchmark"]
+SIMULATION_JOB_TYPES = ["text", "voice"]
+
+
+def _start_queued_jobs():
+    """Start queued jobs if there's capacity after recovery."""
+    # Check for queued generic jobs (stt-eval, tts-eval)
+    queued_jobs = get_queued_jobs(EVAL_JOB_TYPES)
+    if queued_jobs:
+        logger.info(f"Found {len(queued_jobs)} queued eval job(s), attempting to start")
+        # Try to start as many as capacity allows
+        while try_start_queued_job(EVAL_JOB_TYPES):
+            pass
+
+    # Check for queued agent test jobs
+    queued_agent_test_jobs = get_queued_agent_test_jobs(AGENT_TEST_JOB_TYPES)
+    if queued_agent_test_jobs:
+        logger.info(
+            f"Found {len(queued_agent_test_jobs)} queued agent test job(s), attempting to start"
+        )
+        while try_start_queued_agent_test_job(AGENT_TEST_JOB_TYPES):
+            pass
+
+    # Check for queued simulation jobs
+    queued_simulation_jobs = get_queued_simulation_jobs(SIMULATION_JOB_TYPES)
+    if queued_simulation_jobs:
+        logger.info(
+            f"Found {len(queued_simulation_jobs)} queued simulation job(s), attempting to start"
+        )
+        while try_start_queued_simulation_job(SIMULATION_JOB_TYPES):
+            pass
 
 
 def _kill_orphaned_processes_from_dict(pids_dict: dict, job_id: str) -> None:
@@ -264,7 +306,7 @@ def recover_pending_jobs():
                 continue
 
             try:
-                if job_type in ["chat", "voice"]:
+                if job_type in ["text", "voice"]:
                     _recover_simulation_job(job_id, details, job_type)
                 else:
                     logger.warning(
@@ -286,6 +328,9 @@ def recover_pending_jobs():
                 )
     else:
         logger.info("No in_progress simulation jobs to recover")
+
+    # Start queued jobs if there's capacity
+    _start_queued_jobs()
 
 
 def _recover_stt_job(job_id: str, details: dict):
@@ -403,7 +448,7 @@ def _recover_llm_benchmark_job(job_id: str, details: dict):
 
 
 def _recover_simulation_job(job_id: str, details: dict, job_type: str):
-    """Recover a simulation job (chat or voice)."""
+    """Recover a simulation job (text or voice)."""
     from routers.simulations import run_simulation_task
 
     logger.info(f"Recovering simulation job {job_id} (type: {job_type})")

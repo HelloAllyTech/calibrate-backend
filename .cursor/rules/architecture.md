@@ -201,18 +201,86 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 ### Job Lifecycle
 
-1. **Creation**: Job created with `in_progress` status and `details` JSON containing recovery info
-2. **Execution**: Background thread runs the task
-3. **Process Tracking** (voice simulations only): PID and PGID stored in job details for cleanup
-4. **Incremental Updates** (voice simulations only): Results updated in DB as each simulation completes
-5. **Completion**: Job updated with `done` status and `results` JSON
-6. **Recovery**: On app startup, `job_recovery.py` kills orphaned processes and restarts any `in_progress` jobs
+1. **Request**: New job request received via API
+2. **Capacity Check**: Check if `running_jobs < MAX_CONCURRENT_JOBS`
+3. **Creation**: Job created with status based on capacity:
+   - `in_progress` if capacity available (job starts immediately)
+   - `queued` if capacity full (job waits in queue)
+4. **Execution**: Background thread runs the task
+5. **Process Tracking** (voice simulations only): PID and PGID stored in job details for cleanup
+6. **Incremental Updates** (voice simulations only): Results updated in DB as each simulation completes
+7. **Completion**: Job updated with `done` status and `results` JSON
+8. **Queue Processing**: On completion, `try_start_queued_*_job()` starts next queued job if capacity allows
+9. **Recovery**: On app startup, `job_recovery.py` kills orphaned processes, restarts `in_progress` jobs, and starts queued jobs
 
 ### Job Status Values
 
+- `queued` - Job is waiting for capacity (FIFO order)
 - `in_progress` - Job is running (may have partial results for voice simulations)
 - `done` - Job completed (check `results.error` for failure)
 - `cancelled` - Job was cancelled (not currently used)
+
+### Job Queueing System
+
+The queueing mechanism limits concurrent jobs to prevent resource exhaustion. Controlled by `MAX_CONCURRENT_JOBS` env var (default: 2).
+
+#### Queue Architecture
+
+Three separate queues exist, each with its own concurrency limit:
+
+| Queue | Job Types | Shared Limit |
+|-------|-----------|--------------|
+| Eval Queue | `stt-eval`, `tts-eval` | `MAX_CONCURRENT_JOBS` |
+| Agent Test Queue | `llm-unit-test`, `llm-benchmark` | `MAX_CONCURRENT_JOBS` |
+| Simulation Queue | `text`, `voice` | `MAX_CONCURRENT_JOBS` |
+
+#### Key Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `TaskStatus.QUEUED` | `utils.py` | New status for queued jobs |
+| `_job_starters` registry | `utils.py` | Maps job types to starter callbacks |
+| `register_job_starter()` | `utils.py` | Registers callback for starting jobs |
+| `can_start_*_job()` | `utils.py` | Checks if capacity allows new job |
+| `try_start_queued_*_job()` | `utils.py` | Starts next queued job |
+| `get_queued_*()` | `db.py` | Gets queued jobs (FIFO order) |
+| `count_running_*()` | `db.py` | Counts in-progress jobs |
+
+#### Job Starter Registration
+
+Each router registers its job starters at module load time:
+
+```python
+# In router module (e.g., stt.py)
+def _start_stt_job_from_queue(job: dict) -> bool:
+    # Reconstruct request from job details
+    # Start background thread
+    ...
+
+register_job_starter("stt-eval", _start_stt_job_from_queue)
+```
+
+#### Queue Flow
+
+```
+New Job Request
+      │
+      ▼
+Check: running_count < MAX_CONCURRENT_JOBS?
+      │
+      ├─── YES ──→ Create job (status=in_progress) ──→ Start immediately
+      │
+      └─── NO ───→ Create job (status=queued) ──→ Wait in queue
+      
+Job Completion
+      │
+      ▼
+try_start_queued_*_job()
+      │
+      ├─── Capacity available? ──→ Start oldest queued job
+      │
+      └─── No capacity ──→ Do nothing
+```
 
 ### Process Management for Long-Running Jobs
 
@@ -302,6 +370,9 @@ Required environment variables:
 ```bash
 # Database
 DB_ROOT_DIR=/appdata/db          # Directory containing pense.db
+
+# Job Queue
+MAX_CONCURRENT_JOBS=2            # Max concurrent jobs per queue type (default: 2)
 
 # CORS
 CORS_ALLOWED_ORIGINS=*           # Comma-separated origins (e.g., "http://localhost:3000,https://app.example.com")
@@ -504,25 +575,51 @@ async def get_entity_endpoint(uuid: str, user_id: str = Depends(get_current_user
     return entity
 ```
 
-### Background Task Pattern
+### Background Task Pattern (with Queueing)
 
 ```python
+# Job types sharing a queue
+JOB_TYPES = ["type-a", "type-b"]
+
+# Job starter callback (registered at module load)
+def _start_job_from_queue(job: dict) -> bool:
+    details = job.get("details", {})
+    request = TaskRequest(**details)
+    thread = threading.Thread(target=run_task, args=(job["uuid"], request), daemon=True)
+    thread.start()
+    return True
+
+register_job_starter("type-a", _start_job_from_queue)
+
+# Endpoint with queue check
 @router.post("/run", response_model=TaskCreateResponse)
 async def start_task(request: TaskRequest):
+    # Check capacity
+    can_start = can_start_job(JOB_TYPES)
+    initial_status = TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+    
     job_id = create_job(
-        job_type="task-type",
-        status=TaskStatus.IN_PROGRESS.value,
+        job_type="type-a",
+        status=initial_status,
         details={"param": value, "s3_bucket": bucket},
     )
 
-    thread = threading.Thread(
-        target=run_task,
-        args=(job_id, request, s3_bucket),
-        daemon=True,
-    )
-    thread.start()
+    if can_start:
+        thread = threading.Thread(target=run_task, args=(job_id, request), daemon=True)
+        thread.start()
 
-    return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)
+    return TaskCreateResponse(task_id=job_id, status=initial_status)
+
+# Task function with queue trigger on completion
+def run_task(task_id: str, request: TaskRequest):
+    try:
+        # ... do work ...
+        update_job(task_id, status=TaskStatus.DONE.value, results={...})
+    except Exception as e:
+        update_job(task_id, status=TaskStatus.DONE.value, results={"error": str(e)})
+    finally:
+        # Start next queued job if capacity allows
+        try_start_queued_job(JOB_TYPES)
 ```
 
 ### Incremental Job Processing Pattern (Voice Simulations)

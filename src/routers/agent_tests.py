@@ -32,7 +32,87 @@ from utils import (
     TaskCreateResponse,
     get_s3_client,
     get_s3_output_config,
+    can_start_agent_test_job,
+    try_start_queued_agent_test_job,
+    register_job_starter,
 )
+
+# Job types that share the same queue
+AGENT_TEST_JOB_TYPES = ["llm-unit-test", "llm-benchmark"]
+
+
+def _start_llm_unit_test_job_from_queue(job: dict) -> bool:
+    """Start an LLM unit test job from the queue."""
+    job_id = job["uuid"]
+    details = job.get("details", {})
+
+    agent_uuid = details.get("agent_uuid")
+    test_uuids = details.get("test_uuids", [])
+    s3_bucket = details.get("s3_bucket", "")
+
+    # Get agent and tests
+    agent = get_agent(agent_uuid)
+    if not agent:
+        return False
+
+    tests = []
+    for test_uuid in test_uuids:
+        test = get_test(test_uuid)
+        if test:
+            tests.append(test)
+
+    if not tests:
+        return False
+
+    # Start background task in a separate thread
+    thread = threading.Thread(
+        target=run_llm_test_task,
+        args=(job_id, agent, tests, s3_bucket),
+        daemon=True,
+    )
+    thread.start()
+
+    return True
+
+
+def _start_llm_benchmark_job_from_queue(job: dict) -> bool:
+    """Start an LLM benchmark job from the queue."""
+    job_id = job["uuid"]
+    details = job.get("details", {})
+
+    agent_uuid = details.get("agent_uuid")
+    test_uuids = details.get("test_uuids", [])
+    models = details.get("models", [])
+    s3_bucket = details.get("s3_bucket", "")
+
+    # Get agent and tests
+    agent = get_agent(agent_uuid)
+    if not agent:
+        return False
+
+    tests = []
+    for test_uuid in test_uuids:
+        test = get_test(test_uuid)
+        if test:
+            tests.append(test)
+
+    if not tests or not models:
+        return False
+
+    # Start background task in a separate thread
+    thread = threading.Thread(
+        target=run_benchmark_task,
+        args=(job_id, agent, tests, models, s3_bucket),
+        daemon=True,
+    )
+    thread.start()
+
+    return True
+
+
+# Register the job starters for agent test jobs
+register_job_starter("llm-unit-test", _start_llm_unit_test_job_from_queue)
+register_job_starter("llm-benchmark", _start_llm_benchmark_job_from_queue)
 
 logger = logging.getLogger(__name__)
 
@@ -464,6 +544,9 @@ def run_llm_test_task(
             status=TaskStatus.DONE.value,
             results={"error": f"Task failed: {str(e)}"},
         )
+    finally:
+        # Try to start the next queued job
+        try_start_queued_agent_test_job(AGENT_TEST_JOB_TYPES)
 
 
 @router.post("/agent/{agent_uuid}/run", response_model=TaskCreateResponse)
@@ -509,11 +592,17 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Check if we can start immediately or need to queue
+    can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)
+    initial_status = (
+        TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+    )
+
     # Create job in database with details for recovery
     job_id = create_agent_test_job(
         agent_id=agent_uuid,
         job_type="llm-unit-test",
-        status=TaskStatus.IN_PROGRESS.value,
+        status=initial_status,
         details={
             "agent_uuid": agent_uuid,
             "test_uuids": request.test_uuids,
@@ -522,15 +611,19 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
         results=None,
     )
 
-    # Start background task in a separate thread
-    thread = threading.Thread(
-        target=run_llm_test_task,
-        args=(job_id, agent, tests, s3_bucket),
-        daemon=True,
-    )
-    thread.start()
+    if can_start:
+        # Start background task in a separate thread
+        thread = threading.Thread(
+            target=run_llm_test_task,
+            args=(job_id, agent, tests, s3_bucket),
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"Started LLM unit test job {job_id} immediately")
+    else:
+        logger.info(f"Queued LLM unit test job {job_id}")
 
-    return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)
+    return TaskCreateResponse(task_id=job_id, status=initial_status)
 
 
 @router.get("/run/{task_id}", response_model=TestRunStatusResponse)
@@ -804,6 +897,9 @@ def run_benchmark_task(
             status=TaskStatus.DONE.value,
             results={"error": f"Task failed: {str(e)}"},
         )
+    finally:
+        # Try to start the next queued job
+        try_start_queued_agent_test_job(AGENT_TEST_JOB_TYPES)
 
 
 @router.post("/agent/{agent_uuid}/benchmark", response_model=TaskCreateResponse)
@@ -851,11 +947,17 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Check if we can start immediately or need to queue
+    can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)
+    initial_status = (
+        TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+    )
+
     # Create job in database with details for recovery
     job_id = create_agent_test_job(
         agent_id=agent_uuid,
         job_type="llm-benchmark",
-        status=TaskStatus.IN_PROGRESS.value,
+        status=initial_status,
         details={
             "agent_uuid": agent_uuid,
             "test_uuids": request.test_uuids,
@@ -865,15 +967,19 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
         results=None,
     )
 
-    # Start background task
-    thread = threading.Thread(
-        target=run_benchmark_task,
-        args=(job_id, agent, tests, request.models, s3_bucket),
-        daemon=True,
-    )
-    thread.start()
+    if can_start:
+        # Start background task
+        thread = threading.Thread(
+            target=run_benchmark_task,
+            args=(job_id, agent, tests, request.models, s3_bucket),
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"Started LLM benchmark job {job_id} immediately")
+    else:
+        logger.info(f"Queued LLM benchmark job {job_id}")
 
-    return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)
+    return TaskCreateResponse(task_id=job_id, status=initial_status)
 
 
 @router.get("/benchmark/{task_id}", response_model=BenchmarkStatusResponse)

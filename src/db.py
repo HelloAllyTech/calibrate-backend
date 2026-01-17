@@ -2063,6 +2063,39 @@ def get_pending_jobs() -> List[Dict[str, Any]]:
         return [_parse_job_row(row) for row in rows]
 
 
+def get_queued_jobs(job_types: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Get all jobs with status 'queued', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT * FROM jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC"
+            )
+        rows = cursor.fetchall()
+        return [_parse_job_row(row) for row in rows]
+
+
+def count_running_jobs(job_types: Optional[List[str]] = None) -> int:
+    """Count jobs with status 'in_progress', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT COUNT(*) FROM jobs WHERE status = 'in_progress' AND type IN ({placeholders})",
+                job_types,
+            )
+        else:
+            cursor.execute("SELECT COUNT(*) FROM jobs WHERE status = 'in_progress'")
+        return cursor.fetchone()[0]
+
+
 def update_job(
     job_uuid: str,
     status: Optional[str] = None,
@@ -2233,6 +2266,43 @@ def get_pending_agent_test_jobs() -> List[Dict[str, Any]]:
         return [_parse_agent_test_job_row(row) for row in rows]
 
 
+def get_queued_agent_test_jobs(
+    job_types: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Get all agent test jobs with status 'queued', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT * FROM agent_test_jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM agent_test_jobs WHERE status = 'queued' ORDER BY created_at ASC"
+            )
+        rows = cursor.fetchall()
+        return [_parse_agent_test_job_row(row) for row in rows]
+
+
+def count_running_agent_test_jobs(job_types: Optional[List[str]] = None) -> int:
+    """Count agent test jobs with status 'in_progress', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT COUNT(*) FROM agent_test_jobs WHERE status = 'in_progress' AND type IN ({placeholders})",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM agent_test_jobs WHERE status = 'in_progress'"
+            )
+        return cursor.fetchone()[0]
+
+
 def update_agent_test_job(
     job_uuid: str,
     status: Optional[str] = None,
@@ -2382,6 +2452,43 @@ def get_pending_simulation_jobs() -> List[Dict[str, Any]]:
         )
         rows = cursor.fetchall()
         return [_parse_simulation_job_row(row) for row in rows]
+
+
+def get_queued_simulation_jobs(
+    job_types: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Get all simulation jobs with status 'queued', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT * FROM simulation_jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM simulation_jobs WHERE status = 'queued' ORDER BY created_at ASC"
+            )
+        rows = cursor.fetchall()
+        return [_parse_simulation_job_row(row) for row in rows]
+
+
+def count_running_simulation_jobs(job_types: Optional[List[str]] = None) -> int:
+    """Count simulation jobs with status 'in_progress', optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT COUNT(*) FROM simulation_jobs WHERE status = 'in_progress' AND type IN ({placeholders})",
+                job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM simulation_jobs WHERE status = 'in_progress'"
+            )
+        return cursor.fetchone()[0]
 
 
 def update_simulation_job(

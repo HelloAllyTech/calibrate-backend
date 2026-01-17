@@ -21,6 +21,7 @@ _ports_lock = threading.Lock()
 
 
 class TaskStatus(str, Enum):
+    QUEUED = "queued"
     IN_PROGRESS = "in_progress"
     CANCELLED = "cancelled"
     DONE = "done"
@@ -157,3 +158,267 @@ def get_s3_output_config():
         raise ValueError("S3_OUTPUT_BUCKET environment variable is required")
 
     return bucket
+
+
+def get_max_concurrent_jobs() -> int:
+    """Get the maximum number of concurrent jobs from environment variable.
+
+    Defaults to 2 if not set.
+    """
+    return int(os.getenv("MAX_CONCURRENT_JOBS"))
+
+
+# Job queue lock to ensure thread-safe queue operations
+_job_queue_lock = threading.Lock()
+
+# Registry of job starter callbacks by job type
+_job_starters: Dict[str, callable] = {}
+
+
+def register_job_starter(job_type: str, starter_callback: callable) -> None:
+    """Register a callback function for starting jobs of a specific type.
+
+    Args:
+        job_type: The job type (e.g., "stt-eval", "tts-eval")
+        starter_callback: Function that takes a job dict and starts the job.
+    """
+    _job_starters[job_type] = starter_callback
+    logger.info(f"Registered job starter for type: {job_type}")
+
+
+def try_start_queued_job(job_types: List[str]) -> bool:
+    """Try to start the next queued job if there's capacity.
+
+    Args:
+        job_types: List of job types to consider (e.g., ["stt-eval", "tts-eval"])
+
+    Returns:
+        True if a job was started, False otherwise.
+    """
+    # Import here to avoid circular imports
+    from db import count_running_jobs, get_queued_jobs, update_job
+
+    with _job_queue_lock:
+        max_jobs = get_max_concurrent_jobs()
+        running_count = count_running_jobs(job_types)
+
+        logger.info(f"Job queue check: {running_count}/{max_jobs} jobs running")
+
+        if running_count >= max_jobs:
+            logger.info("Max concurrent jobs reached, not starting new job")
+            return False
+
+        # Get the oldest queued job
+        queued_jobs = get_queued_jobs(job_types)
+        if not queued_jobs:
+            logger.info("No queued jobs to start")
+            return False
+
+        job = queued_jobs[0]
+        job_id = job["uuid"]
+        job_type = job.get("type")
+
+        # Find the appropriate starter callback
+        starter_callback = _job_starters.get(job_type)
+        if not starter_callback:
+            logger.error(f"No job starter registered for type: {job_type}")
+            return False
+
+        # Update status to in_progress before starting
+        update_job(job_id, status=TaskStatus.IN_PROGRESS.value)
+        logger.info(f"Starting queued job {job_id} of type {job_type}")
+
+        try:
+            # Start the job (this should spawn a thread)
+            starter_callback(job)
+            return True
+        except Exception as e:
+            # If starting fails, mark as done with error
+            logger.error(f"Failed to start job {job_id}: {e}")
+            update_job(
+                job_id,
+                status=TaskStatus.DONE.value,
+                results={"error": f"Failed to start job: {str(e)}"},
+            )
+            return False
+
+
+def can_start_job(job_types: List[str]) -> bool:
+    """Check if there's capacity to start a new job immediately.
+
+    Args:
+        job_types: List of job types to consider for counting running jobs.
+
+    Returns:
+        True if a new job can be started, False otherwise.
+    """
+    from db import count_running_jobs
+
+    with _job_queue_lock:
+        max_jobs = get_max_concurrent_jobs()
+        running_count = count_running_jobs(job_types)
+        return running_count < max_jobs
+
+
+# ============ Agent Test Job Queue Functions ============
+
+
+def try_start_queued_agent_test_job(job_types: List[str]) -> bool:
+    """Try to start the next queued agent test job if there's capacity.
+
+    Args:
+        job_types: List of job types to consider (e.g., ["llm-unit-test", "llm-benchmark"])
+
+    Returns:
+        True if a job was started, False otherwise.
+    """
+    from db import (
+        count_running_agent_test_jobs,
+        get_queued_agent_test_jobs,
+        update_agent_test_job,
+    )
+
+    with _job_queue_lock:
+        max_jobs = get_max_concurrent_jobs()
+        running_count = count_running_agent_test_jobs(job_types)
+
+        logger.info(
+            f"Agent test job queue check: {running_count}/{max_jobs} jobs running"
+        )
+
+        if running_count >= max_jobs:
+            logger.info("Max concurrent jobs reached, not starting new agent test job")
+            return False
+
+        # Get the oldest queued job
+        queued_jobs = get_queued_agent_test_jobs(job_types)
+        if not queued_jobs:
+            logger.info("No queued agent test jobs to start")
+            return False
+
+        job = queued_jobs[0]
+        job_id = job["uuid"]
+        job_type = job.get("type")
+
+        # Find the appropriate starter callback
+        starter_callback = _job_starters.get(job_type)
+        if not starter_callback:
+            logger.error(f"No job starter registered for type: {job_type}")
+            return False
+
+        # Update status to in_progress before starting
+        update_agent_test_job(job_id, status=TaskStatus.IN_PROGRESS.value)
+        logger.info(f"Starting queued agent test job {job_id} of type {job_type}")
+
+        try:
+            # Start the job (this should spawn a thread)
+            starter_callback(job)
+            return True
+        except Exception as e:
+            # If starting fails, mark as done with error
+            logger.error(f"Failed to start agent test job {job_id}: {e}")
+            update_agent_test_job(
+                job_id,
+                status=TaskStatus.DONE.value,
+                results={"error": f"Failed to start job: {str(e)}"},
+            )
+            return False
+
+
+def can_start_agent_test_job(job_types: List[str]) -> bool:
+    """Check if there's capacity to start a new agent test job immediately.
+
+    Args:
+        job_types: List of job types to consider for counting running jobs.
+
+    Returns:
+        True if a new job can be started, False otherwise.
+    """
+    from db import count_running_agent_test_jobs
+
+    with _job_queue_lock:
+        max_jobs = get_max_concurrent_jobs()
+        running_count = count_running_agent_test_jobs(job_types)
+        return running_count < max_jobs
+
+
+# ============ Simulation Job Queue Functions ============
+
+
+def try_start_queued_simulation_job(job_types: List[str]) -> bool:
+    """Try to start the next queued simulation job if there's capacity.
+
+    Args:
+        job_types: List of job types to consider (e.g., ["text", "voice"])
+
+    Returns:
+        True if a job was started, False otherwise.
+    """
+    from db import (
+        count_running_simulation_jobs,
+        get_queued_simulation_jobs,
+        update_simulation_job,
+    )
+
+    with _job_queue_lock:
+        max_jobs = get_max_concurrent_jobs()
+        running_count = count_running_simulation_jobs(job_types)
+
+        logger.info(
+            f"Simulation job queue check: {running_count}/{max_jobs} jobs running"
+        )
+
+        if running_count >= max_jobs:
+            logger.info("Max concurrent jobs reached, not starting new simulation job")
+            return False
+
+        # Get the oldest queued job
+        queued_jobs = get_queued_simulation_jobs(job_types)
+        if not queued_jobs:
+            logger.info("No queued simulation jobs to start")
+            return False
+
+        job = queued_jobs[0]
+        job_id = job["uuid"]
+        job_type = job.get("type")
+
+        # Find the appropriate starter callback
+        starter_callback = _job_starters.get(job_type)
+        if not starter_callback:
+            logger.error(f"No job starter registered for type: {job_type}")
+            return False
+
+        # Update status to in_progress before starting
+        update_simulation_job(job_id, status=TaskStatus.IN_PROGRESS.value)
+        logger.info(f"Starting queued simulation job {job_id} of type {job_type}")
+
+        try:
+            # Start the job (this should spawn a thread)
+            starter_callback(job)
+            return True
+        except Exception as e:
+            # If starting fails, mark as done with error
+            logger.error(f"Failed to start simulation job {job_id}: {e}")
+            update_simulation_job(
+                job_id,
+                status=TaskStatus.DONE.value,
+                results={"error": f"Failed to start job: {str(e)}"},
+            )
+            return False
+
+
+def can_start_simulation_job(job_types: List[str]) -> bool:
+    """Check if there's capacity to start a new simulation job immediately.
+
+    Args:
+        job_types: List of job types to consider for counting running jobs.
+
+    Returns:
+        True if a new job can be started, False otherwise.
+    """
+    from db import count_running_simulation_jobs
+
+    with _job_queue_lock:
+        max_jobs = get_max_concurrent_jobs()
+        running_count = count_running_simulation_jobs(job_types)
+        return running_count < max_jobs

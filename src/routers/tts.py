@@ -24,7 +24,44 @@ from utils import (
     release_port,
     get_s3_client,
     get_s3_output_config,
+    can_start_job,
+    try_start_queued_job,
+    register_job_starter,
 )
+
+# Job types that share the same queue
+EVAL_JOB_TYPES = ["stt-eval", "tts-eval"]
+
+
+def _start_tts_job_from_queue(job: dict) -> bool:
+    """Start a TTS evaluation job from the queue.
+
+    This is called by the job queue manager when there's capacity to run a new job.
+    """
+    job_id = job["uuid"]
+    details = job.get("details", {})
+
+    # Reconstruct request from job details
+    request = TTSEvaluationRequest(
+        texts=details.get("texts", []),
+        providers=details.get("providers", []),
+        language=details.get("language", ""),
+    )
+    s3_bucket = details.get("s3_bucket", "")
+
+    # Start background task in a separate thread
+    thread = threading.Thread(
+        target=run_tts_evaluation_task,
+        args=(job_id, request, s3_bucket),
+        daemon=True,
+    )
+    thread.start()
+
+    return True
+
+
+# Register the job starter for TTS evaluation jobs
+register_job_starter("tts-eval", _start_tts_job_from_queue)
 
 logger = logging.getLogger(__name__)
 
@@ -458,6 +495,9 @@ def run_tts_evaluation_task(
         for port in provider_ports.values():
             release_port(port)
 
+        # Try to start the next queued job
+        try_start_queued_job(EVAL_JOB_TYPES)
+
 
 @router.post("/evaluate", response_model=TaskCreateResponse)
 async def evaluate_tts(request: TTSEvaluationRequest):
@@ -485,10 +525,16 @@ async def evaluate_tts(request: TTSEvaluationRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Check if we can start immediately or need to queue
+    can_start = can_start_job(EVAL_JOB_TYPES)
+    initial_status = (
+        TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+    )
+
     # Create job in database with details for recovery
     job_id = create_job(
         job_type="tts-eval",
-        status=TaskStatus.IN_PROGRESS.value,
+        status=initial_status,
         details={
             "texts": request.texts,
             "providers": request.providers,
@@ -498,15 +544,19 @@ async def evaluate_tts(request: TTSEvaluationRequest):
         results=None,
     )
 
-    # Start background task in a separate thread
-    thread = threading.Thread(
-        target=run_tts_evaluation_task,
-        args=(job_id, request, s3_bucket),
-        daemon=True,
-    )
-    thread.start()
+    if can_start:
+        # Start background task in a separate thread
+        thread = threading.Thread(
+            target=run_tts_evaluation_task,
+            args=(job_id, request, s3_bucket),
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"Started TTS evaluation job {job_id} immediately")
+    else:
+        logger.info(f"Queued TTS evaluation job {job_id}")
 
-    return TaskCreateResponse(task_id=job_id, status=TaskStatus.IN_PROGRESS.value)
+    return TaskCreateResponse(task_id=job_id, status=initial_status)
 
 
 @router.get("/evaluate/{task_id}", response_model=TaskStatusResponse)
