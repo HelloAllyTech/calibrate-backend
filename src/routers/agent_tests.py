@@ -26,6 +26,7 @@ from db import (
     create_agent_test_job,
     get_agent_test_job,
     update_agent_test_job,
+    get_agent_test_jobs_for_agent,
 )
 from utils import (
     TaskStatus,
@@ -191,6 +192,29 @@ class TestRunStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class AgentTestRunListItem(BaseModel):
+    uuid: str
+    name: str  # Format: "Run {index}" or "Benchmark {index}"
+    status: str
+    type: str
+    updated_at: str
+    # Unit test results (for llm-unit-test type)
+    total_tests: Optional[int] = None
+    passed: Optional[int] = None
+    failed: Optional[int] = None
+    results: Optional[List[TestCaseResult]] = None
+    # Benchmark results (for llm-benchmark type)
+    model_results: Optional[List[Dict[str, Any]]] = None
+    leaderboard_summary: Optional[List[Dict[str, Any]]] = None
+    # Common fields
+    results_s3_prefix: Optional[str] = None
+    error: Optional[str] = None
+
+
+class AgentTestRunsResponse(BaseModel):
+    runs: List[AgentTestRunListItem]
+
+
 @router.post("", response_model=AgentTestsCreateResponse)
 async def create_agent_test_links(agent_tests: AgentTestsCreate):
     """Add tests to an agent."""
@@ -243,6 +267,63 @@ async def get_agent_tests_endpoint(agent_uuid: str):
 
     tests = get_tests_for_agent(agent_uuid)
     return tests
+
+
+@router.get("/agent/{agent_uuid}/runs", response_model=AgentTestRunsResponse)
+async def get_agent_test_runs(agent_uuid: str):
+    """
+    Get all test runs for an agent.
+
+    Returns a list of all test runs (unit tests and benchmarks) with their UUID, status, type, name, and results.
+    """
+    # Verify agent exists
+    agent = get_agent(agent_uuid)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get all jobs for this agent
+    jobs = get_agent_test_jobs_for_agent(agent_uuid)
+
+    # Group jobs by type to generate run names
+    unit_test_count = 0
+    benchmark_count = 0
+
+    runs = []
+    for job in jobs:
+        job_type = job.get("type", "")
+        if job_type == "llm-unit-test":
+            unit_test_count += 1
+            name = f"Run {unit_test_count}"
+        elif job_type == "llm-benchmark":
+            benchmark_count += 1
+            name = f"Benchmark {benchmark_count}"
+        else:
+            name = f"Job {len(runs) + 1}"
+
+        # Extract results from job
+        job_results = job.get("results") or {}
+
+        run_item = AgentTestRunListItem(
+            uuid=job["uuid"],
+            name=name,
+            status=job["status"],
+            type=job_type,
+            updated_at=job.get("updated_at", job.get("created_at", "")),
+            # Unit test results
+            total_tests=job_results.get("total_tests"),
+            passed=job_results.get("passed"),
+            failed=job_results.get("failed"),
+            results=job_results.get("test_results"),
+            # Benchmark results
+            model_results=job_results.get("model_results"),
+            leaderboard_summary=job_results.get("leaderboard_summary"),
+            # Common fields
+            results_s3_prefix=job_results.get("results_s3_prefix"),
+            error=job_results.get("error"),
+        )
+        runs.append(run_item)
+
+    return AgentTestRunsResponse(runs=runs)
 
 
 @router.get("/test/{test_uuid}/agents", response_model=List[AgentResponse])
@@ -303,9 +384,12 @@ def _build_pense_config(
     # Combine test cases from all tests
     all_test_cases = []
     for test in tests:
+        test_name = test.get("name")
         test_config = test.get("config")
         if not test_config:
             continue
+
+        test_config["name"] = test_name
 
         if test_config["evaluation"]["type"] == "tool_call":
             tool_calls = []

@@ -1248,3 +1248,660 @@ The architecture.md has been updated to document the new presigned URL helper fu
 
 ---
 
+_**User (2026-01-17 11:43Z)**_
+
+add similar api as getting runs for one simulation  for agent test jobs for a given agent
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to add an API endpoint to get all agent test jobs for a given agent, similar to how simulation runs can be fetched for a simulation. Let me first look at how the simulation runs API is implemented to understand the pattern, and then look at the agent tests router to add a similar endpoint.</details></think>
+
+---
+
+Let me first look at how the simulation runs API is implemented, and then check the agent tests router:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "/runs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py" • 3 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/simulations.py` | `s3_key_prefix: S3 key prefix (e.g., "simulations/runs/task_id/simulation_persona_1_scenario_1/audios")` | L111 |
+| `src/routers/simulations.py` | `@router.get("/\{simulation_uuid\}/runs", response_model=SimulationRunsResponse)` | L467 |
+| `src/routers/simulations.py` | `results_prefix = f"simulations/runs/\{task_id\}"` | L1371 |
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I understand both patterns. Looking at the simulations.py:
+
+1. There's an endpoint `GET /{simulation_uuid}/runs` that returns all simulation runs for a simulation
+2. It uses `get_simulation_jobs_for_simulation(simulation_uuid)` from db.py
+
+For agent tests, I need to:
+1. Create a similar db function `get_agent_test_jobs_for_agent(agent_uuid)` if it doesn't exist
+2. Add an endpoint `GET /agent/{agent_uuid}/runs` to return all test runs for an agent
+
+Let me check if there's already a db function for getting agent test jobs for an agent.</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "get_agent_test_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def get_agent_test_jobs_for_agent(` | L2223 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The db function `get_agent_test_jobs_for_agent` already exists. Now I need to:1. Add the import for this function in agent_tests.py
+2. Add a response model for the runs list
+3. Add the endpoint `GET /agent/{agent_uuid}/runs`Let me also check the simulations.py to see what response model they use for the runs list.</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "SimulationRunsResponse|class.*Run.*Response" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py" • 4 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/simulations.py` | `class SimulationRunStatusResponse(BaseModel):` | L286 |
+| `src/routers/simulations.py` | `class SimulationRunsResponse(BaseModel):` | L309 |
+| `src/routers/simulations.py` | `@router.get("/\{simulation_uuid\}/runs", response_model=SimulationRunsResponse)` | L467 |
+| `src/routers/simulations.py` | `return SimulationRunsResponse(runs=runs)` | L512 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I understand the pattern. I need to:
+
+1. Add the import for `get_agent_test_jobs_for_agent` from db.py
+2. Create response models:
+   - `AgentTestRunListItem` - individual run info
+   - `AgentTestRunsResponse` - wrapper with list of runs
+3. Add endpoint `GET /agent/{agent_uuid}/runs`
+
+Let me also check the SimulationRunListItem to see what fields it has.</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "class SimulationRunListItem" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/simulations.py` | `class SimulationRunListItem(BaseModel):` | L301 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I have all the information I need. Let me add the endpoint to agent_tests.py:1. Add import for `get_agent_test_jobs_for_agent`
+2. Add `AgentTestRunListItem` and `AgentTestRunsResponse` models3. Add the `GET /agent/{agent_uuid}/runs` endpoint</details></think>
+
+---
+
+Now I'll add the new endpoint to `agent_tests.py`:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -27,4 +27,5 @@
+      get_agent_test_job,
+      update_agent_test_job,
++     get_agent_test_jobs_for_agent,
+  )
+  from utils import (
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me add the response models after the existing response models and before the endpoint functions.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 12, lines removed: undefined
+
+```diff
+@@ -192,4 +192,16 @@
+      error: Optional[str] = None
+  
++ 
++ class AgentTestRunListItem(BaseModel):
++     uuid: str
++     name: str  # Format: "Run {index}" or "Benchmark {index}"
++     status: str
++     type: str
++     updated_at: str
++ 
++ 
++ class AgentTestRunsResponse(BaseModel):
++     runs: List[AgentTestRunListItem]
++ 
+  
+  @router.post("", response_model=AgentTestsCreateResponse)
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to add the endpoint. Looking at the simulations pattern, I'll add it after the `get_agent_tests_endpoint` function. Let me find a good place to add it.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 44, lines removed: undefined
+
+```diff
+@@ -258,4 +258,48 @@
+      return tests
+  
++ 
++ @router.get("/agent/{agent_uuid}/runs", response_model=AgentTestRunsResponse)
++ async def get_agent_test_runs(agent_uuid: str):
++     """
++     Get all test runs for an agent.
++ 
++     Returns a list of all test runs (unit tests and benchmarks) with their UUID, status, type, and name.
++     """
++     # Verify agent exists
++     agent = get_agent(agent_uuid)
++     if not agent:
++         raise HTTPException(status_code=404, detail="Agent not found")
++ 
++     # Get all jobs for this agent
++     jobs = get_agent_test_jobs_for_agent(agent_uuid)
++ 
++     # Group jobs by type to generate run names
++     unit_test_count = 0
++     benchmark_count = 0
++ 
++     runs = []
++     for job in jobs:
++         job_type = job.get("type", "")
++         if job_type == "llm-unit-test":
++             unit_test_count += 1
++             name = f"Run {unit_test_count}"
++         elif job_type == "llm-benchmark":
++             benchmark_count += 1
++             name = f"Benchmark {benchmark_count}"
++         else:
++             name = f"Job {len(runs) + 1}"
++ 
++         runs.append(
++             AgentTestRunListItem(
++                 uuid=job["uuid"],
++                 name=name,
++                 status=job["status"],
++                 type=job_type,
++                 updated_at=job.get("updated_at", job.get("created_at", "")),
++             )
++         )
++ 
++     return AgentTestRunsResponse(runs=runs)
++ 
+  
+  @router.get("/test/{test_uuid}/agents", response_model=List[AgentResponse])
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for linter errors.</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The changes are complete. Let me verify the endpoint was added correctly by reading the relevant part of the file.</details></think>
+
+---
+
+The endpoint has been added. Let me verify it looks correct:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The endpoint was added correctly. Let me provide a summary of what was added.</details></think>
+
+---
+
+Done! I've added a new API endpoint to get all test runs for a given agent. Here's a summary:
+
+**New Endpoint:**
+- `GET /agent-tests/agent/{agent_uuid}/runs` - Returns all test runs (unit tests and benchmarks) for an agent
+
+**Response Model:**
+```python
+class AgentTestRunListItem(BaseModel):
+    uuid: str
+    name: str  # Format: "Run {index}" or "Benchmark {index}"
+    status: str
+    type: str  # "llm-unit-test" or "llm-benchmark"
+    updated_at: str
+
+class AgentTestRunsResponse(BaseModel):
+    runs: List[AgentTestRunListItem]
+```
+
+**Behavior:**
+- Verifies the agent exists (returns 404 if not found)
+- Fetches all agent test jobs for the agent using `get_agent_test_jobs_for_agent`
+- Generates user-friendly names: "Run 1", "Run 2" for unit tests and "Benchmark 1", "Benchmark 2" for benchmarks
+- Returns jobs ordered by creation date (most recent first, as per the db function)
+
+---
+
+_**User (2026-01-17 11:43Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+I made code changes to add a new API endpoint `GET /agent-tests/agent/{agent_uuid}/runs` to get all test runs for a given agent. Let me update the architecture.md to document this new endpoint.
+
+I should look at the existing API endpoints section and add this new endpoint there.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I see the API endpoints section. I need to add the new endpoint `GET /agent-tests/agent/{uuid}/runs` to the Evaluation & Testing section. Let me update it.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -166,4 +166,5 @@
+  - &#96;POST /agent-tests/agent/{uuid}/run&#96; - Run agent unit tests
+  - &#96;POST /agent-tests/agent/{uuid}/benchmark&#96; - Run multi-model benchmark
++ - &#96;GET /agent-tests/agent/{uuid}/runs&#96; - List all test runs for an agent
+  - &#96;GET /agent-tests/run/{task_id}&#96; - Get test run status
+  - &#96;GET /agent-tests/benchmark/{task_id}&#96; - Get benchmark status
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Done. The architecture.md has been updated with the new endpoint. No environment variables were added, so no changes needed to .env.example, docker-compose.yml, or GitHub workflows.</details></think>
+
+---
+
+Updated the architecture.md with the new endpoint `GET /agent-tests/agent/{uuid}/runs`. No environment variables were added, so no other files need updating.
+
+---
+
+_**User (2026-01-17 11:43Z)**_
+
+for each agent test job also return the results of each run
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to modify the `GET /agent-tests/agent/{uuid}/runs` endpoint to also return the results for each run, not just the basic info (uuid, name, status, type, updated_at).
+
+Let me look at the current implementation and the response model to understand what needs to be changed.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I need to update the `AgentTestRunListItem` model to include the results. Looking at the existing models:
+- `TestRunStatusResponse` has fields for unit test results (total_tests, passed, failed, results, results_s3_prefix, error)
+- `BenchmarkStatusResponse` has fields for benchmark results (model_results, leaderboard_summary, results_s3_prefix, error)
+
+Since the run can be either a unit test or a benchmark, I need to include fields for both types. Let me update the model and the endpoint to include the results from each job.</details></think>
+
+---
+
+I'll update the `AgentTestRunListItem` model to include the results for each run:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 11, lines removed: undefined
+
+```diff
+@@ -199,4 +199,15 @@
+      type: str
+      updated_at: str
++     # Unit test results (for llm-unit-test type)
++     total_tests: Optional[int] = None
++     passed: Optional[int] = None
++     failed: Optional[int] = None
++     results: Optional[List[TestCaseResult]] = None
++     # Benchmark results (for llm-benchmark type)
++     model_results: Optional[List[Dict[str, Any]]] = None
++     leaderboard_summary: Optional[List[Dict[str, Any]]] = None
++     # Common fields
++     results_s3_prefix: Optional[str] = None
++     error: Optional[str] = None
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to update the endpoint to populate these fields from the job results.</details></think>
+
+---
+
+Now update the endpoint to include the results:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -275,5 +275,5 @@
+      Get all test runs for an agent.
+  
+-     Returns a list of all test runs (unit tests and benchmarks) with their UUID, status, type, and name.
++     Returns a list of all test runs (unit tests and benchmarks) with their UUID, status, type, name, and results.
+      """
+      # Verify agent exists
+```
+
+**Chunk 2**
+Lines added: 22, lines removed: 9
+
+```diff
+@@ -301,13 +301,26 @@
+              name = f"Job {len(runs) + 1}"
+  
+-         runs.append(
+-             AgentTestRunListItem(
+-                 uuid=job["uuid"],
+-                 name=name,
+-                 status=job["status"],
+-                 type=job_type,
+-                 updated_at=job.get("updated_at", job.get("created_at", "")),
+-             )
+-         )
++         # Extract results from job
++         job_results = job.get("results") or {}
++ 
++         run_item = AgentTestRunListItem(
++             uuid=job["uuid"],
++             name=name,
++             status=job["status"],
++             type=job_type,
++             updated_at=job.get("updated_at", job.get("created_at", "")),
++             # Unit test results
++             total_tests=job_results.get("total_tests"),
++             passed=job_results.get("passed"),
++             failed=job_results.get("failed"),
++             results=job_results.get("test_results"),
++             # Benchmark results
++             model_results=job_results.get("model_results"),
++             leaderboard_summary=job_results.get("leaderboard_summary"),
++             # Common fields
++             results_s3_prefix=job_results.get("results_s3_prefix"),
++             error=job_results.get("error"),
++         )
++         runs.append(run_item)
+  
+      return AgentTestRunsResponse(runs=runs)
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for linter errors.</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py`
+
+Lint results
+
+Lint errors for `src/routers/agent_tests.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Variable "dirs" is not accessed | 490:15-490:19 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 501:15-501:19 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 919:31-919:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The changes are complete. No linter errors. Let me provide a summary.</details></think>
+
+---
+
+Done! The `GET /agent-tests/agent/{agent_uuid}/runs` endpoint now returns the full results for each run. Here's the updated response model:
+
+```python
+class AgentTestRunListItem(BaseModel):
+    uuid: str
+    name: str  # Format: "Run {index}" or "Benchmark {index}"
+    status: str
+    type: str
+    updated_at: str
+    # Unit test results (for llm-unit-test type)
+    total_tests: Optional[int] = None
+    passed: Optional[int] = None
+    failed: Optional[int] = None
+    results: Optional[List[TestCaseResult]] = None
+    # Benchmark results (for llm-benchmark type)
+    model_results: Optional[List[Dict[str, Any]]] = None
+    leaderboard_summary: Optional[List[Dict[str, Any]]] = None
+    # Common fields
+    results_s3_prefix: Optional[str] = None
+    error: Optional[str] = None
+```
+
+For unit tests (`llm-unit-test`), the response includes `total_tests`, `passed`, `failed`, and `results`.
+
+For benchmarks (`llm-benchmark`), the response includes `model_results` and `leaderboard_summary`.
+
+---
+
+_**User (2026-01-17 11:43Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+I made a code change to enhance the `GET /agent-tests/agent/{agent_uuid}/runs` endpoint to include full results for each run. This is a minor enhancement to an existing endpoint - it now returns more data in the response.
+
+This is a relatively minor change that doesn't introduce new patterns or conventions. The architecture.md already documents this endpoint. I could add a note about the response including full results, but this is more API documentation level detail than architecture level.
+
+Let me check if there's anything in the architecture.md that needs to be updated to reflect this change. Looking at the API endpoints section, it just lists the endpoint briefly. I don't think this change warrants a significant update to the architecture document - it's just an enhancement to return more data in an existing endpoint.
+
+However, I should check if there's any mention of the response fields for this or similar endpoints that should be updated.</details></think>
+
+---
+
+The change I made was a minor enhancement to the existing `GET /agent-tests/agent/{agent_uuid}/runs` endpoint to include full results in the response. This is API-level detail rather than architectural change - the endpoint was already documented, and adding more fields to its response doesn't require architecture documentation updates.
+
+No new patterns, conventions, or environment variables were introduced. The architecture.md already documents this endpoint in the API Endpoints section, and the enhancement (returning results with each run) is consistent with how other status endpoints work in the codebase.
+
+---
+

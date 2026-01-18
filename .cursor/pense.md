@@ -22,77 +22,6 @@ uv sync --frozen
 
 Copy `.env.example` to `.env` and fill in the API keys for the providers you want to evaluate. All modules (agent, stt, tts, llm) will use this single `.env` file:
 
-## Talk to the agent
-
-`pense/agent/test.py` spins up the fully interactive STT → LLM → TTS pipeline so you can speak with the agent in real time.
-
-1. Make sure your `.env` file has the required API keys (defaults use OpenAI STT + LLM and Google TTS).
-2. Pick or edit a config file. `pense/agent/examples/test/config.json` is a ready-to-use config file.
-   You can configure the providers for STT, LLM, and TTS in the config file as shown below:
-
-   **Supported Providers:**
-
-   - **STT**: deepgram, google, openai, elevenlabs, sarvam, cartesia
-   - **TTS**: elevenlabs, cartesia, google, openai, deepgram, sarvam
-   - **LLM**: openrouter, openai
-
-   ```json
-   {
-     "system_prompt": "You are a helpful assistant.",
-     "language": "english",
-     "stt": {
-       "provider": "deepgram"
-     },
-     "tts": {
-       "provider": "cartesia",
-       "voice_id": "YOUR_VOICE_ID"
-     },
-     "llm": {
-       "provider": "openrouter", // or "openai"
-       "model": "openai/gpt-4o-2024-11-20" // or "gpt-4.1"
-     },
-     "tools": [
-       {
-         "type": "client",
-         "name": "get_weather",
-         "description": "Get the current weather",
-         "parameters": [
-           {
-             "id": "location",
-             "type": "string",
-             "description": "The city and state, e.g. San Francisco, CA",
-             "required": true
-           }
-         ]
-       }
-     ]
-   }
-   ```
-
-3. Start the runner:
-
-```bash
-pense agent test -c pense/agent/examples/test/config.json -o ./out/run
-```
-
-Once you run it, you can open `http://localhost:7860/client/` in your browser. Click **Connect**, and begin talking to the agent through your browser.
-
-> **⚠️ Important**  
-> Avoid using your laptop's speaker and microphone at the same time. Audio from the speaker can be picked up by the microphone, interrupting the agent with its own voice.  
-> **Use a headphone with a built-in microphone.**
-
-The client UI streams the conversation transcript in real time, while the **Metrics** tab mirrors the live latency statistics reported by the pipeline as shown in the images below:
-
-![Conversation example](images/run_conversation.png)
-
-![Metrics example](images/run_metrics.png)
-
-Every user/bot audio turn is persisted inside `<output_dir>/audios` (see a sample output folder for the exact layout). The terminal also logs each transcript message and every function/tool call issued by the LLM so you can audit the interaction without leaving your shell.
-
-`transcript.json` in the output directory has the full transcript with function calls.
-
-You can checkout `pense/agent/examples/test/sample_output` as a sample output of the agent conversation which contains all the audio turns and logs from the conversation.
-
 ## Speech To Text (STT)
 
 To evaluate different STT providers, first make sure to organize the input data in the following structure:
@@ -652,6 +581,9 @@ Run fully automated, text-only conversations between two LLMs—the “agent” 
       "description": "Whether the assistant asks one concise question per turn; is empathetic and does not repeat the user's answer back to them."
     }
   ],
+  "settings": {
+    "agent_speaks_first": true // optional: if true (default), the agent initiates the conversation. If false, the simulated user speaks first.
+  },
   "max_turns": 50 // optional: maximum number of assistant turns before ending the conversation (default: 50). When max_turns is reached, an end_reason message is added to the transcript.
 }
 ```
@@ -661,6 +593,8 @@ Each simulation pairs every persona with every scenario. The runner fans out int
 After each simulation, an LLM judge evaluates the transcript against all `evaluation_criteria` defined in the config. Each criterion produces a match (true/false) and reasoning. The results are aggregated across all simulations at the end of the run.
 
 **Max Turns:** You can optionally specify `max_turns` in the config to limit the maximum number of assistant turns in a conversation. When `max_turns` is reached, the conversation will end gracefully after the current turn completes, and an `end_reason` message with `"role": "end_reason"` and `"content": "max_turns"` will be added to the transcript. The default value is 50 turns.
+
+**Agent Speaks First:** You can optionally specify `agent_speaks_first` in the `settings` section to control who initiates the conversation. When set to `true` (default), the agent starts the conversation. When set to `false`, the simulated user speaks first.
 
 Set the required environment variables:
 
@@ -905,11 +839,16 @@ To run agent simulations with all the three components - STT, LLM, and TTS - pre
       "description": "Whether all the questions in the form were covered in the conversation" // description used by LLM judge to evaluate
     }
   ],
+  "settings": {
+    "agent_speaks_first": true // optional: if true (default), the agent initiates the conversation. If false, the simulated user speaks first.
+  },
   "max_turns": 50 // optional: maximum number of assistant turns before ending the conversation (default: 50). When max_turns is reached, the conversation ends gracefully after the current turn completes, and an end_reason message is added to the transcript.
 }
 ```
 
 You can configure the STT, TTS, and LLM providers directly in the config JSON file using the `stt`, `tts`, and `llm` sections. If these sections are omitted, the defaults are Google for STT, Google for TTS, and GPT-4.1 for LLM.
+
+**Agent Speaks First:** You can optionally specify `agent_speaks_first` in the `settings` section to control who initiates the conversation. When set to `true` (default), the agent starts the conversation. When set to `false`, the simulated user speaks first by saying "Hello" to the agent.
 
 **Supported Providers:**
 
@@ -1006,7 +945,8 @@ The output of the evaluation script will be saved in the output directory.
 │   ├── stt_outputs.json
 │   ├── tool_calls.json
 │   ├── transcript.json
-│   └── config.json              # persona and scenario for this simulation
+│   ├── config.json              # persona and scenario for this simulation
+│   └── conversation.wav         # combined audio file of the entire conversation
 ├── simulation_persona_1_scenario_2
 ├── simulation_persona_1_scenario_3
 ├── results.csv                  # aggregated results for all simulations
@@ -1025,6 +965,7 @@ Each `simulation_persona_*_scenario_*` directory contains:
 - `tool_calls.json`: chronologically ordered tool calls made by the agent.
 - `transcript.json`: full conversation transcript - alternating `user`/`assistant` turns. If the conversation ends due to `max_turns`, an `end_reason` message with `"role": "end_reason"` and `"content": "max_turns"` is appended.
 - `config.json`: persona dict and scenario dict used for this simulation
+- `conversation.wav`: combined audio file containing the entire conversation, generated by concatenating all individual audio files from the `audios/` directory in chronological order
 
 **Max Turns:** You can optionally specify `max_turns` in the config to limit the maximum number of assistant turns in a conversation. When `max_turns` is reached, the conversation will end gracefully after the current turn completes (ensuring the final assistant message is recorded), and an `end_reason` message will be added to the transcript. The default value is 50 turns.
 
@@ -1097,3 +1038,74 @@ simulation_persona_1_scenario_3,1.0,1.0,0.98
 ```
 
 You can checkout [`pense/agent/examples/simulation/sample_output`](pense/agent/examples/simulation/sample_output) to see a sample output of the voice agent simulation.
+
+## Talk to the agent
+
+`pense/agent/test.py` spins up the fully interactive STT → LLM → TTS pipeline so you can speak with the agent in real time.
+
+1. Make sure your `.env` file has the required API keys (defaults use OpenAI STT + LLM and Google TTS).
+2. Pick or edit a config file. `pense/agent/examples/test/config.json` is a ready-to-use config file.
+   You can configure the providers for STT, LLM, and TTS in the config file as shown below:
+
+   **Supported Providers:**
+
+   - **STT**: deepgram, google, openai, elevenlabs, sarvam, cartesia
+   - **TTS**: elevenlabs, cartesia, google, openai, deepgram, sarvam
+   - **LLM**: openrouter, openai
+
+   ```json
+   {
+     "system_prompt": "You are a helpful assistant.",
+     "language": "english",
+     "stt": {
+       "provider": "deepgram"
+     },
+     "tts": {
+       "provider": "cartesia",
+       "voice_id": "YOUR_VOICE_ID"
+     },
+     "llm": {
+       "provider": "openrouter", // or "openai"
+       "model": "openai/gpt-4o-2024-11-20" // or "gpt-4.1"
+     },
+     "tools": [
+       {
+         "type": "client",
+         "name": "get_weather",
+         "description": "Get the current weather",
+         "parameters": [
+           {
+             "id": "location",
+             "type": "string",
+             "description": "The city and state, e.g. San Francisco, CA",
+             "required": true
+           }
+         ]
+       }
+     ]
+   }
+   ```
+
+3. Start the runner:
+
+```bash
+pense agent test -c pense/agent/examples/test/config.json -o ./out/run
+```
+
+Once you run it, you can open `http://localhost:7860/client/` in your browser. Click **Connect**, and begin talking to the agent through your browser.
+
+> **⚠️ Important**  
+> Avoid using your laptop's speaker and microphone at the same time. Audio from the speaker can be picked up by the microphone, interrupting the agent with its own voice.  
+> **Use a headphone with a built-in microphone.**
+
+The client UI streams the conversation transcript in real time, while the **Metrics** tab mirrors the live latency statistics reported by the pipeline as shown in the images below:
+
+![Conversation example](images/run_conversation.png)
+
+![Metrics example](images/run_metrics.png)
+
+Every user/bot audio turn is persisted inside `<output_dir>/audios` (see a sample output folder for the exact layout). The terminal also logs each transcript message and every function/tool call issued by the LLM so you can audit the interaction without leaving your shell.
+
+`transcript.json` in the output directory has the full transcript with function calls.
+
+You can checkout `pense/agent/examples/test/sample_output` as a sample output of the agent conversation which contains all the audio turns and logs from the conversation.

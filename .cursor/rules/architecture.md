@@ -165,6 +165,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 - `GET /tts/evaluate/{task_id}` - Get TTS evaluation status
 - `POST /agent-tests/agent/{uuid}/run` - Run agent unit tests
 - `POST /agent-tests/agent/{uuid}/benchmark` - Run multi-model benchmark
+- `GET /agent-tests/agent/{uuid}/runs` - List all test runs for an agent
 - `GET /agent-tests/run/{task_id}` - Get test run status
 - `GET /agent-tests/benchmark/{task_id}` - Get benchmark status
 
@@ -306,7 +307,8 @@ Voice simulations (`pense agent simulation`) run multiple persona-scenario combi
   - `persona` and `scenario` data from `config.json`
   - `transcript` from `transcript.json`
   - `evaluation_results` with per-criterion metrics (name, value, reasoning) from `evaluation_results.csv`
-  - `audio_urls` (presigned S3 URLs for audio files)
+  - `audio_urls` (presigned S3 URLs for individual audio files in the `audios/` folder)
+  - `conversation_wav_url` (presigned S3 URL for the combined `conversation.wav` file, or empty string if not present)
   - Plus `completed_simulations` count for progress tracking
 - **On completion**: Final aggregated `metrics` (from `metrics.json`) are added to the response
 

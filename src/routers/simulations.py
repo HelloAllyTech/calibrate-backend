@@ -281,6 +281,9 @@ class SimulationCaseResult(BaseModel):
     audio_urls: Optional[List[str]] = (
         None  # List of presigned URLs for audio files in order (for voice simulations)
     )
+    conversation_wav_url: Optional[str] = (
+        None  # Presigned URL for the combined conversation.wav file (for voice simulations)
+    )
 
 
 class SimulationRunStatusResponse(BaseModel):
@@ -446,6 +449,21 @@ async def get_simulation_run_status(
                     logger.info(
                         f"Generated {len(audio_urls)} presigned URLs for simulation {sim_result.get('simulation_name')}"
                     )
+
+                # Generate presigned URL for conversation.wav if the S3 key is present
+                conversation_wav_s3_key = sim_result.get("conversation_wav_s3_key")
+                if conversation_wav_s3_key:
+                    conversation_wav_url = generate_presigned_download_url(
+                        conversation_wav_s3_key, bucket=s3_bucket
+                    )
+                    sim_result["conversation_wav_url"] = (
+                        conversation_wav_url if conversation_wav_url else ""
+                    )
+                    logger.info(
+                        f"Generated presigned URL for conversation.wav for simulation {sim_result.get('simulation_name')}"
+                    )
+                else:
+                    sim_result["conversation_wav_url"] = ""
         except Exception as e:
             logger.warning(f"Failed to generate audio URLs: {str(e)}")
             # Continue without audio URLs if generation fails
@@ -1079,6 +1097,16 @@ def _parse_simulation_directory(
                 f"Uploaded {audio_files_uploaded} audio file(s) for {sim_name} to s3://{s3_bucket}/{audios_s3_prefix}"
             )
 
+    # Upload conversation.wav if it exists
+    conversation_wav_s3_key = None
+    conversation_wav_file = sim_dir / "conversation.wav"
+    if conversation_wav_file.exists() and conversation_wav_file.is_file():
+        conversation_wav_s3_key = f"{s3_prefix}/{sim_name}/conversation.wav"
+        s3.upload_file(str(conversation_wav_file), s3_bucket, conversation_wav_s3_key)
+        logger.info(
+            f"Uploaded conversation.wav for {sim_name} to s3://{s3_bucket}/{conversation_wav_s3_key}"
+        )
+
     return {
         "simulation_name": sim_name,
         "persona": persona_data,
@@ -1086,6 +1114,7 @@ def _parse_simulation_directory(
         "evaluation_results": eval_results,
         "transcript": transcript,
         "audios_s3_path": audios_s3_path,
+        "conversation_wav_s3_key": conversation_wav_s3_key,
     }
 
 
