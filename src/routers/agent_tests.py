@@ -176,9 +176,10 @@ class TestOutput(BaseModel):
 class TestCaseResult(BaseModel):
     """Result for a single test case matching pense results.json structure"""
 
-    passed: bool
-    output: TestOutput
-    test_case: Dict[str, Any]
+    name: Optional[str] = None  # Test name, present during in-progress and done states
+    passed: Optional[bool] = None  # Only present when done
+    output: Optional[TestOutput] = None  # Only present when done
+    test_case: Optional[Dict[str, Any]] = None  # Only present when done
 
 
 class TestRunStatusResponse(BaseModel):
@@ -569,7 +570,13 @@ def run_llm_test_task(
         logger.info(
             f"Running LLM test task {task_id} for agent {agent['uuid']} with {len(tests)} test(s)"
         )
-        update_agent_test_job(task_id, status=TaskStatus.IN_PROGRESS.value)
+        # Extract test names for progress tracking
+        test_names = [test.get("name") for test in tests if test.get("name")]
+        update_agent_test_job(
+            task_id,
+            status=TaskStatus.IN_PROGRESS.value,
+            results={"test_results": [{"name": name} for name in test_names]},
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -682,6 +689,9 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
         TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
     )
 
+    # Extract test names for progress tracking
+    test_names = [test.get("name") for test in tests if test.get("name")]
+
     # Create job in database with details for recovery
     job_id = create_agent_test_job(
         agent_id=agent_uuid,
@@ -690,9 +700,10 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
         details={
             "agent_uuid": agent_uuid,
             "test_uuids": request.test_uuids,
+            "test_names": test_names,
             "s3_bucket": s3_bucket,
         },
-        results=None,
+        results={"test_results": [{"name": name} for name in test_names]},
     )
 
     if can_start:
@@ -832,7 +843,13 @@ def run_benchmark_task(
             f"Running benchmark task {task_id} for agent {agent['uuid']} "
             f"with {len(tests)} test(s) and {len(models)} model(s)"
         )
-        update_agent_test_job(task_id, status=TaskStatus.IN_PROGRESS.value)
+        # Extract test names for progress tracking
+        test_names = [test.get("name") for test in tests if test.get("name")]
+        update_agent_test_job(
+            task_id,
+            status=TaskStatus.IN_PROGRESS.value,
+            results={"test_results": [{"name": name} for name in test_names]},
+        )
 
         s3 = get_s3_client()
 
@@ -1037,6 +1054,9 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
         TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
     )
 
+    # Extract test names for progress tracking
+    test_names = [test.get("name") for test in tests if test.get("name")]
+
     # Create job in database with details for recovery
     job_id = create_agent_test_job(
         agent_id=agent_uuid,
@@ -1045,10 +1065,11 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
         details={
             "agent_uuid": agent_uuid,
             "test_uuids": request.test_uuids,
+            "test_names": test_names,
             "models": request.models,
             "s3_bucket": s3_bucket,
         },
-        results=None,
+        results={"test_results": [{"name": name} for name in test_names]},
     )
 
     if can_start:

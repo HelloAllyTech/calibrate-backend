@@ -314,6 +314,25 @@ Voice simulations (`pense agent simulation`) run multiple persona-scenario combi
 
 This allows clients to display progress and per-simulation evaluation results without waiting for all simulations to complete.
 
+### Agent Test Job Results Format
+
+Agent test jobs (both `llm-unit-test` and `llm-benchmark`) store test names in job details and provide partial results while in progress:
+
+- **Job details**: Contains `test_names` array with names of tests being run
+- **While queued/in_progress**: `results.test_results` contains `[{"name": "test1"}, {"name": "test2"}, ...]`
+- **When done**: `results.test_results` contains full results with `passed`, `output`, and `test_case` fields
+
+**Response Model (`TestCaseResult`):**
+
+| Field       | Type                   | When Present                  |
+| ----------- | ---------------------- | ----------------------------- |
+| `name`      | `Optional[str]`        | Always (in-progress and done) |
+| `passed`    | `Optional[bool]`       | Only when done                |
+| `output`    | `Optional[TestOutput]` | Only when done                |
+| `test_case` | `Optional[Dict]`       | Only when done                |
+
+This allows clients to display which tests are being run before results are available.
+
 ---
 
 ## External Integrations
