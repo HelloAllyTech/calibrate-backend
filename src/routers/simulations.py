@@ -46,6 +46,7 @@ from utils import (
     can_start_simulation_job,
     try_start_queued_simulation_job,
     register_job_starter,
+    generate_presigned_download_url,
 )
 from auth_utils import get_current_user_id
 
@@ -154,24 +155,13 @@ def _get_audio_urls_from_s3_key(s3_key_prefix: str, s3_bucket: str) -> List[str]
         audio_files.sort(key=natural_sort_key)
 
         # Generate presigned URLs
-        expiration = 3600  # 1 hour expiration
         presigned_urls = []
         for audio_key in audio_files:
-            try:
-                presigned_url = s3.generate_presigned_url(
-                    "get_object",
-                    Params={
-                        "Bucket": s3_bucket,
-                        "Key": audio_key,
-                    },
-                    ExpiresIn=expiration,
-                )
+            presigned_url = generate_presigned_download_url(audio_key, bucket=s3_bucket)
+            if presigned_url:
                 presigned_urls.append(presigned_url)
                 logger.info(f"Generated presigned URL for {audio_key}")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to generate presigned URL for {audio_key}: {str(e)}"
-                )
+            else:
                 # Fallback to S3 path if presigned URL generation fails
                 presigned_urls.append(f"s3://{s3_bucket}/{audio_key}")
 

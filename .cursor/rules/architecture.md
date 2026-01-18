@@ -54,7 +54,8 @@ pense-backend/
 │       ├── metrics.py       # Metric/evaluation criteria CRUD
 │       ├── simulations.py   # Simulation orchestration (chat/voice)
 │       ├── stt.py           # STT provider evaluation
-│       └── tts.py           # TTS provider evaluation
+│       ├── tts.py           # TTS provider evaluation
+│       └── jobs.py          # Job listing API (STT/TTS eval jobs)
 ├── db/
 │   └── pense.db             # SQLite database file
 ├── pyproject.toml           # Python project configuration
@@ -174,6 +175,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 - `GET /simulations/{uuid}/runs` - List all runs for a simulation
 
 **Status API Response Fields:**
+
 - `total_simulations` - Expected number of simulations (personas × scenarios)
 - `completed_simulations` - Number of completed simulations (voice only, while in_progress)
 - `simulation_results` - Array of completed simulation results (partial for in_progress voice simulations)
@@ -228,23 +230,23 @@ The queueing mechanism limits concurrent jobs to prevent resource exhaustion. Co
 
 Three separate queues exist, each with its own concurrency limit:
 
-| Queue | Job Types | Shared Limit |
-|-------|-----------|--------------|
-| Eval Queue | `stt-eval`, `tts-eval` | `MAX_CONCURRENT_JOBS` |
+| Queue            | Job Types                        | Shared Limit          |
+| ---------------- | -------------------------------- | --------------------- |
+| Eval Queue       | `stt-eval`, `tts-eval`           | `MAX_CONCURRENT_JOBS` |
 | Agent Test Queue | `llm-unit-test`, `llm-benchmark` | `MAX_CONCURRENT_JOBS` |
-| Simulation Queue | `text`, `voice` | `MAX_CONCURRENT_JOBS` |
+| Simulation Queue | `text`, `voice`                  | `MAX_CONCURRENT_JOBS` |
 
 #### Key Components
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| `TaskStatus.QUEUED` | `utils.py` | New status for queued jobs |
-| `_job_starters` registry | `utils.py` | Maps job types to starter callbacks |
-| `register_job_starter()` | `utils.py` | Registers callback for starting jobs |
-| `can_start_*_job()` | `utils.py` | Checks if capacity allows new job |
-| `try_start_queued_*_job()` | `utils.py` | Starts next queued job |
-| `get_queued_*()` | `db.py` | Gets queued jobs (FIFO order) |
-| `count_running_*()` | `db.py` | Counts in-progress jobs |
+| Component                  | Location   | Purpose                              |
+| -------------------------- | ---------- | ------------------------------------ |
+| `TaskStatus.QUEUED`        | `utils.py` | New status for queued jobs           |
+| `_job_starters` registry   | `utils.py` | Maps job types to starter callbacks  |
+| `register_job_starter()`   | `utils.py` | Registers callback for starting jobs |
+| `can_start_*_job()`        | `utils.py` | Checks if capacity allows new job    |
+| `try_start_queued_*_job()` | `utils.py` | Starts next queued job               |
+| `get_queued_*()`           | `db.py`    | Gets queued jobs (FIFO order)        |
+| `count_running_*()`        | `db.py`    | Counts in-progress jobs              |
 
 #### Job Starter Registration
 
@@ -271,7 +273,7 @@ Check: running_count < MAX_CONCURRENT_JOBS?
       ├─── YES ──→ Create job (status=in_progress) ──→ Start immediately
       │
       └─── NO ───→ Create job (status=queued) ──→ Wait in queue
-      
+
 Job Completion
       │
       ▼
@@ -483,6 +485,35 @@ OPENROUTER_API_KEY=xxx
 
 - **Rationale**: Secure, time-limited access without exposing credentials
 - **Implementation**: 1-hour expiration for generated URLs
+- **Storage Pattern**: Store S3 keys (not presigned URLs) in the database; generate presigned URLs on-the-fly when fetching job status. This prevents expired URLs from being served to clients.
+
+**Helper Functions** (in `utils.py`):
+
+| Function                            | Purpose                                             |
+| ----------------------------------- | --------------------------------------------------- |
+| `generate_presigned_download_url()` | Generate presigned URL for `get_object` (downloads) |
+| `generate_presigned_upload_url()`   | Generate presigned URL for `put_object` (uploads)   |
+
+Both functions return `None` on failure, allowing callers to handle errors (skip, fallback to S3 path, raise error).
+
+**Example Pattern (TTS/STT evaluation results):**
+
+```python
+from utils import generate_presigned_download_url
+
+# When storing results - save S3 key only
+result_row["audio_path"] = audio_s3_key  # e.g., "tts/evals/{job_id}/outputs/{provider}/audios/0.wav"
+
+# When fetching status - generate presigned URL on-the-fly
+if job["status"] == TaskStatus.DONE.value:
+    for result in results:
+        if result.get("audio_path") and not result["audio_path"].startswith("http"):
+            presigned_url = generate_presigned_download_url(result["audio_path"])
+            if presigned_url:
+                result["audio_path"] = presigned_url
+```
+
+**Backwards Compatibility**: When generating presigned URLs, skip entries that already start with `http` or `s3://` (older data with stored URLs).
 
 ### 6. Background Job Pattern
 
@@ -597,7 +628,7 @@ async def start_task(request: TaskRequest):
     # Check capacity
     can_start = can_start_job(JOB_TYPES)
     initial_status = TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
-    
+
     job_id = create_job(
         job_type="type-a",
         status=initial_status,
@@ -630,10 +661,10 @@ For long-running jobs that produce multiple outputs (like voice simulations), us
 def run_incremental_task(task_id: str, output_dir: Path):
     # Start process without blocking
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    
+
     processed_items = set()
     results = []
-    
+
     # Monitor for new outputs while process runs
     while process.poll() is None:
         for item in output_dir.iterdir():
@@ -641,20 +672,21 @@ def run_incremental_task(task_id: str, output_dir: Path):
                 result = parse_item(item)
                 results.append(result)
                 processed_items.add(item.name)
-                
+
                 # Update DB with partial results
                 update_job(task_id, status="in_progress", results={
                     "completed": len(results),
                     "items": results
                 })
-        
+
         time.sleep(2)  # Poll interval
-    
+
     # Final update with all results
     update_job(task_id, status="done", results={"items": results, "metrics": ...})
 ```
 
 Key aspects:
+
 - Use `subprocess.Popen` instead of `subprocess.run` for non-blocking execution
 - Write stdout/stderr to log files instead of pipes to avoid deadlocks
 - Check for completion markers (e.g., `evaluation_results.csv` exists) before processing - this ensures the evaluation step has finished

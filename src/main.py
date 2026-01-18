@@ -26,7 +26,8 @@ from routers.personas import router as personas_router
 from routers.scenarios import router as scenarios_router
 from routers.metrics import router as metrics_router
 from routers.simulations import router as simulations_router
-from utils import get_s3_client
+from routers.jobs import router as jobs_router
+from utils import generate_presigned_upload_url, get_s3_output_config
 from job_recovery import recover_pending_jobs
 
 
@@ -65,6 +66,7 @@ app.include_router(personas_router)
 app.include_router(scenarios_router)
 app.include_router(metrics_router)
 app.include_router(simulations_router)
+app.include_router(jobs_router)
 
 # Configure CORS allowed origins from environment variable
 # CORS_ALLOWED_ORIGINS can be comma-separated list (e.g., "http://localhost:3000,https://app.example.com")
@@ -127,14 +129,10 @@ async def get_presigned_url(request: PresignedURLRequest):
         )
 
     # Get S3 bucket from environment
-    s3_bucket = os.getenv("S3_OUTPUT_BUCKET")
-    if not s3_bucket:
-        raise HTTPException(
-            status_code=500,
-            detail="S3_OUTPUT_BUCKET environment variable is required",
-        )
-
-    s3 = get_s3_client()
+    try:
+        s3_bucket = get_s3_output_config()
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     # Generate UUID for unique file name
     file_uuid = str(uuid.uuid4())
@@ -145,15 +143,14 @@ async def get_presigned_url(request: PresignedURLRequest):
     # Generate presigned URL (expires in 1 hour)
     expiration = 3600  # 1 hour in seconds
 
-    presigned_url = s3.generate_presigned_url(
-        "put_object",
-        Params={
-            "Bucket": s3_bucket,
-            "Key": s3_key,
-            "ContentType": request.content_type,
-        },
-        ExpiresIn=expiration,
+    presigned_url = generate_presigned_upload_url(
+        s3_key, request.content_type, expiration=expiration
     )
+    if not presigned_url:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate presigned URL",
+        )
 
     return PresignedURLResponse(
         presigned_url=presigned_url,

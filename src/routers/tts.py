@@ -27,6 +27,7 @@ from utils import (
     can_start_job,
     try_start_queued_job,
     register_job_starter,
+    generate_presigned_download_url,
 )
 
 # Job types that share the same queue
@@ -207,9 +208,8 @@ def evaluate_tts_provider(
             f"Uploaded {audio_files_uploaded} audio file(s) for provider {provider}"
         )
 
-        # Replace local audio paths with presigned S3 URLs in results
+        # Replace local audio paths with S3 keys in results (presigned URLs generated on fetch)
         if results_data:
-            expiration = 3600  # 1 hour expiration
             for result_row in results_data:
                 if "audio_path" in result_row and result_row["audio_path"]:
                     local_audio_path = result_row["audio_path"]
@@ -222,26 +222,9 @@ def evaluate_tts_provider(
                         )
                         continue
 
-                    # Generate presigned URL
-                    try:
-                        presigned_url = s3.generate_presigned_url(
-                            "get_object",
-                            Params={
-                                "Bucket": s3_bucket,
-                                "Key": audio_s3_key,
-                            },
-                            ExpiresIn=expiration,
-                        )
-                        result_row["audio_path"] = presigned_url
-                        logger.info(
-                            f"Replaced audio path with presigned URL for {audio_s3_key}"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to generate presigned URL for {audio_s3_key}: {str(e)}"
-                        )
-                        # Fallback to S3 path if presigned URL generation fails
-                        result_row["audio_path"] = f"s3://{s3_bucket}/{audio_s3_key}"
+                    # Store S3 key instead of presigned URL
+                    result_row["audio_path"] = audio_s3_key
+                    logger.info(f"Stored S3 key for audio: {audio_s3_key}")
 
         return ProviderResult(
             provider=provider,
@@ -571,11 +554,28 @@ async def get_tts_evaluation_status(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
 
     results = job.get("results") or {}
+    provider_results = results.get("provider_results")
+
+    # Generate presigned URLs on the fly for completed jobs
+    if job["status"] == TaskStatus.DONE.value and provider_results:
+        for provider_result in provider_results:
+            if provider_result.get("results"):
+                for result_row in provider_result["results"]:
+                    if "audio_path" in result_row and result_row["audio_path"]:
+                        audio_s3_key = result_row["audio_path"]
+                        # Skip if already a URL (backwards compatibility)
+                        if audio_s3_key.startswith("http") or audio_s3_key.startswith(
+                            "s3://"
+                        ):
+                            continue
+                        presigned_url = generate_presigned_download_url(audio_s3_key)
+                        if presigned_url:
+                            result_row["audio_path"] = presigned_url
 
     return TaskStatusResponse(
         task_id=task_id,
         status=job["status"],
-        provider_results=results.get("provider_results"),
+        provider_results=provider_results,
         leaderboard_summary=results.get("leaderboard_summary"),
         error=results.get("error"),
     )

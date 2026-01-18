@@ -160,6 +160,73 @@ def get_s3_output_config():
     return bucket
 
 
+def generate_presigned_download_url(
+    s3_key: str,
+    bucket: Optional[str] = None,
+    expiration: int = 3600,
+) -> Optional[str]:
+    """Generate a presigned URL for downloading (get_object) from S3.
+
+    Args:
+        s3_key: The S3 object key
+        bucket: S3 bucket name (defaults to S3_OUTPUT_BUCKET env var)
+        expiration: URL expiration time in seconds (default: 1 hour)
+
+    Returns:
+        Presigned URL string, or None if generation fails
+    """
+    try:
+        s3 = get_s3_client()
+        s3_bucket = bucket or get_s3_output_config()
+
+        return s3.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": s3_bucket,
+                "Key": s3_key,
+            },
+            ExpiresIn=expiration,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to generate presigned download URL for {s3_key}: {e}")
+        return None
+
+
+def generate_presigned_upload_url(
+    s3_key: str,
+    content_type: str,
+    bucket: Optional[str] = None,
+    expiration: int = 3600,
+) -> Optional[str]:
+    """Generate a presigned URL for uploading (put_object) to S3.
+
+    Args:
+        s3_key: The S3 object key
+        content_type: The content type of the file to upload
+        bucket: S3 bucket name (defaults to S3_OUTPUT_BUCKET env var)
+        expiration: URL expiration time in seconds (default: 1 hour)
+
+    Returns:
+        Presigned URL string, or None if generation fails
+    """
+    try:
+        s3 = get_s3_client()
+        s3_bucket = bucket or get_s3_output_config()
+
+        return s3.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": s3_bucket,
+                "Key": s3_key,
+                "ContentType": content_type,
+            },
+            ExpiresIn=expiration,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to generate presigned upload URL for {s3_key}: {e}")
+        return None
+
+
 def get_max_concurrent_jobs() -> int:
     """Get the maximum number of concurrent jobs from environment variable.
 
