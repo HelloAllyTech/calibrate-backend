@@ -29,7 +29,7 @@ class TaskStatus(str, Enum):
 
 class ProviderResult(BaseModel):
     provider: str
-    success: bool
+    success: Optional[bool] = None  # None while in progress, True/False when done
     message: str
     metrics: Optional[List[Dict[str, Any]]] = None
     results: Optional[List[Dict[str, Any]]] = None
