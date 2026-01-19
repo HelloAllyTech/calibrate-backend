@@ -26,8 +26,8 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Download NLTK data required by pipecat
-RUN uv run python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
+# Download NLTK data required by pipecat (nltk is installed via pense wheel)
+RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
 
 # Copy application code
 COPY src/ ./src/

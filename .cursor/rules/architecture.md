@@ -607,6 +607,13 @@ External:
 docker build -t pense-backend .
 ```
 
+**Build gotcha**: The Dockerfile uses two separate package installation methods:
+
+- `pip install` for the pense wheel (includes pipecat, nltk, etc.)
+- `uv sync` for project dependencies (fastapi, boto3, etc.)
+
+When running Python commands during build that need packages from the wheel, use `python` directly (not `uv run python`).
+
 ### Docker Compose
 
 ```bash

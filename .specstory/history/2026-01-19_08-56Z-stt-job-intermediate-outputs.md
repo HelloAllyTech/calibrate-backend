@@ -4106,3 +4106,185 @@ No new environment variables were added, so no updates needed to other config fi
 
 ---
 
+_**User (2026-01-17 22:04Z)**_
+
+STT eval failed: 2026-01-19 12:51:47.125 | INFO | pipecat:<module>:14 - ᓚᘏᗢ Pipecat 0.0.99 (Python 3.11.14 (main, Jan 13 2026, 03:12:14) [GCC 14.2.0]) ᓚᘏᗢ Traceback (most recent call last): File "/usr/local/lib/python3.11/site-packages/pipecat/utils/string.py", line 30, in <module> nltk.data.find("tokenizers/punkt_tab") File "/usr/local/lib/python3.11/site-packages/nltk/data.py", line 579, in find raise LookupError(resource_not_found) LookupError: ********************************************************************** Resource [93mpunkt_tab[0m not found. Please use the NLTK Downloader to obtain the resource: [31m>>> import nltk >>> nltk.download('punkt_tab') [0m For more information see: https://www.nltk.org/data.html Attempted to load [93mtokenizers/punkt_tab[0m Searched in: - '/root/nltk_data' - '/usr/local/nltk_data' - '/usr/local/share/nltk_data' - '/usr/local/lib/nltk_data' - '/usr/share/nltk_data' - '/usr/local/share/nltk_data' - '/usr/lib/nltk_data' - '/usr/local/lib/nltk_data' ********************************************************************** During handling of the above exception, another exception occurred: Traceback (most recent call last): File "/usr/local/bin/pense", line 8, in <module> sys.exit(main()) ^^^^^^ File "/usr/local/lib/python3.11/site-packages/pense/cli.py", line 225, in main from pense.stt.eval import main as stt_main File "/usr/local/lib/python3.11/site-packages/pense/stt/eval.py", line 38, in <module> from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame File "/usr/local/lib/python3.11/site-packages/pipecat/processors/frameworks/rtvi.py", line 87, in <module> from pipecat.utils.string import match_endofsentence File "/usr/local/lib/python3.11/site-packages/pipecat/utils/string.py", line 33, in <module> nltk.download("punkt_tab", quiet=True) File "/usr/local/lib/python3.11/site-packages/nltk/downloader.py", line 762, in download for msg in self.incr_download(info_or_id, download_dir, force): File "/usr/local/lib/python3.11/site-packages/nltk/downloader.py", line 630, in incr_download yield from self._download_package(info, download_dir, force) File "/usr/local/lib/python3.11/site-packages/nltk/downloader.py", line 721, in _download_package for msg in _unzip_iter(filepath, zipdir, verbose=False): File "/usr/local/lib/python3.11/site-packages/nltk/downloader.py", line 2302, in _unzip_iter zf.extractall(root) File "/usr/local/lib/python3.11/zipfile.py", line 1715, in extractall self._extract_member(zipinfo, path, pwd) File "/usr/local/lib/python3.11/zipfile.py", line 1768, in _extract_member with self.open(member, pwd=pwd) as source, \ ^^^^^^^^^^^^^^^^^^^^^^^^^^ File "/usr/local/lib/python3.11/zipfile.py", line 1595, in open raise BadZipFile("Truncated file header") zipfile.BadZipFile: Truncated file header
+
+getting this error in prod
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user is getting an NLTK error in production. The error shows that:
+1. `punkt_tab` NLTK resource is not found
+2. When it tries to download it automatically, the download fails with "Truncated file header" (corrupted zip file)
+
+The fix is to pre-download the NLTK data during the Docker build so it's available at runtime. Let me check the current Dockerfile:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/Dockerfile</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I need to add NLTK data download to the Dockerfile. The `punkt_tab` resource is required by pipecat. I should download it during build time so it's available at runtime.</details></think>
+
+---
+
+The error is caused by NLTK trying to download `punkt_tab` data at runtime but failing due to a network/corruption issue. The fix is to pre-download the NLTK data during Docker build:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/Dockerfile</summary>
+
+**Chunk 1**
+Lines added: 3, lines removed: undefined
+
+```diff
+@@ -26,4 +26,7 @@
+  # Install dependencies
+  RUN uv sync --frozen --no-dev --no-install-project
++ 
++ # Download NLTK data required by pipecat
++ RUN uv run python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
+  
+  # Copy application code
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The fix is in place. Now NLTK's `punkt_tab` data will be downloaded during the Docker build phase, so it will be available at runtime without needing network access. This prevents the "Truncated file header" error that occurs when trying to download at runtime.</details></think>
+
+---
+
+Fixed! The Dockerfile now pre-downloads the NLTK `punkt_tab` data during the build phase. This ensures:
+
+1. The data is available at runtime without needing network access
+2. No risk of corrupted downloads at runtime
+3. Faster container startup since no download is needed
+
+You'll need to rebuild and redeploy the Docker image for this fix to take effect.
+
+---
+
+_**User (2026-01-17 22:04Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+I made a code change to the Dockerfile to add NLTK data download. Let me check if there's a section about Docker/deployment in the architecture.md that should be updated.</details></think>
+
+---
+
+I made a code change to the Dockerfile. Let me check the architecture.md for the deployment section:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "Docker|Dockerfile|Dependencies|External" in "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md" • 7 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `.cursor/rules/architecture.md` | `\| **Containerization** \| Docker             \| Deployment                                                   \|` | L30 |
+| `.cursor/rules/architecture.md` | `├── Dockerfile               # Container build configuration` | L62 |
+| `.cursor/rules/architecture.md` | `## External Integrations` | L372 |
+| `.cursor/rules/architecture.md` | `## Dependencies` | L581 |
+| `.cursor/rules/architecture.md` | `External:` | L594 |
+| `.cursor/rules/architecture.md` | `### Docker Build` | L603 |
+| `.cursor/rules/architecture.md` | `### Docker Compose` | L609 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me read the Dependencies and External sections to see if NLTK should be documented there:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I should add NLTK to the External dependencies section since it's required by pipecat (which is part of pense), and note that the data is pre-downloaded in the Dockerfile.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -596,4 +596,5 @@
+  - &#96;pense&#96; CLI (installed via wheel file: &#96;pense-0.1.0-py3-none-any.whl&#96;)
+  - &#96;ffmpeg&#96; - Audio format conversion
++ - &#96;nltk&#96; data (&#96;punkt_tab&#96;) - Required by pipecat for sentence tokenization; pre-downloaded in Dockerfile to avoid runtime network issues
+  
+  ---
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, I've documented the NLTK dependency. No environment variables were changed, so no updates needed to docker-compose.yml or GitHub workflows.</details></think>
+
+---
+
+Updated the architecture documentation to document the NLTK dependency:
+
+- Added `nltk` data (`punkt_tab`) to External dependencies
+- Noted that it's pre-downloaded in Dockerfile to avoid runtime network issues
+
+No environment variables were changed, so no updates needed to other config files.
+
+---
+
