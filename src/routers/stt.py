@@ -11,11 +11,12 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 import openpyxl
 
 from db import create_job, get_job, update_job
+from auth_utils import get_current_user_id
 from utils import (
     TaskStatus,
     ProviderResult,
@@ -582,7 +583,9 @@ def run_evaluation_task(
 
 
 @router.post("/evaluate", response_model=TaskCreateResponse)
-async def evaluate_stt(request: STTEvaluationRequest):
+async def evaluate_stt(
+    request: STTEvaluationRequest, user_id: str = Depends(get_current_user_id)
+):
     """
     Start a background task to evaluate multiple STT providers with audio files from S3.
 
@@ -616,6 +619,7 @@ async def evaluate_stt(request: STTEvaluationRequest):
     # Create job in database with details for recovery
     job_id = create_job(
         job_type="stt-eval",
+        user_id=user_id,
         status=initial_status,
         details={
             "audio_paths": request.audio_paths,
@@ -643,13 +647,15 @@ async def evaluate_stt(request: STTEvaluationRequest):
 
 
 @router.get("/evaluate/{task_id}", response_model=TaskStatusResponse)
-async def get_evaluation_status(task_id: str):
+async def get_evaluation_status(
+    task_id: str, user_id: str = Depends(get_current_user_id)
+):
     """
     Get the status of an STT evaluation task.
 
     Returns the current status and, if done, the provider results and leaderboard path.
     """
-    job = get_job(task_id)
+    job = get_job(task_id, user_id=user_id)
     if not job:
         raise HTTPException(status_code=404, detail="Task not found")
 

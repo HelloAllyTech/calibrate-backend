@@ -77,7 +77,8 @@ users
   ├── personas (user_id FK)
   ├── scenarios (user_id FK)
   ├── metrics (user_id FK)
-  └── simulations (user_id FK)
+  ├── simulations (user_id FK)
+  └── jobs (user_id FK)
 
 agents
   ├── agent_tools (many-to-many with tools)
@@ -104,7 +105,7 @@ simulations
 | `scenarios`       | Conversation scenarios/contexts                                        |
 | `metrics`         | Evaluation criteria for simulations                                    |
 | `simulations`     | Simulation configurations linking agents, personas, scenarios, metrics |
-| `jobs`            | Generic STT/TTS evaluation jobs                                        |
+| `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                  |
 | `agent_test_jobs` | LLM unit test and benchmark jobs                                       |
 | `simulation_jobs` | Chat/voice simulation jobs                                             |
 
@@ -157,8 +158,9 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 - `/agent-tools` - Link/unlink tools to agents
 - `/agent-tests` - Link/unlink tests to agents
 
-#### Evaluation & Testing
+#### Evaluation & Testing (all require JWT auth)
 
+- `GET /jobs` - List all STT/TTS evaluation jobs for authenticated user
 - `POST /stt/evaluate` - Start STT evaluation task
 - `GET /stt/evaluate/{task_id}` - Get STT evaluation status
 - `POST /tts/evaluate` - Start TTS evaluation task
@@ -675,15 +677,16 @@ def _start_job_from_queue(job: dict) -> bool:
 
 register_job_starter("type-a", _start_job_from_queue)
 
-# Endpoint with queue check
+# Endpoint with queue check and JWT auth
 @router.post("/run", response_model=TaskCreateResponse)
-async def start_task(request: TaskRequest):
+async def start_task(request: TaskRequest, user_id: str = Depends(get_current_user_id)):
     # Check capacity
     can_start = can_start_job(JOB_TYPES)
     initial_status = TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
 
     job_id = create_job(
         job_type="type-a",
+        user_id=user_id,
         status=initial_status,
         details={"param": value, "s3_bucket": bucket},
     )

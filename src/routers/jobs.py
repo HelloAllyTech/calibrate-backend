@@ -1,10 +1,11 @@
 from typing import List, Optional, Any, Dict
 from enum import Enum
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from pydantic import BaseModel
 
 from db import get_all_jobs
+from auth_utils import get_current_user_id
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -41,9 +42,10 @@ async def list_jobs(
     job_type: Optional[JobType] = Query(
         None, description="Filter jobs by type: 'stt' or 'tts'"
     ),
+    user_id: str = Depends(get_current_user_id),
 ):
     """
-    Get all jobs, optionally filtered by job type.
+    Get all jobs for the authenticated user, optionally filtered by job type.
 
     Returns a list of all jobs with their UUID, type, status, details, results, and timestamps.
     Jobs are sorted by created_at descending (most recent first).
@@ -51,7 +53,7 @@ async def list_jobs(
     # Map the user-friendly job type to the actual database job type
     db_job_type = JOB_TYPE_MAP.get(job_type) if job_type else None
 
-    jobs = get_all_jobs(job_type=db_job_type)
+    jobs = get_all_jobs(user_id=user_id, job_type=db_job_type)
 
     job_items = [
         JobListItem(

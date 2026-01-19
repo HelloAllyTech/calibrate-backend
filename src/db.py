@@ -138,12 +138,14 @@ def init_db():
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT NOT NULL UNIQUE,
+                user_id TEXT,
                 type TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'in_progress',
                 details TEXT,
                 results TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
             )
         """
         )
@@ -336,6 +338,7 @@ def init_db():
             "scenarios",
             "metrics",
             "simulations",
+            "jobs",
         ]
         for table in tables_with_user_id:
             try:
@@ -1987,6 +1990,7 @@ def get_all_agent_tests() -> List[Dict[str, Any]]:
 
 def create_job(
     job_type: str,
+    user_id: str,
     status: str = "in_progress",
     details: Optional[Dict[str, Any]] = None,
     results: Optional[Dict[str, Any]] = None,
@@ -1995,6 +1999,7 @@ def create_job(
 
     Args:
         job_type: Type of job (stt-eval, tts-eval, llm-unit-test, llm-benchmark)
+        user_id: UUID of the user who owns this job
         status: Initial status (defaults to 'in_progress')
         details: JSON config needed to re-trigger the job if interrupted
         results: Initial results (usually None)
@@ -2006,13 +2011,15 @@ def create_job(
         results_json = json.dumps(results) if results is not None else None
         cursor.execute(
             """
-            INSERT INTO jobs (uuid, type, status, details, results)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO jobs (uuid, user_id, type, status, details, results)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (job_uuid, job_type, status, details_json, results_json),
+            (job_uuid, user_id, job_type, status, details_json, results_json),
         )
         conn.commit()
-        logger.info(f"Created job with UUID: {job_uuid}, type: {job_type}")
+        logger.info(
+            f"Created job with UUID: {job_uuid}, type: {job_type}, user_id: {user_id}"
+        )
         return job_uuid
 
 
@@ -2026,28 +2033,47 @@ def _parse_job_row(row: sqlite3.Row) -> Dict[str, Any]:
     return job
 
 
-def get_job(job_uuid: str) -> Optional[Dict[str, Any]]:
-    """Get a job by UUID."""
+def get_job(job_uuid: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Get a job by UUID, optionally filtered by user_id.
+
+    Args:
+        job_uuid: The UUID of the job
+        user_id: If provided, only return the job if it belongs to this user
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM jobs WHERE uuid = ?", (job_uuid,))
+        if user_id:
+            cursor.execute(
+                "SELECT * FROM jobs WHERE uuid = ? AND user_id = ?",
+                (job_uuid, user_id),
+            )
+        else:
+            cursor.execute("SELECT * FROM jobs WHERE uuid = ?", (job_uuid,))
         row = cursor.fetchone()
         if row:
             return _parse_job_row(row)
         return None
 
 
-def get_all_jobs(job_type: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Get all jobs, optionally filtered by type."""
+def get_all_jobs(user_id: str, job_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all jobs for a user, optionally filtered by type.
+
+    Args:
+        user_id: UUID of the user who owns the jobs
+        job_type: Optional filter by job type
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if job_type:
             cursor.execute(
-                "SELECT * FROM jobs WHERE type = ? ORDER BY created_at DESC",
-                (job_type,),
+                "SELECT * FROM jobs WHERE user_id = ? AND type = ? ORDER BY created_at DESC",
+                (user_id, job_type),
             )
         else:
-            cursor.execute("SELECT * FROM jobs ORDER BY created_at DESC")
+            cursor.execute(
+                "SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
         rows = cursor.fetchall()
         return [_parse_job_row(row) for row in rows]
 

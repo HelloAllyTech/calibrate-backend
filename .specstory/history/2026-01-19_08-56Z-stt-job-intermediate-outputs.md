@@ -2120,3 +2120,1661 @@ No new environment variables were added, so no other files need updating.
 
 ---
 
+_**User (2026-01-17 22:04Z)**_
+
+update jobs table to have user id that is primary key to users table 
+
+for existing rows where user id won't exist add user id of user with email amandalmia18@gmail.com as the user and for future getting updating and creating of jobs do it with the user id and at the time of creation and retrieving status of jobs use the user's JWT auth to map to the relevant jobs
+
+as done for @agents.py (70-77) 
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to:
+1. Update the `jobs` table to have a `user_id` column that references the `users` table
+2. For existing rows, set the `user_id` to the user with email `amandalmia18@gmail.com`
+3. Update all job CRUD operations to use `user_id`
+4. Use JWT auth to map jobs to users (like in agents.py)
+
+Let me first look at:
+1. The current jobs table schema in db.py
+2. How jobs are created, retrieved, and updated
+3. The STT and TTS routers to see where jobs are created/retrieved
+4. The jobs router
+
+Let me start by examining the database schema and functions.</details></think>
+
+---
+
+I'll update the jobs table to include user_id and add authentication. Let me first examine the current structure:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "CREATE TABLE.*jobs|def create_job|def get_job|def update_job|def get_all_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 7 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `CREATE TABLE IF NOT EXISTS jobs (` | L138 |
+| `src/db.py` | `CREATE TABLE IF NOT EXISTS agent_test_jobs (` | L153 |
+| `src/db.py` | `CREATE TABLE IF NOT EXISTS simulation_jobs (` | L170 |
+| `src/db.py` | `def create_job(` | L1988 |
+| `src/db.py` | `def get_job(job_uuid: str) -> Optional[Dict[str, Any]]:` | L2029 |
+| `src/db.py` | `def get_all_jobs(job_type: Optional[str] = None) -> List[Dict[str, Any]]:` | L2040 |
+| `src/db.py` | `def update_job(` | L2099 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me look at the jobs router to see how jobs are listed:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me look at the STT and TTS routers to see how jobs are created and retrieved:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "create_job|get_job" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py" • 3 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/stt.py` | `from db import create_job, get_job, update_job` | L18 |
+| `src/routers/stt.py` | `job_id = create_job(` | L617 |
+| `src/routers/stt.py` | `job = get_job(task_id)` | L652 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me look at how to get a user by email to find the user_id for existing rows:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def get_user|get_user_by_email" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 3 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def get_user(user_uuid: str) -> Optional[Dict[str, Any]]:` | L416 |
+| `src/db.py` | `def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:` | L427 |
+| `src/db.py` | `user = get_user_by_email(email)` | L503 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I have enough context. Let me create a todo list and implement the changes:
+
+1. Add user_id column to jobs table (with foreign key to users)
+2. Update create_job to accept user_id parameter
+3. Update get_job to optionally filter by user_id
+4. Update get_all_jobs to filter by user_id
+5. Add migration to set user_id for existing rows to the user with email amandalmia18@gmail.com
+6. Update STT router to use JWT auth
+7. Update TTS router to use JWT auth
+8. Update jobs router to use JWT auth
+
+Let me start implementing:</details></think>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [-] Add user_id column to jobs table in db.py schema
+- [ ] Update create_job, get_job, get_all_jobs to use user_id
+- [ ] Add migration for existing rows to set user_id
+- [ ] Update STT router to use JWT auth for jobs
+- [ ] Update TTS router to use JWT auth for jobs
+- [ ] Update jobs router to use JWT auth
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me read more of the db.py file to understand how the schema is initialized and find the jobs table creation:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me look at how migrations are handled and also find _parse_job_row:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def _parse_job_row|ALTER TABLE.*jobs|def run_migrations" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 2 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `cursor.execute("ALTER TABLE jobs ADD COLUMN details TEXT")` | L299 |
+| `src/db.py` | `def _parse_job_row(row: sqlite3.Row) -> Dict[str, Any]:` | L2019 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me see where the migrations/ALTER TABLE statements are, so I know where to add the user_id migration:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me see more of this file to see how the default user is set up and the migration pattern:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I see there's already a pattern for migrating user_id to tables. The default user email is `DEFAULT_USER_EMAIL`. Let me check what that constant is:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "DEFAULT_USER_EMAIL" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 3 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `DEFAULT_USER_EMAIL = "amandalmia18@gmail.com"` | L18 |
+| `src/db.py` | `cursor.execute("SELECT uuid FROM users WHERE email = ?", (DEFAULT_USER_EMAIL,))` | L352 |
+| `src/db.py` | `DEFAULT_USER_EMAIL,` | L370 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The default user email is already `amandalmia18@gmail.com`. I need to:
+
+1. Update the jobs table schema to include user_id column
+2. Add jobs to the `tables_with_user_id` list for migration
+3. Update `create_job` to accept user_id parameter
+4. Update `get_job` to optionally filter by user_id
+5. Update `get_all_jobs` to filter by user_id6. Update `_parse_job_row` to include user_id7. Update the STT, TTS, and jobs routers to use JWT authLet me start with the db.py changes:</details></think>
+
+---
+
+Now I understand the pattern. The default user email is already `amandalmia18@gmail.com`. Let me implement the changes:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 3, lines removed: 1
+
+```diff
+@@ -139,10 +139,12 @@
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  uuid TEXT NOT NULL UNIQUE,
++                 user_id TEXT,
+                  type TEXT NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'in_progress',
+                  details TEXT,
+                  results TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+-                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
++                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++                 FOREIGN KEY (user_id) REFERENCES users(uuid)
+              )
+          """
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now add jobs to the migration list:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -339,4 +339,5 @@
+              "metrics",
+              "simulations",
++             "jobs",
+          ]
+          for table in tables_with_user_id:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update the create_job function to accept user_id:</details></think>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add user_id column to jobs table in db.py schema
+- [-] Update create_job, get_job, get_all_jobs to use user_id
+- [ ] Add migration for existing rows to set user_id
+- [ ] Update STT router to use JWT auth for jobs
+- [ ] Update TTS router to use JWT auth for jobs
+- [ ] Update jobs router to use JWT auth
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me read the full create_job function and update it:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the create_job function:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -1991,4 +1991,5 @@
+  def create_job(
+      job_type: str,
++     user_id: str,
+      status: str = "in_progress",
+      details: Optional[Dict[str, Any]] = None,
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -1999,4 +2000,5 @@
+      Args:
+          job_type: Type of job (stt-eval, tts-eval, llm-unit-test, llm-benchmark)
++         user_id: UUID of the user who owns this job
+          status: Initial status (defaults to 'in_progress')
+          details: JSON config needed to re-trigger the job if interrupted
+```
+
+**Chunk 3**
+Lines added: 4, lines removed: 4
+
+```diff
+@@ -2010,11 +2012,11 @@
+          cursor.execute(
+              """
+-             INSERT INTO jobs (uuid, type, status, details, results)
+-             VALUES (?, ?, ?, ?, ?)
++             INSERT INTO jobs (uuid, user_id, type, status, details, results)
++             VALUES (?, ?, ?, ?, ?, ?)
+              """,
+-             (job_uuid, job_type, status, details_json, results_json),
++             (job_uuid, user_id, job_type, status, details_json, results_json),
+          )
+          conn.commit()
+-         logger.info(f"Created job with UUID: {job_uuid}, type: {job_type}")
++         logger.info(f"Created job with UUID: {job_uuid}, type: {job_type}, user_id: {user_id}")
+          return job_uuid
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update get_job to filter by user_id:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 14, lines removed: 3
+
+```diff
+@@ -2032,9 +2032,20 @@
+  
+  
+- def get_job(job_uuid: str) -&gt; Optional[Dict[str, Any]]:
+-     """Get a job by UUID."""
++ def get_job(job_uuid: str, user_id: Optional[str] = None) -&gt; Optional[Dict[str, Any]]:
++     """Get a job by UUID, optionally filtered by user_id.
++     
++     Args:
++         job_uuid: The UUID of the job
++         user_id: If provided, only return the job if it belongs to this user
++     """
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+-         cursor.execute("SELECT * FROM jobs WHERE uuid = ?", (job_uuid,))
++         if user_id:
++             cursor.execute(
++                 "SELECT * FROM jobs WHERE uuid = ? AND user_id = ?",
++                 (job_uuid, user_id),
++             )
++         else:
++             cursor.execute("SELECT * FROM jobs WHERE uuid = ?", (job_uuid,))
+          row = cursor.fetchone()
+          if row:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me read and update get_all_jobs:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update get_all_jobs to include user_id filter:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 15, lines removed: 5
+
+```diff
+@@ -2054,15 +2054,25 @@
+  
+  
+- def get_all_jobs(job_type: Optional[str] = None) -&gt; List[Dict[str, Any]]:
+-     """Get all jobs, optionally filtered by type."""
++ def get_all_jobs(
++     user_id: str, job_type: Optional[str] = None
++ ) -&gt; List[Dict[str, Any]]:
++     """Get all jobs for a user, optionally filtered by type.
++     
++     Args:
++         user_id: UUID of the user who owns the jobs
++         job_type: Optional filter by job type
++     """
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+          if job_type:
+              cursor.execute(
+-                 "SELECT * FROM jobs WHERE type = ? ORDER BY created_at DESC",
+-                 (job_type,),
++                 "SELECT * FROM jobs WHERE user_id = ? AND type = ? ORDER BY created_at DESC",
++                 (user_id, job_type),
+              )
+          else:
+-             cursor.execute("SELECT * FROM jobs ORDER BY created_at DESC")
++             cursor.execute(
++                 "SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC",
++                 (user_id,),
++             )
+          rows = cursor.fetchall()
+          return [_parse_job_row(row) for row in rows]
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check for lint errors and then update the routers:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the todo and then update the routers:</details></think>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add user_id column to jobs table in db.py schema
+- [x] Update create_job, get_job, get_all_jobs to use user_id
+- [x] Add migration for existing rows to set user_id
+- [-] Update STT router to use JWT auth for jobs
+- [ ] Update TTS router to use JWT auth for jobs
+- [ ] Update jobs router to use JWT auth
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the STT router to use JWT auth. I need to read more of the STT router to see the evaluate_stt and get_evaluation_status endpoints:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me look at how authentication is done in agents.py:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, I see the pattern. Import `get_current_user_id` from `auth_utils` and use it as a dependency. Now let me update the STT router:</details></think>
+
+---
+
+Now let me update the STT router:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 1
+
+```diff
+@@ -12,9 +12,10 @@
+  from typing import List, Optional
+  
+- from fastapi import APIRouter, HTTPException
++ from fastapi import APIRouter, HTTPException, Depends
+  from pydantic import BaseModel
+  import openpyxl
+  
+  from db import create_job, get_job, update_job
++ from auth_utils import get_current_user_id
+  from utils import (
+      TaskStatus,
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update the evaluate_stt endpoint to accept user_id:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py</summary>
+
+**Chunk 1**
+Lines added: 3, lines removed: 1
+
+```diff
+@@ -584,5 +584,7 @@
+  
+  @router.post("/evaluate", response_model=TaskCreateResponse)
+- async def evaluate_stt(request: STTEvaluationRequest):
++ async def evaluate_stt(
++     request: STTEvaluationRequest, user_id: str = Depends(get_current_user_id)
++ ):
+      """
+      Start a background task to evaluate multiple STT providers with audio files from S3.
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -618,4 +620,5 @@
+      job_id = create_job(
+          job_type="stt-eval",
++         user_id=user_id,
+          status=initial_status,
+          details={
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update the get_evaluation_status endpoint to filter by user_id:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py</summary>
+
+**Chunk 1**
+Lines added: 4, lines removed: 2
+
+```diff
+@@ -648,11 +648,13 @@
+  
+  @router.get("/evaluate/{task_id}", response_model=TaskStatusResponse)
+- async def get_evaluation_status(task_id: str):
++ async def get_evaluation_status(
++     task_id: str, user_id: str = Depends(get_current_user_id)
++ ):
+      """
+      Get the status of an STT evaluation task.
+  
+      Returns the current status and, if done, the provider results and leaderboard path.
+      """
+-     job = get_job(task_id)
++     job = get_job(task_id, user_id=user_id)
+      if not job:
+          raise HTTPException(status_code=404, detail="Task not found")
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check for lint errors and then update the TTS router:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py`
+
+Lint results
+
+Lint errors for `src/routers/stt.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Code is unreachable | 96:9-96:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 262:19-262:23 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 483:31-483:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update the TTS router:</details></think>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add user_id column to jobs table in db.py schema
+- [x] Update create_job, get_job, get_all_jobs to use user_id
+- [x] Add migration for existing rows to set user_id
+- [x] Update STT router to use JWT auth for jobs
+- [-] Update TTS router to use JWT auth for jobs
+- [ ] Update jobs router to use JWT auth
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me read the TTS router to update it:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "from fastapi|from db import|create_job|get_job" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py" • 4 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/tts.py` | `from fastapi import APIRouter, HTTPException` | L14 |
+| `src/routers/tts.py` | `from db import create_job, get_job, update_job` | L18 |
+| `src/routers/tts.py` | `job_id = create_job(` | L684 |
+| `src/routers/tts.py` | `job = get_job(task_id)` | L718 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me read the TTS router imports and the relevant endpoints:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the TTS router imports:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 1
+
+```diff
+@@ -12,9 +12,10 @@
+  from typing import List, Optional
+  
+- from fastapi import APIRouter, HTTPException
++ from fastapi import APIRouter, HTTPException, Depends
+  from pydantic import BaseModel
+  import openpyxl
+  
+  from db import create_job, get_job, update_job
++ from auth_utils import get_current_user_id
+  from utils import (
+      TaskStatus,
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me read the TTS evaluate endpoint and status endpoint:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the TTS evaluate endpoint:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+**Chunk 1**
+Lines added: 3, lines removed: 1
+
+```diff
+@@ -651,5 +651,7 @@
+  
+  @router.post("/evaluate", response_model=TaskCreateResponse)
+- async def evaluate_tts(request: TTSEvaluationRequest):
++ async def evaluate_tts(
++     request: TTSEvaluationRequest, user_id: str = Depends(get_current_user_id)
++ ):
+      """
+      Start a background task to evaluate multiple TTS providers with text inputs.
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -685,4 +687,5 @@
+      job_id = create_job(
+          job_type="tts-eval",
++         user_id=user_id,
+          status=initial_status,
+          details={
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update the TTS status endpoint:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+**Chunk 1**
+Lines added: 4, lines removed: 2
+
+```diff
+@@ -714,11 +714,13 @@
+  
+  @router.get("/evaluate/{task_id}", response_model=TaskStatusResponse)
+- async def get_tts_evaluation_status(task_id: str):
++ async def get_tts_evaluation_status(
++     task_id: str, user_id: str = Depends(get_current_user_id)
++ ):
+      """
+      Get the status of a TTS evaluation task.
+  
+      Returns the current status and, if done, the provider results and leaderboard path.
+      """
+-     job = get_job(task_id)
++     job = get_job(task_id, user_id=user_id)
+      if not job:
+          raise HTTPException(status_code=404, detail="Task not found")
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now check for lint errors and then update the jobs router:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py`
+
+Lint results
+
+Lint errors for `src/routers/tts.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Code is unreachable | 99:9-99:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 346:19-346:23 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 551:31-551:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update the jobs router:</details></think>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add user_id column to jobs table in db.py schema
+- [x] Update create_job, get_job, get_all_jobs to use user_id
+- [x] Add migration for existing rows to set user_id
+- [x] Update STT router to use JWT auth for jobs
+- [x] Update TTS router to use JWT auth for jobs
+- [-] Update jobs router to use JWT auth
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me update the jobs router:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 1
+
+```diff
+@@ -2,8 +2,9 @@
+  from enum import Enum
+  
+- from fastapi import APIRouter, Query
++ from fastapi import APIRouter, Query, Depends
+  from pydantic import BaseModel
+  
+  from db import get_all_jobs
++ from auth_utils import get_current_user_id
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update the list_jobs endpoint:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 1
+
+```diff
+@@ -43,7 +43,8 @@
+          None, description="Filter jobs by type: 'stt' or 'tts'"
+      ),
++     user_id: str = Depends(get_current_user_id),
+  ):
+      """
+-     Get all jobs, optionally filtered by job type.
++     Get all jobs for the authenticated user, optionally filtered by job type.
+  
+      Returns a list of all jobs with their UUID, type, status, details, results, and timestamps.
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -53,5 +54,5 @@
+      db_job_type = JOB_TYPE_MAP.get(job_type) if job_type else None
+  
+-     jobs = get_all_jobs(job_type=db_job_type)
++     jobs = get_all_jobs(user_id=user_id, job_type=db_job_type)
+  
+      job_items = [
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check for lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me also check for any other places in the codebase that might call create_job, get_job, or get_all_jobs that I might have missed. Let me search for usages:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "create_job\(|get_job\(|get_all_jobs\(" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 8 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/jobs.py` | `jobs = get_all_jobs(user_id=user_id, job_type=db_job_type)` | L56 |
+| `src/routers/tts.py` | `job_id = create_job(` | L687 |
+| `src/routers/tts.py` | `job = get_job(task_id, user_id=user_id)` | L724 |
+| `src/db.py` | `def create_job(` | L1991 |
+| `src/db.py` | `def get_job(job_uuid: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:` | L2036 |
+| `src/db.py` | `def get_all_jobs(user_id: str, job_type: Optional[str] = None) -> List[Dict[str, Any]]:` | L2058 |
+| `src/routers/stt.py` | `job_id = create_job(` | L620 |
+| `src/routers/stt.py` | `job = get_job(task_id, user_id=user_id)` | L658 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me also check for get_queued_jobs which might be used for job recovery:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "get_queued_jobs|get_pending_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 8 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def get_pending_jobs() -> List[Dict[str, Any]]:` | L2081 |
+| `src/db.py` | `def get_queued_jobs(job_types: Optional[List[str]] = None) -> List[Dict[str, Any]]:` | L2092 |
+| `src/utils.py` | `from db import count_running_jobs, get_queued_jobs, update_job` | L266 |
+| `src/utils.py` | `queued_jobs = get_queued_jobs(job_types)` | L279 |
+| `src/job_recovery.py` | `get_pending_jobs,` | L10 |
+| `src/job_recovery.py` | `get_queued_jobs,` | L25 |
+| `src/job_recovery.py` | `queued_jobs = get_queued_jobs(EVAL_JOB_TYPES)` | L47 |
+| `src/job_recovery.py` | `pending_jobs = get_pending_jobs()` | L197 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+These functions (`get_pending_jobs`, `get_queued_jobs`) are used for job recovery and queueing, which should work across all users. They don't need to be filtered by user_id since they are internal system functions.
+
+Now let me mark the todos as complete and update the architecture documentation:</details></think>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add user_id column to jobs table in db.py schema
+- [x] Update create_job, get_job, get_all_jobs to use user_id
+- [x] Add migration for existing rows to set user_id
+- [x] Update STT router to use JWT auth for jobs
+- [x] Update TTS router to use JWT auth for jobs
+- [x] Update jobs router to use JWT auth
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All tasks are complete. Let me verify the final state of the files by checking for lint errors in all modified files:</details></think>
+
+---
+
+Let me verify all the changes by checking for lint errors:
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 4 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py`
+
+Lint results
+
+Lint errors for `src/routers/tts.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Code is unreachable | 99:9-99:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 346:19-346:23 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 551:31-551:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+Lint errors for `src/routers/stt.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Code is unreachable | 96:9-96:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 262:19-262:23 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 483:31-483:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done. Now let me update the architecture documentation to reflect these changes.</details></think>
+
+---
+
+All changes are complete. Here's a summary of what was done:
+
+**Database changes (`db.py`):**
+1. Added `user_id` column to `jobs` table schema with foreign key to `users(uuid)`
+2. Added `jobs` to the migration list `tables_with_user_id` - existing rows will be migrated to the default user (`amandalmia18@gmail.com`)
+3. Updated `create_job()` to require `user_id` parameter
+4. Updated `get_job()` to accept optional `user_id` filter
+5. Updated `get_all_jobs()` to require `user_id` parameter
+
+**Router changes:**
+- **STT router (`stt.py`)**: Added JWT auth dependency to `evaluate_stt` and `get_evaluation_status` endpoints
+- **TTS router (`tts.py`)**: Added JWT auth dependency to `evaluate_tts` and `get_tts_evaluation_status` endpoints  
+- **Jobs router (`jobs.py`)**: Added JWT auth dependency to `list_jobs` endpoint
+
+Now I need to update the architecture documentation:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me update the architecture documentation to reflect that jobs table now has user_id:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -105,5 +105,5 @@
+  | &#96;metrics&#96;         | Evaluation criteria for simulations                                    |
+  | &#96;simulations&#96;     | Simulation configurations linking agents, personas, scenarios, metrics |
+- | &#96;jobs&#96;            | Generic STT/TTS evaluation jobs                                        |
++ | &#96;jobs&#96;            | Generic STT/TTS evaluation jobs (user_id FK to users)                  |
+  | &#96;agent_test_jobs&#96; | LLM unit test and benchmark jobs                                       |
+  | &#96;simulation_jobs&#96; | Chat/voice simulation jobs                                             |
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me also check the entity relationship diagram and update it to show jobs has user_id:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me update the entity relationship diagram to include jobs:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 1
+
+```diff
+@@ -78,5 +78,6 @@
+    ├── scenarios (user_id FK)
+    ├── metrics (user_id FK)
+-   └── simulations (user_id FK)
++   ├── simulations (user_id FK)
++   └── jobs (user_id FK)
+  
+  agents
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me verify all the changes are complete by reading the final version of the jobs.py to ensure it's correctly updated:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+All done! Let me provide a summary of all the changes made.</details></think>
+
+---
+
+All changes are complete. Here's the summary:
+
+## Changes Made
+
+### 1. Database (`db.py`)
+- **Schema**: Added `user_id` column to `jobs` table with foreign key to `users(uuid)`
+- **Migration**: Added `jobs` to `tables_with_user_id` list - existing rows will automatically be migrated to the default user (`amandalmia18@gmail.com`)
+- **`create_job()`**: Now requires `user_id` parameter
+- **`get_job()`**: Accepts optional `user_id` to filter by owner
+- **`get_all_jobs()`**: Now requires `user_id` to filter jobs by owner
+
+### 2. STT Router (`stt.py`)
+- Added JWT auth dependency (`get_current_user_id`) to:
+  - `POST /stt/evaluate` - passes user_id to `create_job()`
+  - `GET /stt/evaluate/{task_id}` - filters by user_id in `get_job()`
+
+### 3. TTS Router (`tts.py`)
+- Added JWT auth dependency (`get_current_user_id`) to:
+  - `POST /tts/evaluate` - passes user_id to `create_job()`
+  - `GET /tts/evaluate/{task_id}` - filters by user_id in `get_job()`
+
+### 4. Jobs Router (`jobs.py`)
+- Added JWT auth dependency (`get_current_user_id`) to:
+  - `GET /jobs` - filters jobs by authenticated user
+
+### 5. Architecture Documentation
+- Updated entity relationship diagram to show `jobs (user_id FK)` under users
+- Updated jobs table description to mention the foreign key
+
+**Note**: Internal system functions (`get_pending_jobs`, `get_queued_jobs`) used for job recovery remain unchanged as they need to work across all users.
+
+---
+
+_**User (2026-01-17 22:04Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+I made code changes to:
+1. `db.py` - Added user_id to jobs table schema and migration, updated create_job, get_job, get_all_jobs
+2. `stt.py` - Added JWT auth for job creation and retrieval
+3. `tts.py` - Added JWT auth for job creation and retrieval
+4. `jobs.py` - Added JWT auth for job listing
+
+I already updated the architecture.md with:
+- Entity relationship diagram showing jobs has user_id FK
+- Core tables description mentioning jobs has user_id FK
+
+Let me check if there's anything else that needs to be documented, like the API endpoint changes requiring authentication.</details></think>
+
+---
+
+I made code changes. Let me check the current architecture.md to see if there's more to update about the API endpoints now requiring authentication:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I notice that the API endpoints section doesn't mention the `/jobs` endpoint. Let me also check if there's information about which endpoints require authentication. Let me search for authentication-related content:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "JWT|Authentication|auth" in "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md" • 13 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `.cursor/rules/architecture.md` | `\| **Authentication**   \| Google OAuth + JWT \| User authentication via Google ID tokens, API access via JWT \|` | L28 |
+| `.cursor/rules/architecture.md` | `│       ├── auth.py          # Google OAuth authentication` | L45 |
+| `.cursor/rules/architecture.md` | `#### Authentication` | L133 |
+| `.cursor/rules/architecture.md` | `- `POST /auth/google` - Google OAuth login (returns JWT access token)` | L135 |
+| `.cursor/rules/architecture.md` | `**JWT Token Usage**: After login, all API requests must include the JWT token in the Authorization header:` | L137 |
+| `.cursor/rules/architecture.md` | `The JWT token contains the user's UUID and is validated on every protected endpoint.` | L143 |
+| `.cursor/rules/architecture.md` | `# JWT Authentication` | L436 |
+| `.cursor/rules/architecture.md` | `JWT_SECRET_KEY=your-secret-key   # REQUIRED: At least 32 characters, change in production!` | L437 |
+| `.cursor/rules/architecture.md` | `JWT_EXPIRATION_HOURS=168         # Token validity (default: 7 days)` | L438 |
+| `.cursor/rules/architecture.md` | `# Authentication` | L446 |
+| `.cursor/rules/architecture.md` | `- `python-jose[cryptography]>=3.3.0` - JWT token encoding/decoding` | L591 |
+| `.cursor/rules/architecture.md` | `### Router Endpoint Pattern (with JWT Auth)` | L647 |
+| `.cursor/rules/architecture.md` | `from auth_utils import get_current_user_id` | L650 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, authentication is already documented. Let me add the `/jobs` endpoint to the API endpoints section and make sure it's clear that the STT/TTS evaluation endpoints require authentication.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 1
+
+```diff
+@@ -159,6 +159,7 @@
+  - &#96;/agent-tests&#96; - Link/unlink tests to agents
+  
+- #### Evaluation &amp; Testing
++ #### Evaluation &amp; Testing (all require JWT auth)
+  
++ - &#96;GET /jobs&#96; - List all STT/TTS evaluation jobs for authenticated user
+  - &#96;POST /stt/evaluate&#96; - Start STT evaluation task
+  - &#96;GET /stt/evaluate/{task_id}&#96; - Get STT evaluation status
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me also check if the database function signatures should be documented. Let me see if there's a section about that:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "create_job|get_job|get_all_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `.cursor/rules/architecture.md` | `job_id = create_job(` | L687 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The documentation example in the Background Task Pattern section shows `create_job` being called. Let me check if it needs to be updated to include the user_id parameter:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The example code pattern needs to be updated to include the user_id parameter and JWT auth dependency:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 2
+
+```diff
+@@ -678,7 +678,7 @@
+  register_job_starter("type-a", _start_job_from_queue)
+  
+- # Endpoint with queue check
++ # Endpoint with queue check and JWT auth
+  @router.post("/run", response_model=TaskCreateResponse)
+- async def start_task(request: TaskRequest):
++ async def start_task(request: TaskRequest, user_id: str = Depends(get_current_user_id)):
+      # Check capacity
+      can_start = can_start_job(JOB_TYPES)
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -687,4 +687,5 @@
+      job_id = create_job(
+          job_type="type-a",
++         user_id=user_id,
+          status=initial_status,
+          details={"param": value, "s3_bucket": bucket},
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, the documentation has been updated. No new environment variables were added, so no changes needed to docker-compose.yml or GitHub workflows.</details></think>
+
+---
+
+The architecture documentation has been updated with:
+
+1. **API Endpoints section**: Added `GET /jobs` endpoint and noted that all evaluation & testing endpoints require JWT auth
+2. **Entity relationship diagram**: Already updated to show `jobs (user_id FK)` under users
+3. **Core tables**: Already updated to mention jobs has user_id FK
+4. **Background Task Pattern example**: Updated to include `user_id` parameter in `create_job()` and JWT auth dependency in the endpoint
+
+No new environment variables were added, so no updates needed to docker-compose.yml or GitHub workflows.
+
+---
+
+_**User (2026-01-17 22:04Z)**_
+
+even for specific job's status require the auth and check if the user should have access to the status of the job and deny access if they shouldn't
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to ensure that when getting the status of a specific job, the user must be authenticated and can only access jobs that belong to them. Let me check the current implementation - I believe I already did this, but let me verify.</details></think>
+
+---
+
+Let me verify the current implementation of the status endpoints:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "get_evaluation_status|get_tts_evaluation_status" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers" • 2 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/tts.py` | `async def get_tts_evaluation_status(` | L716 |
+| `src/routers/stt.py` | `async def get_evaluation_status(` | L650 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, the implementation is already correct. Both endpoints:1. Require JWT auth via `user_id: str = Depends(get_current_user_id)`
+2. Pass the `user_id` to `get_job(task_id, user_id=user_id)` which filters by user
+3. Return 404 "Task not found" if the job doesn't exist or doesn't belong to the user
+
+This is secure because:- If a job exists but belongs to a different user, `get_job` will return `None` (since it filters by `user_id`)
+- The user will see "Task not found" - they won't know if the job doesn't exist or if they just don't have access (which is good for security)
+
+The implementation is already complete. Let me inform the user.</details></think>
+
+---
+
+This is already implemented! Let me show you the current implementation:
+
+**STT Status Endpoint** (`stt.py`):
+
+```651:660:src/routers/stt.py
+async def get_evaluation_status(
+    task_id: str, user_id: str = Depends(get_current_user_id)
+):
+    """
+    Get the status of an STT evaluation task.
+    ...
+    """
+    job = get_job(task_id, user_id=user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Task not found")
+```
+
+**TTS Status Endpoint** (`tts.py`):
+
+```716:726:src/routers/tts.py
+async def get_tts_evaluation_status(
+    task_id: str, user_id: str = Depends(get_current_user_id)
+):
+    """
+    Get the status of a TTS evaluation task.
+    ...
+    """
+    job = get_job(task_id, user_id=user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Task not found")
+```
+
+Both endpoints:
+1. **Require JWT auth** via `user_id: str = Depends(get_current_user_id)`
+2. **Filter by user** by passing `user_id` to `get_job(task_id, user_id=user_id)`
+3. **Deny access** by returning 404 "Task not found" if the job doesn't exist OR doesn't belong to the authenticated user
+
+This design is secure because users cannot distinguish between "job doesn't exist" and "job exists but you don't have access" - both return the same 404 error.
+
+---
+
+_**User (2026-01-17 22:04Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user is asking me to update architecture.md only if I made code changes. In my last response, I did NOT make any code changes - I just verified that the existing implementation already had the auth and access control in place. So I should not update the architecture.md file.</details></think>
+
+---
+
+I did not make any code changes in my last response - I only verified that the authentication and access control was already implemented correctly from the previous changes. No updates to architecture.md are needed.
+
+---
+
