@@ -30,6 +30,8 @@ from utils import (
     try_start_queued_job,
     register_job_starter,
     generate_presigned_download_url,
+    is_job_timed_out,
+    kill_processes_from_dict,
 )
 
 # Job types that share the same queue
@@ -111,6 +113,20 @@ def _read_tts_results_csv(provider_output_dir: Path) -> Optional[List[dict]]:
         return None
 
 
+def _read_tts_metrics_json(provider_output_dir: Path) -> Optional[List[dict]]:
+    """Read metrics.json from provider output directory if it exists."""
+    if not provider_output_dir:
+        return None
+    metrics_file = provider_output_dir / "metrics.json"
+    if not metrics_file.exists():
+        return None
+    try:
+        with open(metrics_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 def _update_tts_intermediate_results(
     output_dir: Path,
     provider: str,
@@ -184,12 +200,16 @@ def _update_tts_intermediate_results(
             )
             continue
 
+    # Check if metrics.json exists - if so, provider evaluation is complete
+    metrics_data = _read_tts_metrics_json(provider_output_dir)
+    is_complete = metrics_data is not None
+
     with results_lock:
         intermediate_results[provider] = {
             "provider": provider,
-            "success": None,  # Still in progress
-            "message": "Processing...",
-            "metrics": None,
+            "success": True if is_complete else None,
+            "message": "Completed" if is_complete else "Processing...",
+            "metrics": metrics_data,
             "results": results_data,
         }
         # Update job with current intermediate results
@@ -444,11 +464,14 @@ def run_tts_evaluation_task(
                 output_dir.mkdir()
 
                 # Reserve ports for each provider
-                start_port = 8000
+                start_port = 8765
                 for provider in request.providers:
                     port = reserve_port(f"{task_id}_{provider}", start_port)
                     provider_ports[provider] = port
                     start_port = port + 1
+
+                # Store ports in job details for cleanup
+                update_job(task_id, details={"provider_ports": dict(provider_ports)})
 
                 # Run pense TTS eval for all providers in parallel
                 provider_results = []
@@ -725,11 +748,42 @@ async def get_tts_evaluation_status(
     if not job:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    status = job["status"]
     results = job.get("results") or {}
+    details = job.get("details") or {}
     provider_results = results.get("provider_results")
 
+    # Check for timeout on in-progress jobs
+    if status == TaskStatus.IN_PROGRESS.value:
+        updated_at = job.get("updated_at")
+        if updated_at and is_job_timed_out(updated_at):
+            logger.warning(f"Job {task_id} timed out, marking as failed")
+
+            # Kill running processes
+            running_pids = details.get("running_pids")
+            if running_pids:
+                kill_processes_from_dict(running_pids, task_id)
+
+            # Release ports
+            provider_ports = details.get("provider_ports")
+            if provider_ports:
+                for port in provider_ports.values():
+                    release_port(port)
+
+            # Mark job as failed (preserve existing results, add error)
+            results["error"] = "Job timed out after 5 minutes of inactivity"
+            update_job(
+                task_id,
+                status=TaskStatus.FAILED.value,
+                results=results,
+            )
+            status = TaskStatus.FAILED.value
+
+            # Try to start the next queued job
+            try_start_queued_job(EVAL_JOB_TYPES)
+
     # Generate presigned URLs on the fly for completed jobs
-    if job["status"] == TaskStatus.DONE.value and provider_results:
+    if status == TaskStatus.DONE.value and provider_results:
         for provider_result in provider_results:
             if provider_result.get("results"):
                 for result_row in provider_result["results"]:
@@ -746,7 +800,7 @@ async def get_tts_evaluation_status(
 
     return TaskStatusResponse(
         task_id=task_id,
-        status=job["status"],
+        status=status,
         provider_results=provider_results,
         leaderboard_summary=results.get("leaderboard_summary"),
         error=results.get("error"),

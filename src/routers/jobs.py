@@ -6,7 +6,12 @@ from pydantic import BaseModel
 
 from db import get_all_jobs, get_job, delete_job
 from auth_utils import get_current_user_id
-from utils import TaskStatus, try_start_queued_job
+from utils import (
+    TaskStatus,
+    try_start_queued_job,
+    kill_processes_from_dict,
+    release_port,
+)
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -87,6 +92,19 @@ async def delete_job_endpoint(
 
     # Check if this was a running job (to trigger next queued job after delete)
     was_running = job.get("status") == TaskStatus.IN_PROGRESS.value
+    details = job.get("details") or {}
+
+    # Kill running processes if job is in progress
+    if was_running:
+        running_pids = details.get("running_pids")
+        if running_pids:
+            kill_processes_from_dict(running_pids, job_uuid)
+
+        # Release ports
+        provider_ports = details.get("provider_ports")
+        if provider_ports:
+            for port in provider_ports.values():
+                release_port(port)
 
     deleted = delete_job(job_uuid)
     if not deleted:

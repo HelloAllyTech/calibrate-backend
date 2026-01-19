@@ -1,7 +1,10 @@
 import os
+import signal
 import socket
 import logging
 import threading
+import time
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import List, Optional, Dict, Any
 
@@ -9,6 +12,9 @@ import boto3
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+# Timeout threshold for marking jobs as failed (5 minutes)
+JOB_TIMEOUT_MINUTES = 5
 
 # In-memory task storage (shared across routers)
 tasks = {}
@@ -25,6 +31,7 @@ class TaskStatus(str, Enum):
     IN_PROGRESS = "in_progress"
     CANCELLED = "cancelled"
     DONE = "done"
+    FAILED = "failed"
 
 
 class ProviderResult(BaseModel):
@@ -48,12 +55,112 @@ class TaskStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+def kill_process_group(pid: int, job_id: str) -> bool:
+    """Kill a process group by PID.
+
+    Args:
+        pid: Process ID (also used as PGID when start_new_session=True)
+        job_id: Job ID for logging
+
+    Returns:
+        True if process was killed or didn't exist, False on error
+    """
+    if not pid:
+        return True
+
+    try:
+        os.killpg(pid, signal.SIGTERM)
+        logger.info(f"Job {job_id}: Sent SIGTERM to process group {pid}")
+
+        time.sleep(0.5)
+
+        try:
+            os.killpg(pid, signal.SIGKILL)
+            logger.info(f"Job {job_id}: Sent SIGKILL to process group {pid}")
+        except ProcessLookupError:
+            logger.info(f"Job {job_id}: Process group {pid} already terminated")
+
+        return True
+    except ProcessLookupError:
+        logger.info(f"Job {job_id}: Process group {pid} not found (already dead)")
+        return True
+    except PermissionError:
+        logger.warning(f"Job {job_id}: No permission to kill process group {pid}")
+        return False
+    except Exception as e:
+        logger.error(f"Job {job_id}: Error killing process group {pid}: {e}")
+        return False
+
+
+def kill_processes_from_dict(pids_dict: dict, job_id: str) -> None:
+    """Kill multiple processes from a dict mapping (e.g., provider -> PID).
+
+    Args:
+        pids_dict: Dict mapping names to PIDs (e.g., {"deepgram": 12345, "openai": 12346})
+        job_id: Job ID for logging
+    """
+    if not pids_dict:
+        logger.info(f"Job {job_id}: No running PIDs to kill")
+        return
+
+    for name, pid in pids_dict.items():
+        if not pid:
+            continue
+        try:
+            os.killpg(pid, signal.SIGTERM)
+            logger.info(f"Job {job_id}: Sent SIGTERM to process group {pid} ({name})")
+
+            time.sleep(0.5)
+
+            try:
+                os.killpg(pid, signal.SIGKILL)
+                logger.info(
+                    f"Job {job_id}: Sent SIGKILL to process group {pid} ({name})"
+                )
+            except ProcessLookupError:
+                logger.info(
+                    f"Job {job_id}: Process group {pid} ({name}) already terminated"
+                )
+        except ProcessLookupError:
+            logger.info(f"Job {job_id}: Process group {pid} ({name}) not found")
+        except PermissionError:
+            logger.warning(
+                f"Job {job_id}: No permission to kill process group {pid} ({name})"
+            )
+        except Exception as e:
+            logger.error(
+                f"Job {job_id}: Error killing process group {pid} ({name}): {e}"
+            )
+
+
+def is_job_timed_out(
+    updated_at: str, timeout_minutes: int = JOB_TIMEOUT_MINUTES
+) -> bool:
+    """Check if a job has timed out based on its updated_at timestamp.
+
+    Args:
+        updated_at: ISO format timestamp string (from SQLite, stored in UTC)
+
+    Returns:
+        True if the job hasn't been updated in more than JOB_TIMEOUT_MINUTES
+    """
+    try:
+        # Parse the timestamp (SQLite format: "YYYY-MM-DD HH:MM:SS", stored in UTC)
+        last_update = datetime.fromisoformat(updated_at.replace(" ", "T"))
+        # Use UTC for comparison since SQLite CURRENT_TIMESTAMP is in UTC
+        timeout_threshold = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+        return last_update < timeout_threshold
+    except Exception as e:
+        logger.warning(f"Error parsing timestamp {updated_at}: {e}")
+        return False
+
+
 def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(("localhost", port)) == 0
 
 
-def find_available_port(start_port: int = 8000) -> int:
+def find_available_port(start_port: int = 8765) -> int:
     """Find an available port starting from start_port.
 
     Note: This only checks if the port is in use at the OS level.
@@ -71,7 +178,7 @@ def find_available_port(start_port: int = 8000) -> int:
         return port
 
 
-def reserve_port(job_id: str, start_port: int = 8000) -> int:
+def reserve_port(job_id: str, start_port: int = 8765) -> int:
     """Find and reserve an available port for a job.
 
     This checks both OS-level port usage and the shared port registry

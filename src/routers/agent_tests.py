@@ -2,6 +2,7 @@ import os
 import json
 import subprocess
 import tempfile
+import time
 import traceback
 import threading
 import concurrent.futures
@@ -9,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from sqlite3 import IntegrityError
 
@@ -27,7 +28,9 @@ from db import (
     get_agent_test_job,
     update_agent_test_job,
     get_agent_test_jobs_for_agent,
+    delete_agent_test_job,
 )
+from auth_utils import get_current_user_id
 from utils import (
     TaskStatus,
     TaskCreateResponse,
@@ -36,6 +39,7 @@ from utils import (
     can_start_agent_test_job,
     try_start_queued_agent_test_job,
     register_job_starter,
+    is_job_timed_out,
 )
 
 # Job types that share the same queue
@@ -417,6 +421,264 @@ def _build_pense_config(
     }
 
 
+def _read_agent_test_results_json(output_dir: Path) -> Optional[List[dict]]:
+    """Read results.json from agent test output directory if it exists."""
+    if not output_dir or not output_dir.exists():
+        return None
+    for root, dirs, files in os.walk(output_dir):
+        for file in files:
+            if file == "results.json":
+                file_path = Path(root) / file
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception:
+                    return None
+    return None
+
+
+def _read_agent_test_metrics_json(output_dir: Path) -> Optional[dict]:
+    """Read metrics.json from agent test output directory if it exists."""
+    if not output_dir or not output_dir.exists():
+        return None
+    for root, dirs, files in os.walk(output_dir):
+        for file in files:
+            if file == "metrics.json":
+                file_path = Path(root) / file
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception:
+                    return None
+    return None
+
+
+def _parse_agent_test_results(results_data: Optional[List[dict]]) -> List[dict]:
+    """Parse results.json data into the format expected by the API."""
+    if not results_data or not isinstance(results_data, list):
+        return []
+    test_results = []
+    for r in results_data:
+        output_data = r.get("output", {})
+        metrics = r.get("metrics", {})
+        test_case = r.get("test_case", {})
+        test_results.append(
+            {
+                "name": test_case.get("name"),
+                "passed": metrics.get("passed", False),
+                "output": {
+                    "response": output_data.get("response"),
+                    "tool_calls": output_data.get("tool_calls"),
+                },
+                "test_case": test_case,
+            }
+        )
+    return test_results
+
+
+def _find_all_results_in_output(output_dir: Path) -> Dict[str, tuple]:
+    """
+    Walk output_dir and find all results.json and metrics.json files.
+    Returns a dict mapping folder names to (results_data, metrics_data) tuples.
+    """
+    found = {}
+    if not output_dir.exists():
+        return found
+
+    for root, dirs, files in os.walk(output_dir):
+        root_path = Path(root)
+        results_data = None
+        metrics_data = None
+
+        if "results.json" in files:
+            try:
+                with open(root_path / "results.json", "r", encoding="utf-8") as f:
+                    results_data = json.load(f)
+            except Exception:
+                pass
+
+        if "metrics.json" in files:
+            try:
+                with open(root_path / "metrics.json", "r", encoding="utf-8") as f:
+                    metrics_data = json.load(f)
+            except Exception:
+                pass
+
+        if results_data is not None or metrics_data is not None:
+            # Use the folder name as key (this contains the model name)
+            found[root_path.name] = (results_data, metrics_data)
+
+    return found
+
+
+def _match_model_to_folder(model: str, folder_names: List[str]) -> Optional[str]:
+    """Find folder name that matches the model."""
+    # Normalize model name for matching
+    model_normalized = model.replace("/", "_").replace(":", "_").lower()
+    model_alt = model.replace("/", "-").replace(":", "-").lower()
+    # Also try double underscore (some pense versions use this)
+    model_double = model.replace("/", "__").replace(":", "__").lower()
+
+    for folder in folder_names:
+        folder_lower = folder.lower()
+        if (
+            model_normalized in folder_lower
+            or model_alt in folder_lower
+            or model_double in folder_lower
+            or model.lower() in folder_lower
+        ):
+            return folder
+    return None
+
+
+def _update_benchmark_intermediate_results(
+    task_id: str,
+    output_dir: Path,
+    models: List[str],
+    test_names: List[str],
+    results_lock: threading.Lock,
+):
+    """
+    Update intermediate results for a benchmark job.
+    Walks output_dir to find all results.json files and matches them to models.
+    """
+    # Find all results in output directory
+    all_results = _find_all_results_in_output(output_dir)
+    folder_names = list(all_results.keys())
+
+    model_results = []
+    for model in models:
+        # Try to find matching folder for this model
+        matched_folder = _match_model_to_folder(model, folder_names)
+
+        if matched_folder and matched_folder in all_results:
+            results_data, metrics_data = all_results[matched_folder]
+
+            # Parse results (same as _run_pense_test)
+            completed_results = _parse_agent_test_results(results_data)
+
+            # Add name field for consistency
+            for i, r in enumerate(completed_results):
+                if not r.get("name") and results_data and i < len(results_data):
+                    test_case = results_data[i].get("test_case", {})
+                    r["name"] = test_case.get("name")
+
+            # Build dict of completed tests by name
+            completed_by_name = {
+                r.get("name"): r for r in completed_results if r.get("name")
+            }
+
+            # Build test_results with all tests - completed ones with data, pending with nulls
+            test_results = []
+            for name in test_names:
+                if name in completed_by_name:
+                    test_results.append(completed_by_name[name])
+                else:
+                    # Pending test - include name with null values
+                    test_results.append(
+                        {
+                            "name": name,
+                            "passed": None,
+                            "output": None,
+                            "test_case": None,
+                        }
+                    )
+
+            if metrics_data:
+                # Model complete
+                total = metrics_data.get("total", 0)
+                passed = metrics_data.get("passed", 0)
+                model_results.append(
+                    {
+                        "model": model,
+                        "success": True,
+                        "message": "Completed",
+                        "total_tests": total,
+                        "passed": passed,
+                        "failed": total - passed,
+                        "test_results": test_results,
+                    }
+                )
+            else:
+                # Model in progress
+                model_results.append(
+                    {
+                        "model": model,
+                        "success": None,
+                        "message": f"Processing... ({len(completed_by_name)}/{len(test_names)} tests)",
+                        "total_tests": None,
+                        "passed": None,
+                        "failed": None,
+                        "test_results": test_results,
+                    }
+                )
+        else:
+            # No output yet - include all tests with null values
+            test_results = [
+                {"name": name, "passed": None, "output": None, "test_case": None}
+                for name in test_names
+            ]
+            model_results.append(
+                {
+                    "model": model,
+                    "success": None,
+                    "message": "Queued...",
+                    "total_tests": None,
+                    "passed": None,
+                    "failed": None,
+                    "test_results": test_results,
+                }
+            )
+
+    with results_lock:
+        update_agent_test_job(
+            task_id,
+            results={"model_results": model_results},
+        )
+
+
+def _update_agent_test_intermediate_results(
+    task_id: str,
+    output_dir: Path,
+    test_names: List[str],
+):
+    """Update intermediate results for an agent test job."""
+    results_data = _read_agent_test_results_json(output_dir)
+    if results_data is None:
+        return
+
+    # Parse results
+    test_results = _parse_agent_test_results(results_data)
+
+    # Create a dict of completed tests by name
+    completed_tests = {r.get("name"): r for r in test_results if r.get("name")}
+
+    # Build intermediate results: show completed tests with results, pending tests with just name
+    intermediate_results = []
+    for name in test_names:
+        if name in completed_tests:
+            intermediate_results.append(completed_tests[name])
+        else:
+            intermediate_results.append({"name": name})
+
+    # Check if metrics.json exists (all tests complete)
+    metrics_data = _read_agent_test_metrics_json(output_dir)
+
+    update_agent_test_job(
+        task_id,
+        results={
+            "total_tests": metrics_data.get("total") if metrics_data else None,
+            "passed": metrics_data.get("passed") if metrics_data else None,
+            "failed": (
+                (metrics_data.get("total", 0) - metrics_data.get("passed", 0))
+                if metrics_data
+                else None
+            ),
+            "test_results": intermediate_results,
+        },
+    )
+
+
 def _run_pense_test(
     model: str,
     pense_config: Dict[str, Any],
@@ -424,7 +686,10 @@ def _run_pense_test(
     output_dir: Path,
     s3_bucket: str,
     s3_prefix: str,
+    task_id: Optional[str] = None,
+    test_names: Optional[List[str]] = None,
     log_prefix: str = "LLM test",
+    skip_s3_upload: bool = False,
 ) -> Dict[str, Any]:
     """
     Run pense llm tests run command and return parsed results.
@@ -436,7 +701,10 @@ def _run_pense_test(
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
         s3_prefix: S3 key prefix for uploading results
+        task_id: Optional task ID for intermediate updates
+        test_names: Optional list of test names for intermediate updates
         log_prefix: Prefix for log messages
+        skip_s3_upload: If True, skip S3 upload (for benchmarks that upload separately)
 
     Returns:
         Dict with keys: success, total_tests, passed, failed, test_results, error
@@ -476,16 +744,44 @@ def _run_pense_test(
 
     logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
 
-    result = subprocess.run(
-        run_cmd,
-        capture_output=True,
-        text=True,
-    )
+    # Use Popen with polling for intermediate updates
+    stdout_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".log")
+    stderr_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".log")
 
-    if result.stdout:
-        logger.info(f"{log_prefix} stdout: {result.stdout}")
-    if result.stderr:
-        logger.info(f"{log_prefix} stderr: {result.stderr}")
+    try:
+        process = subprocess.Popen(
+            run_cmd,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=True,
+        )
+
+        # Poll for process completion while updating intermediate results
+        while process.poll() is None:
+            if task_id and test_names:
+                _update_agent_test_intermediate_results(task_id, output_dir, test_names)
+            time.sleep(2)  # Check every 2 seconds
+
+        # Final update after process completes
+        if task_id and test_names:
+            _update_agent_test_intermediate_results(task_id, output_dir, test_names)
+
+        # Read stdout/stderr
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout_content = stdout_file.read()
+        stderr_content = stderr_file.read()
+
+        if stdout_content:
+            logger.info(f"{log_prefix} stdout: {stdout_content}")
+        if stderr_content:
+            logger.info(f"{log_prefix} stderr: {stderr_content}")
+
+    finally:
+        stdout_file.close()
+        stderr_file.close()
+        os.unlink(stdout_file.name)
+        os.unlink(stderr_file.name)
 
     # Find results.json and metrics.json files
     results_data = None
@@ -501,13 +797,14 @@ def _run_pense_test(
                 with open(file_path, "r", encoding="utf-8") as f:
                     metrics_data = json.load(f)
 
-    # Upload results to S3
-    for root, dirs, files in os.walk(output_dir):
-        for file in files:
-            local_file_path = Path(root) / file
-            relative_path = local_file_path.relative_to(output_dir)
-            s3_key = f"{s3_prefix}/{relative_path}"
-            s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+    # Upload results to S3 (unless skipped for benchmarks)
+    if not skip_s3_upload:
+        for root, dirs, files in os.walk(output_dir):
+            for file in files:
+                local_file_path = Path(root) / file
+                relative_path = local_file_path.relative_to(output_dir)
+                s3_key = f"{s3_prefix}/{relative_path}"
+                s3.upload_file(str(local_file_path), s3_bucket, s3_key)
 
     # Parse metrics
     total_tests = 0
@@ -519,38 +816,29 @@ def _run_pense_test(
         passed = metrics_data.get("passed", 0)
         failed = total_tests - passed
 
-    # Parse results
-    test_results = []
-    if results_data and isinstance(results_data, list):
-        for r in results_data:
-            output_data = r.get("output", {})
-            metrics = r.get("metrics", {})
-            test_case = r.get("test_case", {})
-            test_results.append(
-                {
-                    "passed": metrics.get("passed", False),
-                    "output": {
-                        "response": output_data.get("response"),
-                        "tool_calls": output_data.get("tool_calls"),
-                    },
-                    "test_case": test_case,
-                }
-            )
+    # Parse results using the helper function
+    test_results = _parse_agent_test_results(results_data)
 
-        # If metrics.json wasn't found, compute from results
-        if not metrics_data:
-            total_tests = len(results_data)
-            passed = sum(
-                1 for r in results_data if r.get("metrics", {}).get("passed", False)
-            )
-            failed = total_tests - passed
+    # Add name field for consistency
+    for i, r in enumerate(test_results):
+        if not r.get("name") and results_data and i < len(results_data):
+            test_case = results_data[i].get("test_case", {})
+            r["name"] = test_case.get("name")
+
+    # If metrics.json wasn't found, compute from results
+    if not metrics_data and results_data:
+        total_tests = len(results_data)
+        passed = sum(
+            1 for r in results_data if r.get("metrics", {}).get("passed", False)
+        )
+        failed = total_tests - passed
 
     error = None
-    if result.returncode != 0:
-        error = f"Command failed: {result.stderr}"
+    if process.returncode != 0:
+        error = f"Command failed with exit code {process.returncode}"
 
     return {
-        "success": result.returncode == 0,
+        "success": process.returncode == 0,
         "total_tests": total_tests,
         "passed": passed,
         "failed": failed,
@@ -590,7 +878,7 @@ def run_llm_test_task(
                 input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
 
-                # Run pense test
+                # Run pense test with intermediate updates
                 results_prefix = f"agent-tests/runs/{task_id}"
                 result = _run_pense_test(
                     model=model,
@@ -599,6 +887,8 @@ def run_llm_test_task(
                     output_dir=output_dir,
                     s3_bucket=s3_bucket,
                     s3_prefix=results_prefix,
+                    task_id=task_id,
+                    test_names=test_names,
                     log_prefix=f"LLM test {task_id}",
                 )
 
@@ -732,11 +1022,30 @@ async def get_agent_test_run_status(task_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    status = job["status"]
     results = job.get("results") or {}
+
+    # Check for timeout on in-progress jobs
+    # if status == TaskStatus.IN_PROGRESS.value:
+    #     updated_at = job.get("updated_at")
+    #     if updated_at and is_job_timed_out(updated_at):
+    #         logger.warning(f"Agent test job {task_id} timed out, marking as failed")
+
+    #         # Mark job as failed (preserve existing results, add error)
+    #         results["error"] = "Job timed out after 5 minutes of inactivity"
+    #         update_agent_test_job(
+    #             task_id,
+    #             status=TaskStatus.FAILED.value,
+    #             results=results,
+    #         )
+    #         status = TaskStatus.FAILED.value
+
+    #         # Try to start the next queued job
+    #         try_start_queued_agent_test_job(AGENT_TEST_JOB_TYPES)
 
     return TestRunStatusResponse(
         task_id=task_id,
-        status=job["status"],
+        status=status,
         total_tests=results.get("total_tests"),
         passed=results.get("passed"),
         failed=results.get("failed"),
@@ -756,7 +1065,7 @@ class BenchmarkRequest(BaseModel):
 
 class ModelResult(BaseModel):
     model: str
-    success: bool
+    success: Optional[bool] = None  # None while queued/processing, True/False when done
     message: str
     total_tests: Optional[int] = None
     passed: Optional[int] = None
@@ -781,14 +1090,12 @@ def run_model_benchmark(
     output_dir: Path,
     s3_bucket: str,
 ) -> ModelResult:
-    """Run benchmark for a single model."""
+    """Run benchmark for a single model. S3 upload is handled by run_benchmark_task."""
     try:
         # Create model-specific directories to avoid race conditions in parallel runs
         model_name = model.replace("/", "_")
         model_input_dir = input_dir / model_name
         model_input_dir.mkdir(parents=True, exist_ok=True)
-
-        s3_prefix = f"agent-tests/benchmarks/{task_id}/outputs/{model_name}"
 
         result = _run_pense_test(
             model=model,
@@ -796,8 +1103,9 @@ def run_model_benchmark(
             input_dir=model_input_dir,
             output_dir=output_dir,
             s3_bucket=s3_bucket,
-            s3_prefix=s3_prefix,
+            s3_prefix="",  # Not used since skip_s3_upload=True
             log_prefix=f"Benchmark {task_id} model {model}",
+            skip_s3_upload=True,  # Upload handled by run_benchmark_task
         )
 
         if not result["success"]:
@@ -845,13 +1153,28 @@ def run_benchmark_task(
         )
         # Extract test names for progress tracking
         test_names = [test.get("name") for test in tests if test.get("name")]
+
+        # Initialize with all models as queued
+        initial_model_results = [
+            {
+                "model": model,
+                "success": None,
+                "message": "Queued...",
+                "total_tests": None,
+                "passed": None,
+                "failed": None,
+                "test_results": None,
+            }
+            for model in models
+        ]
         update_agent_test_job(
             task_id,
             status=TaskStatus.IN_PROGRESS.value,
-            results={"test_results": [{"name": name} for name in test_names]},
+            results={"model_results": initial_model_results},
         )
 
         s3 = get_s3_client()
+        results_lock = threading.Lock()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -888,7 +1211,26 @@ def run_benchmark_task(
                         for model in models
                     }
 
-                    for future in concurrent.futures.as_completed(future_to_model):
+                    # Poll for intermediate results while models are running
+                    while True:
+                        # Update intermediate results
+                        _update_benchmark_intermediate_results(
+                            task_id,
+                            output_dir.resolve(),
+                            models,
+                            test_names,
+                            results_lock,
+                        )
+
+                        # Check if all futures are done
+                        done_futures = [f for f in future_to_model if f.done()]
+                        if len(done_futures) == len(future_to_model):
+                            break
+
+                        time.sleep(2)
+
+                    # Collect final results from all futures
+                    for future in future_to_model:
                         result = future.result()
                         model_results.append(result)
 
@@ -968,6 +1310,20 @@ def run_benchmark_task(
 
                 except subprocess.CalledProcessError as e:
                     logger.warning(f"Leaderboard command failed: {e.stderr}")
+
+                # Upload output directory to S3 (preserves pense output structure)
+                # Structure: output_dir/test_config/<model_folder>/results.json
+                # S3: {results_prefix}/outputs/test_config/<model_folder>/results.json
+                for root, dirs, files in os.walk(output_dir):
+                    for file in files:
+                        local_file_path = Path(root) / file
+                        relative_path = local_file_path.relative_to(output_dir)
+                        s3_key = f"{results_prefix}/outputs/{relative_path}"
+                        s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+
+                logger.info(
+                    f"Uploaded benchmark outputs to s3://{s3_bucket}/{results_prefix}/outputs/"
+                )
 
                 # Update job with results
                 update_agent_test_job(
@@ -1098,13 +1454,66 @@ async def get_benchmark_status(task_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    status = job["status"]
     results = job.get("results") or {}
+
+    # Check for timeout on in-progress jobs
+    # if status == TaskStatus.IN_PROGRESS.value:
+    #     updated_at = job.get("updated_at")
+    #     if updated_at and is_job_timed_out(updated_at):
+    #         logger.warning(f"Benchmark job {task_id} timed out, marking as failed")
+
+    #         # Mark job as failed (preserve existing results, add error)
+    #         results["error"] = "Job timed out after 5 minutes of inactivity"
+    #         update_agent_test_job(
+    #             task_id,
+    #             status=TaskStatus.FAILED.value,
+    #             results=results,
+    #         )
+    #         status = TaskStatus.FAILED.value
+
+    #         # Try to start the next queued job
+    #         try_start_queued_agent_test_job(AGENT_TEST_JOB_TYPES)
 
     return BenchmarkStatusResponse(
         task_id=task_id,
-        status=job["status"],
+        status=status,
         model_results=results.get("model_results"),
         leaderboard_summary=results.get("leaderboard_summary"),
         results_s3_prefix=results.get("results_s3_prefix"),
         error=results.get("error"),
     )
+
+
+@router.delete("/job/{job_uuid}")
+async def delete_agent_test_job_endpoint(
+    job_uuid: str, user_id: str = Depends(get_current_user_id)
+):
+    """Delete an agent test job. Only the owner can delete their jobs."""
+    # Check if job exists
+    job = get_agent_test_job(job_uuid)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check ownership via agent
+    agent_id = job.get("agent_id")
+    if agent_id:
+        agent = get_agent(agent_id)
+        if not agent or agent.get("user_id") != user_id:
+            raise HTTPException(status_code=404, detail="Job not found")
+    else:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check if this was a running job (to trigger next queued job after delete)
+    was_running = job.get("status") == TaskStatus.IN_PROGRESS.value
+
+    # Delete the job
+    deleted = delete_agent_test_job(job_uuid)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # If the deleted job was running, try to start the next queued job
+    if was_running:
+        try_start_queued_agent_test_job(AGENT_TEST_JOB_TYPES)
+
+    return {"message": "Agent test job deleted successfully"}

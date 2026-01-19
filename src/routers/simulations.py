@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import time
 import traceback
 import threading
 import logging
@@ -35,6 +36,7 @@ from db import (
     get_simulation_job,
     update_simulation_job,
     get_simulation_jobs_for_simulation,
+    delete_simulation_job,
 )
 from utils import (
     TaskStatus,
@@ -47,6 +49,8 @@ from utils import (
     try_start_queued_simulation_job,
     register_job_starter,
     generate_presigned_download_url,
+    kill_process_group,
+    is_job_timed_out,
 )
 from auth_utils import get_current_user_id
 
@@ -425,6 +429,38 @@ async def get_simulation_run_status(
         if not simulation or simulation.get("user_id") != user_id:
             raise HTTPException(status_code=404, detail="Task not found")
 
+    status = job["status"]
+    results = job.get("results") or {}
+    details = job.get("details") or {}
+
+    # Check for timeout on in-progress jobs
+    if status == TaskStatus.IN_PROGRESS.value:
+        updated_at = job.get("updated_at")
+        if updated_at and is_job_timed_out(updated_at, timeout_minutes=15):
+            logger.warning(f"Simulation job {task_id} timed out, marking as failed")
+
+            # Kill running process
+            pid = details.get("pid") or details.get("pgid")
+            if pid:
+                kill_process_group(pid, task_id)
+
+            # Release port if allocated
+            port = details.get("port")
+            if port:
+                release_port(port)
+
+            # Mark job as failed (preserve existing results, add error)
+            results["error"] = "Job timed out after 5 minutes of inactivity"
+            update_simulation_job(
+                task_id,
+                status=TaskStatus.FAILED.value,
+                results=results,
+            )
+            status = TaskStatus.FAILED.value
+
+            # Try to start the next queued job
+            try_start_queued_simulation_job(SIMULATION_JOB_TYPES)
+
     # Calculate run index based on creation order
     run_name = "Run 1"  # Default
     if simulation_id:
@@ -437,7 +473,6 @@ async def get_simulation_run_status(
                 run_name = f"Run {idx}"
                 break
 
-    results = job.get("results") or {}
     simulation_results = results.get("simulation_results") or []
 
     # If this is a voice simulation, generate presigned URLs for audio files
@@ -477,7 +512,7 @@ async def get_simulation_run_status(
     return SimulationRunStatusResponse(
         task_id=task_id,
         name=run_name,
-        status=job["status"],
+        status=status,
         type=job["type"],
         updated_at=job["updated_at"],
         total_simulations=results.get("total_simulations"),
@@ -834,6 +869,144 @@ def _build_pense_simulation_config(
     return config
 
 
+def _parse_text_simulation_directory(
+    sim_dir: Path,
+) -> Optional[Dict[str, Any]]:
+    """
+    Parse a single text simulation directory.
+
+    Returns results for both complete (has evaluation_results.csv) and
+    in-progress (has transcript.json but no evaluation_results.csv) simulations.
+
+    Args:
+        sim_dir: Path to the simulation directory
+
+    Returns:
+        Dict with simulation result data, or None if directory doesn't exist
+    """
+    import csv
+
+    if not sim_dir.exists():
+        return None
+
+    sim_name = sim_dir.name
+    eval_results_file = sim_dir / "evaluation_results.csv"
+    transcript_file = sim_dir / "transcript.json"
+    config_file = sim_dir / "config.json"
+
+    # Check if simulation is complete
+    is_complete = eval_results_file.exists()
+
+    eval_results = []
+    if eval_results_file.exists():
+        try:
+            with open(eval_results_file, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    eval_results.append(
+                        {
+                            "name": row.get("name"),
+                            "value": row.get("value"),
+                            "reasoning": row.get("reasoning", ""),
+                        }
+                    )
+        except Exception as e:
+            logger.warning(
+                f"Failed to parse evaluation_results.csv for {sim_name}: {e}"
+            )
+
+    # Parse transcript.json if it exists
+    transcript = None
+    if transcript_file.exists():
+        try:
+            with open(transcript_file, "r", encoding="utf-8") as f:
+                transcript = json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to parse transcript.json for {sim_name}: {e}")
+
+    # Parse config.json to get persona and scenario data
+    persona_data = None
+    scenario_data = None
+    if config_file.exists():
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                persona_data = config_data.get("persona")
+                scenario_data = config_data.get("scenario")
+        except Exception as e:
+            logger.warning(f"Failed to parse config.json for {sim_name}: {e}")
+
+    # Only return if we have at least config.json or transcript.json (simulation has started)
+    if not config_file.exists() and not transcript_file.exists():
+        return None
+
+    return {
+        "simulation_name": sim_name,
+        "persona": persona_data,
+        "scenario": scenario_data,
+        "evaluation_results": eval_results if is_complete else None,
+        "transcript": transcript,
+        "is_complete": is_complete,
+    }
+
+
+def _get_text_simulation_directories(output_dir: Path) -> List[Path]:
+    """Get all simulation directories from output directory."""
+    sim_dirs = []
+    if not output_dir.exists():
+        return sim_dirs
+    for root, dirs, files in os.walk(output_dir):
+        for dir_name in dirs:
+            if dir_name.startswith("simulation_persona_"):
+                sim_dirs.append(Path(root) / dir_name)
+    return sim_dirs
+
+
+def _update_text_simulation_intermediate_results(
+    task_id: str,
+    output_dir: Path,
+    expected_total: int,
+    s3_prefix: str,
+):
+    """Update intermediate results for a text simulation job."""
+    simulation_results = []
+    completed_count = 0
+
+    for sim_dir in _get_text_simulation_directories(output_dir):
+        sim_result = _parse_text_simulation_directory(sim_dir)
+        if sim_result:
+            # Remove is_complete field before storing (internal use only)
+            is_complete = sim_result.pop("is_complete", False)
+            if is_complete:
+                completed_count += 1
+            simulation_results.append(sim_result)
+
+    if not simulation_results:
+        return
+
+    # Check if metrics.json exists (all simulations complete)
+    metrics_data = None
+    metrics_file = output_dir / "metrics.json"
+    if metrics_file.exists():
+        try:
+            with open(metrics_file, "r", encoding="utf-8") as f:
+                metrics_data = json.load(f)
+        except Exception:
+            pass
+
+    update_simulation_job(
+        task_id,
+        status=TaskStatus.IN_PROGRESS.value,
+        results={
+            "total_simulations": expected_total,
+            "completed_simulations": completed_count,
+            "simulation_results": simulation_results,
+            "results_s3_prefix": s3_prefix,
+            "metrics": metrics_data,
+        },
+    )
+
+
 def _run_pense_text_simulation(
     model: str,
     pense_config: Dict[str, Any],
@@ -841,10 +1014,12 @@ def _run_pense_text_simulation(
     output_dir: Path,
     s3_bucket: str,
     s3_prefix: str,
+    task_id: Optional[str] = None,
     log_prefix: str = "LLM simulation",
 ) -> Dict[str, Any]:
     """
     Run pense llm simulations run command and return parsed results.
+    Updates the database incrementally as each simulation completes.
 
     Args:
         model: Model name to use
@@ -853,6 +1028,7 @@ def _run_pense_text_simulation(
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
         s3_prefix: S3 key prefix for uploading results
+        task_id: Optional task ID for intermediate updates
         log_prefix: Prefix for log messages
 
     Returns:
@@ -878,6 +1054,11 @@ def _run_pense_text_simulation(
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
+    # Calculate expected number of simulations
+    num_personas = len(pense_config.get("personas", []))
+    num_scenarios = len(pense_config.get("scenarios", []))
+    expected_total = num_personas * num_scenarios
+
     # Run pense llm simulations run command
     # Use absolute paths for config and output
     run_cmd = [
@@ -897,98 +1078,67 @@ def _run_pense_text_simulation(
 
     logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
 
-    result = subprocess.run(
-        run_cmd,
-        capture_output=True,
-        text=True,
-    )
+    # Use Popen with polling for intermediate updates
+    stdout_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".log")
+    stderr_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".log")
 
-    if result.stdout:
-        logger.info(f"{log_prefix} stdout: {result.stdout}")
-    if result.stderr:
-        logger.info(f"{log_prefix} stderr: {result.stderr}")
+    try:
+        process = subprocess.Popen(
+            run_cmd,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=True,
+        )
 
-    # Parse results
+        # Poll for process completion while updating intermediate results
+        poll_interval = 2  # seconds
+        while process.poll() is None:
+            if task_id:
+                _update_text_simulation_intermediate_results(
+                    task_id, output_dir, expected_total, s3_prefix
+                )
+            time.sleep(poll_interval)
+
+        # Final update after process completes
+        if task_id:
+            _update_text_simulation_intermediate_results(
+                task_id, output_dir, expected_total, s3_prefix
+            )
+
+        # Read stdout/stderr
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout_content = stdout_file.read()
+        stderr_content = stderr_file.read()
+
+        if stdout_content:
+            logger.info(f"{log_prefix} stdout: {stdout_content}")
+        if stderr_content:
+            logger.info(f"{log_prefix} stderr: {stderr_content}")
+
+    finally:
+        stdout_file.close()
+        stderr_file.close()
+        os.unlink(stdout_file.name)
+        os.unlink(stderr_file.name)
+
+    # Parse final results
     metrics_data = None
-    results_data = None
     simulation_results = []
 
-    # Find metrics.json and results.csv files
+    # Find metrics.json file
     metrics_file = output_dir / "metrics.json"
-    results_file = output_dir / "results.csv"
-
     if metrics_file.exists():
         with open(metrics_file, "r", encoding="utf-8") as f:
             metrics_data = json.load(f)
 
-    # Parse results.csv for aggregated scores
-    if results_file.exists():
-        import csv
-
-        with open(results_file, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            results_data = list(reader)
-
-    # Find simulation directories and parse their results
-    # Search recursively for simulation directories (they might be nested)
-    for root, dirs, files in os.walk(output_dir):
-        for dir_name in dirs:
-            if dir_name.startswith("simulation_persona_"):
-                sim_dir = Path(root) / dir_name
-                sim_name = dir_name
-                eval_results_file = sim_dir / "evaluation_results.csv"
-                transcript_file = sim_dir / "transcript.json"
-                config_file = sim_dir / "config.json"
-
-                eval_results = []
-                if eval_results_file.exists():
-                    import csv
-
-                    with open(eval_results_file, "r", encoding="utf-8") as f:
-                        reader = csv.DictReader(f)
-                        for row in reader:
-                            eval_results.append(
-                                {
-                                    "name": row.get("name"),
-                                    "value": row.get("value"),
-                                    "reasoning": row.get("reasoning", ""),
-                                }
-                            )
-
-                # Parse transcript.json if it exists
-                transcript = None
-                if transcript_file.exists():
-                    try:
-                        with open(transcript_file, "r", encoding="utf-8") as f:
-                            transcript = json.load(f)
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to parse transcript.json for {sim_name}: {e}"
-                        )
-
-                # Parse config.json to get persona and scenario data
-                persona_data = None
-                scenario_data = None
-                if config_file.exists():
-                    try:
-                        with open(config_file, "r", encoding="utf-8") as f:
-                            config_data = json.load(f)
-                            persona_data = config_data.get("persona")
-                            scenario_data = config_data.get("scenario")
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to parse config.json for {sim_name}: {e}"
-                        )
-
-                simulation_results.append(
-                    {
-                        "simulation_name": sim_name,
-                        "persona": persona_data,
-                        "scenario": scenario_data,
-                        "evaluation_results": eval_results,
-                        "transcript": transcript,
-                    }
-                )
+    # Parse all simulation directories
+    for sim_dir in _get_text_simulation_directories(output_dir):
+        sim_result = _parse_text_simulation_directory(sim_dir)
+        if sim_result:
+            # Remove is_complete field (internal use only)
+            sim_result.pop("is_complete", None)
+            simulation_results.append(sim_result)
 
     # Upload results to S3
     for root, dirs, files in os.walk(output_dir):
@@ -999,11 +1149,11 @@ def _run_pense_text_simulation(
             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
 
     error = None
-    if result.returncode != 0:
-        error = f"Command failed: {result.stderr}"
+    if process.returncode != 0:
+        error = f"Command failed with exit code {process.returncode}"
 
     return {
-        "success": result.returncode == 0,
+        "success": process.returncode == 0,
         "total_simulations": len(simulation_results),
         "metrics": metrics_data,
         "simulation_results": simulation_results,
@@ -1211,7 +1361,7 @@ def _run_pense_voice_simulation(
             cwd=str(output_dir),
         )
 
-        # Store the process PID and process group ID in the job for cleanup on restart
+        # Store the process PID, process group ID, and port in the job for cleanup on restart
         # The process group ID (pgid) equals the PID when start_new_session=True
         logger.info(f"{log_prefix}: Started process with PID {process.pid}")
         update_simulation_job(
@@ -1220,6 +1370,7 @@ def _run_pense_voice_simulation(
             details={
                 "pid": process.pid,
                 "pgid": process.pid,  # Same as PID when start_new_session=True
+                "port": port,
             },
         )
 
@@ -1385,7 +1536,7 @@ def run_simulation_task(
 
         # Reserve a port for voice simulations
         if simulation_type == "voice":
-            reserved_port = reserve_port(task_id, start_port=8000)
+            reserved_port = reserve_port(task_id, start_port=8765)
             logger.info(f"Reserved port {reserved_port} for voice simulation {task_id}")
 
         # Create temporary directory for processing (automatically cleaned up after use)
@@ -1424,6 +1575,7 @@ def run_simulation_task(
                         output_dir=output_dir,
                         s3_bucket=s3_bucket,
                         s3_prefix=results_prefix,
+                        task_id=task_id,
                         log_prefix=f"Chat simulation {task_id}",
                     )
 
@@ -1566,3 +1718,49 @@ async def run_simulation_endpoint(
         logger.info(f"Queued {request.type} simulation job {job_id}")
 
     return TaskCreateResponse(task_id=job_id, status=initial_status)
+
+
+@router.delete("/run/{job_uuid}")
+async def delete_simulation_job_endpoint(
+    job_uuid: str, user_id: str = Depends(get_current_user_id)
+):
+    """Delete a simulation job. Only the owner can delete their jobs."""
+    # Check if job exists
+    simulation_job = get_simulation_job(job_uuid)
+    if not simulation_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check ownership via simulation
+    simulation_id = simulation_job.get("simulation_id")
+    if simulation_id:
+        simulation = get_simulation(simulation_id)
+        if not simulation or simulation.get("user_id") != user_id:
+            raise HTTPException(status_code=404, detail="Job not found")
+    else:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check if this was a running job (to trigger next queued job after delete)
+    was_running = simulation_job.get("status") == TaskStatus.IN_PROGRESS.value
+    details = simulation_job.get("details") or {}
+
+    # Kill running process if job is in progress
+    if was_running:
+        pid = details.get("pid") or details.get("pgid")
+        if pid:
+            kill_process_group(pid, job_uuid)
+
+        # Release port if allocated
+        port = details.get("port")
+        if port:
+            release_port(port)
+
+    # Delete the job
+    deleted = delete_simulation_job(job_uuid)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # If the deleted job was running, try to start the next queued job
+    if was_running:
+        try_start_queued_simulation_job(SIMULATION_JOB_TYPES)
+
+    return {"message": "Simulation job deleted successfully"}
