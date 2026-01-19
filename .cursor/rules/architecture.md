@@ -161,6 +161,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 #### Evaluation & Testing (all require JWT auth)
 
 - `GET /jobs` - List all STT/TTS evaluation jobs for authenticated user
+- `DELETE /jobs/{job_uuid}` - Delete a job (triggers next queued job if deleted job was running)
 - `POST /stt/evaluate` - Start STT evaluation task
 - `GET /stt/evaluate/{task_id}` - Get STT evaluation status
 - `POST /tts/evaluate` - Start TTS evaluation task

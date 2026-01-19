@@ -1,14 +1,18 @@
 from typing import List, Optional, Any, Dict
 from enum import Enum
 
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, HTTPException
 from pydantic import BaseModel
 
-from db import get_all_jobs
+from db import get_all_jobs, get_job, delete_job
 from auth_utils import get_current_user_id
+from utils import TaskStatus, try_start_queued_job
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+# Job types that share the same queue (used for triggering next job on delete)
+EVAL_JOB_TYPES = ["stt-eval", "tts-eval"]
 
 
 class JobType(str, Enum):
@@ -69,3 +73,27 @@ async def list_jobs(
     ]
 
     return JobsListResponse(jobs=job_items)
+
+
+@router.delete("/{job_uuid}")
+async def delete_job_endpoint(
+    job_uuid: str, user_id: str = Depends(get_current_user_id)
+):
+    """Delete a job."""
+    # Check if job exists and user owns it
+    job = get_job(job_uuid, user_id=user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check if this was a running job (to trigger next queued job after delete)
+    was_running = job.get("status") == TaskStatus.IN_PROGRESS.value
+
+    deleted = delete_job(job_uuid)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # If the deleted job was running, try to start the next queued job
+    if was_running:
+        try_start_queued_job(EVAL_JOB_TYPES)
+
+    return {"message": "Job deleted successfully"}

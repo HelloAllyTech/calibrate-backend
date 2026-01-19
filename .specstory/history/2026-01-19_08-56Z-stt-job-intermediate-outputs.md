@@ -4288,3 +4288,618 @@ No environment variables were changed, so no updates needed to other config file
 
 ---
 
+_**User (2026-01-17 22:04Z)**_
+
+
+#20 [stage-0  9/11] RUN uv run python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
+#20 0.117 Traceback (most recent call last):
+#20 0.118   File "<string>", line 1, in <module>
+#20 0.118 ModuleNotFoundError: No module named 'nltk'
+#20 ERROR: process "/bin/sh -c uv run python -c \"import nltk; nltk.download('punkt_tab', quiet=True)\"" did not complete successfully: exit code: 1
+------
+ > [stage-0  9/11] RUN uv run python -c "import nltk; nltk.download('punkt_tab', quiet=True)":
+0.117 Traceback (most recent call last):
+0.118   File "<string>", line 1, in <module>
+0.118 ModuleNotFoundError: No module named 'nltk'
+------
+Dockerfile:30
+--------------------
+  28 |     
+  29 |     # Download NLTK data required by pipecat
+  30 | >>> RUN uv run python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
+  31 |     
+  32 |     # Copy application code
+--------------------
+ERROR: failed to build: failed to solve: process "/b
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The error shows that nltk is not installed yet at this point in the Dockerfile. NLTK is likely a dependency of pipecat which is part of the pense wheel. Let me check the Dockerfile and fix the order - I need to use pip to download nltk data since it's installed via the pense wheel, not via uv sync.</details></think>
+
+---
+
+The NLTK module is installed via the pense wheel (which depends on pipecat), not via uv. Let me fix the command:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/Dockerfile</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I see - the pense wheel is installed via `pip install` on line 21, which includes nltk. But the NLTK download is trying to use `uv run python` which uses the uv environment. The problem is that the pense wheel (and nltk) are installed via regular pip, not via uv.
+
+I should use `python` directly instead of `uv run python` since nltk was installed via pip:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/Dockerfile</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 2
+
+```diff
+@@ -27,6 +27,6 @@
+  RUN uv sync --frozen --no-dev --no-install-project
+  
+- # Download NLTK data required by pipecat
+- RUN uv run python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
++ # Download NLTK data required by pipecat (nltk is installed via pense wheel)
++ RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
+  
+  # Copy application code
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Fixed. The nltk module was installed via the pense wheel (which uses pip), not via uv sync. So we need to use `python` directly instead of `uv run python`.</details></think>
+
+---
+
+Fixed! The issue was that `nltk` is installed via the pense wheel (using `pip install`), not via `uv sync`. So we need to use `python` directly instead of `uv run python`.
+
+---
+
+_**User (2026-01-17 22:04Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+I made a small fix to the Dockerfile - changed `uv run python` to just `python` for the NLTK download. This is because nltk is installed via the pense wheel (pip install), not via uv sync.
+
+This is a minor gotcha that could be worth documenting - the distinction between packages installed via pip (pense wheel) vs uv sync (project dependencies). But it's a very specific Docker build detail. Let me check if there's anything in the architecture.md about this.</details></think>
+
+---
+
+I made a minor fix to the Dockerfile. Let me check if this gotcha about pip vs uv should be documented:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "pip install|uv sync|pense.*wheel" in "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `.cursor/rules/architecture.md` | `- `pense` CLI (installed via wheel file: `pense-0.1.0-py3-none-any.whl`)` | L596 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+This is a minor Docker build gotcha. Let me add a note to the deployment section about the two different package installation methods in the Dockerfile.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I should add a note about the two package installation methods in the Docker build section:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 6, lines removed: undefined
+
+```diff
+@@ -607,4 +607,10 @@
+  docker build -t pense-backend .
+  &#96;&#96;&#96;
++ 
++ **Build gotcha**: The Dockerfile uses two separate package installation methods:
++ - &#96;pip install&#96; for the pense wheel (includes pipecat, nltk, etc.)
++ - &#96;uv sync&#96; for project dependencies (fastapi, boto3, etc.)
++ 
++ When running Python commands during build that need packages from the wheel, use &#96;python&#96; directly (not &#96;uv run python&#96;).
+  
+  ### Docker Compose
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Done. I've documented the gotcha about the two package installation methods in the Dockerfile. No environment variables were changed.</details></think>
+
+---
+
+Updated the architecture documentation with a Docker build gotcha explaining:
+- The Dockerfile uses two separate package installation methods (`pip install` for pense wheel, `uv sync` for project deps)
+- When running Python commands during build that need packages from the wheel, use `python` directly (not `uv run python`)
+
+No environment variables were changed, so no updates needed to other config files.
+
+---
+
+_**User (2026-01-17 22:04Z)**_
+
+add method @src/routers/jobs.py to delete a job
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants to add a delete method for jobs. Let me look at how deletion is done in other routers (like agents.py) to follow the same pattern.</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def delete_job|@router.delete" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/agents.py` | `@router.delete("/\{agent_uuid\}")` | L121 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check if there's already a delete_job function in db.py:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def delete_job" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def delete_job(job_uuid: str) -> bool:` | L2178 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+There's already a `delete_job` function in db.py. Now I need to:1. Import `delete_job` and `get_job` from db.py
+2. Import `HTTPException` from fastapi
+3. Add the delete endpoint to jobs.pyLet me also check if HTTPException is already imported:</details></think>
+
+---
+
+Good, there's already a `delete_job` function in db.py. Let me add the delete endpoint to the jobs router:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 2
+
+```diff
+@@ -2,8 +2,8 @@
+  from enum import Enum
+  
+- from fastapi import APIRouter, Query, Depends
++ from fastapi import APIRouter, Query, Depends, HTTPException
+  from pydantic import BaseModel
+  
+- from db import get_all_jobs
++ from db import get_all_jobs, get_job, delete_job
+  from auth_utils import get_current_user_id
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now add the delete endpoint at the end of the file:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py</summary>
+
+**Chunk 1**
+Lines added: 16, lines removed: undefined
+
+```diff
+@@ -70,3 +70,19 @@
+  
+      return JobsListResponse(jobs=job_items)
++ 
++ 
++ @router.delete("/{job_uuid}")
++ async def delete_job_endpoint(
++     job_uuid: str, user_id: str = Depends(get_current_user_id)
++ ):
++     """Delete a job."""
++     # Check if job exists and user owns it
++     job = get_job(job_uuid, user_id=user_id)
++     if not job:
++         raise HTTPException(status_code=404, detail="Job not found")
++ 
++     deleted = delete_job(job_uuid)
++     if not deleted:
++         raise HTTPException(status_code=404, detail="Job not found")
++     return {"message": "Job deleted successfully"}
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Done. The delete endpoint is added with proper authentication and authorization.</details></think>
+
+---
+
+Done! Added a delete endpoint to the jobs router:
+
+```python
+@router.delete("/{job_uuid}")
+async def delete_job_endpoint(
+    job_uuid: str, user_id: str = Depends(get_current_user_id)
+):
+    """Delete a job."""
+    # Check if job exists and user owns it
+    job = get_job(job_uuid, user_id=user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    deleted = delete_job(job_uuid)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"message": "Job deleted successfully"}
+```
+
+The endpoint:
+- Requires JWT authentication
+- Verifies the user owns the job before deleting (returns 404 if not found or not owned)
+- Uses the existing `delete_job` function from db.py
+
+---
+
+_**User (2026-01-17 22:04Z)**_
+
+if it was a running job make sure to trigger the next queued job
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants the delete endpoint to trigger the next queued job if the deleted job was running. Let me update the delete endpoint to check if the job was in_progress and if so, try to start the next queued job.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I need to check if the job was in_progress before deleting, and if so, try to start the next queued job. Let me look at how other routers do this:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "try_start_queued_job|EVAL_JOB_TYPES" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py" • 4 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/stt.py` | `try_start_queued_job,` | L30 |
+| `src/routers/stt.py` | `EVAL_JOB_TYPES = ["stt-eval", "tts-eval"]` | L35 |
+| `src/routers/stt.py` | `try_start_queued_job(EVAL_JOB_TYPES)` | L582 |
+| `src/routers/stt.py` | `can_start = can_start_job(EVAL_JOB_TYPES)` | L614 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to update the delete endpoint to:1. Check if the job was in_progress
+2. If so, call try_start_queued_job after deletingI also need to import try_start_queued_job from utils and define EVAL_JOB_TYPES.</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py</summary>
+
+**Chunk 1**
+Lines added: 4, lines removed: undefined
+
+```diff
+@@ -7,7 +7,11 @@
+  from db import get_all_jobs, get_job, delete_job
+  from auth_utils import get_current_user_id
++ from utils import TaskStatus, try_start_queued_job
+  
+  
+  router = APIRouter(prefix="/jobs", tags=["jobs"])
++ 
++ # Job types that share the same queue (used for triggering next job on delete)
++ EVAL_JOB_TYPES = ["stt-eval", "tts-eval"]
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now update the delete endpoint to check if the job was in_progress and trigger the next queued job:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py</summary>
+
+**Chunk 1**
+Lines added: 8, lines removed: undefined
+
+```diff
+@@ -86,7 +86,15 @@
+          raise HTTPException(status_code=404, detail="Job not found")
+  
++     # Check if this was a running job (to trigger next queued job after delete)
++     was_running = job.get("status") == TaskStatus.IN_PROGRESS.value
++ 
+      deleted = delete_job(job_uuid)
+      if not deleted:
+          raise HTTPException(status_code=404, detail="Job not found")
++ 
++     # If the deleted job was running, try to start the next queued job
++     if was_running:
++         try_start_queued_job(EVAL_JOB_TYPES)
++ 
+      return {"message": "Job deleted successfully"}
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Let me check for lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/jobs.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Done. The delete endpoint now:1. Checks if the job was in_progress before deleting2. After deleting, if the job was running, triggers the next queued job</details></think>
+
+---
+
+Done! The delete endpoint now:
+
+1. Checks if the job was `in_progress` before deleting
+2. After successful deletion, if the job was running, calls `try_start_queued_job(EVAL_JOB_TYPES)` to start the next queued job
+
+This ensures the job queue continues processing when a running job is deleted.
+
+---
+
+_**User (2026-01-17 22:04Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+I made code changes to `jobs.py` - added a delete endpoint and the logic to trigger the next queued job when a running job is deleted. Let me update the architecture.md to document this new endpoint.</details></think>
+
+---
+
+I made code changes to `jobs.py`. Let me update the architecture documentation to add the delete endpoint:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "GET /jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `.cursor/rules/architecture.md` | `- `GET /jobs` - List all STT/TTS evaluation jobs for authenticated user` | L163 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I need to add the DELETE endpoint to the API documentation:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -162,4 +162,5 @@
+  
+  - &#96;GET /jobs&#96; - List all STT/TTS evaluation jobs for authenticated user
++ - &#96;DELETE /jobs/{job_uuid}&#96; - Delete a job (triggers next queued job if deleted job was running)
+  - &#96;POST /stt/evaluate&#96; - Start STT evaluation task
+  - &#96;GET /stt/evaluate/{task_id}&#96; - Get STT evaluation status
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good. No environment variables were changed.</details></think>
+
+---
+
+Updated the architecture documentation to add the new `DELETE /jobs/{job_uuid}` endpoint with a note that it triggers the next queued job if the deleted job was running.
+
+No environment variables were changed, so no other files need updating.
+
+---
+
