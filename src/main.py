@@ -27,7 +27,11 @@ from routers.scenarios import router as scenarios_router
 from routers.metrics import router as metrics_router
 from routers.simulations import router as simulations_router
 from routers.jobs import router as jobs_router
-from utils import generate_presigned_upload_url, get_s3_output_config
+from utils import (
+    generate_presigned_upload_url,
+    get_s3_output_config,
+    PRESIGNED_URL_EXPIRY_SECONDS,
+)
 from job_recovery import recover_pending_jobs
 
 
@@ -141,7 +145,7 @@ async def get_presigned_url(request: PresignedURLRequest):
     s3_key = f"{request.task_type}/media/{file_uuid}.{file_extension}"
 
     # Generate presigned URL (expires in 1 hour)
-    expiration = 3600  # 1 hour in seconds
+    expiration = PRESIGNED_URL_EXPIRY_SECONDS  # 1 hour in seconds
 
     presigned_url = generate_presigned_upload_url(
         s3_key, request.content_type, expiration=expiration

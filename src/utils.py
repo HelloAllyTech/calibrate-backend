@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 # Timeout threshold for marking jobs as failed (5 minutes)
 JOB_TIMEOUT_MINUTES = 5
+# Presigned URL caching constants
+PRESIGNED_URL_EXPIRY_SECONDS = 3600  # 1 hour
+PRESIGNED_URL_REFRESH_BUFFER_SECONDS = 300  # Refresh 5 minutes before expiry
 
 # In-memory task storage (shared across routers)
 tasks = {}
@@ -270,7 +273,7 @@ def get_s3_output_config():
 def generate_presigned_download_url(
     s3_key: str,
     bucket: Optional[str] = None,
-    expiration: int = 3600,
+    expiration: int = PRESIGNED_URL_EXPIRY_SECONDS,
 ) -> Optional[str]:
     """Generate a presigned URL for downloading (get_object) from S3.
 
@@ -303,7 +306,7 @@ def generate_presigned_upload_url(
     s3_key: str,
     content_type: str,
     bucket: Optional[str] = None,
-    expiration: int = 3600,
+    expiration: int = PRESIGNED_URL_EXPIRY_SECONDS,
 ) -> Optional[str]:
     """Generate a presigned URL for uploading (put_object) to S3.
 

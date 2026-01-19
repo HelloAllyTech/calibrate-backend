@@ -51,8 +51,11 @@ from utils import (
     generate_presigned_download_url,
     kill_process_group,
     is_job_timed_out,
+    PRESIGNED_URL_EXPIRY_SECONDS,
+    PRESIGNED_URL_REFRESH_BUFFER_SECONDS,
 )
 from auth_utils import get_current_user_id
+from datetime import datetime
 
 # Job types that share the same queue
 SIMULATION_JOB_TYPES = ["text", "voice"]
@@ -105,6 +108,40 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/simulations", tags=["simulations"])
+
+
+def _should_regenerate_presigned_urls(
+    presigned_urls_generated_at: Optional[str],
+) -> bool:
+    """
+    Check if presigned URLs need to be regenerated based on when they were created.
+
+    Args:
+        presigned_urls_generated_at: ISO timestamp when URLs were generated, or None
+
+    Returns:
+        True if URLs should be regenerated (expired or about to expire or never generated)
+    """
+    if not presigned_urls_generated_at:
+        return True
+
+    try:
+        generated_at = datetime.fromisoformat(
+            presigned_urls_generated_at.replace("Z", "+00:00")
+        )
+        # Remove timezone info for comparison with utcnow
+        if generated_at.tzinfo is not None:
+            generated_at = generated_at.replace(tzinfo=None)
+
+        now = datetime.utcnow()
+        elapsed_seconds = (now - generated_at).total_seconds()
+
+        # Regenerate if elapsed time exceeds expiry minus buffer
+        threshold = PRESIGNED_URL_EXPIRY_SECONDS - PRESIGNED_URL_REFRESH_BUFFER_SECONDS
+        return elapsed_seconds >= threshold
+    except Exception as e:
+        logger.warning(f"Failed to parse presigned_urls_generated_at: {e}")
+        return True
 
 
 def _get_audio_urls_from_s3_key(s3_key_prefix: str, s3_bucket: str) -> List[str]:
@@ -476,38 +513,63 @@ async def get_simulation_run_status(
     simulation_results = results.get("simulation_results") or []
 
     # If this is a voice simulation, generate presigned URLs for audio files
+    # Only regenerate if URLs have expired or are about to expire
     if job.get("type") == "voice" and simulation_results:
-        try:
-            s3_bucket = get_s3_output_config()
-            # Update each simulation result with audio URLs if audios_s3_path (S3 key prefix) is present
-            for sim_result in simulation_results:
-                audios_s3_key_prefix = sim_result.get("audios_s3_path")
-                if audios_s3_key_prefix:
-                    audio_urls = _get_audio_urls_from_s3_key(
-                        audios_s3_key_prefix, s3_bucket
-                    )
-                    sim_result["audio_urls"] = audio_urls
-                    logger.info(
-                        f"Generated {len(audio_urls)} presigned URLs for simulation {sim_result.get('simulation_name')}"
-                    )
+        presigned_urls_generated_at = results.get("presigned_urls_generated_at")
+        should_regenerate = _should_regenerate_presigned_urls(
+            presigned_urls_generated_at
+        )
 
-                # Generate presigned URL for conversation.wav if the S3 key is present
-                conversation_wav_s3_key = sim_result.get("conversation_wav_s3_key")
-                if conversation_wav_s3_key:
-                    conversation_wav_url = generate_presigned_download_url(
-                        conversation_wav_s3_key, bucket=s3_bucket
+        if should_regenerate:
+            try:
+                s3_bucket = get_s3_output_config()
+                urls_regenerated = False
+
+                # Update each simulation result with audio URLs if audios_s3_path (S3 key prefix) is present
+                for sim_result in simulation_results:
+                    audios_s3_key_prefix = sim_result.get("audios_s3_path")
+                    # Skip if already has cached audio_urls (handles race conditions)
+                    if audios_s3_key_prefix and not sim_result.get("audio_urls"):
+                        audio_urls = _get_audio_urls_from_s3_key(
+                            audios_s3_key_prefix, s3_bucket
+                        )
+                        sim_result["audio_urls"] = audio_urls
+                        urls_regenerated = True
+                        logger.info(
+                            f"Generated {len(audio_urls)} presigned URLs for simulation {sim_result.get('simulation_name')}"
+                        )
+
+                    # Generate presigned URL for conversation.wav if the S3 key is present
+                    # Skip if already has cached URL
+                    conversation_wav_s3_key = sim_result.get("conversation_wav_s3_key")
+                    if conversation_wav_s3_key and not sim_result.get(
+                        "conversation_wav_url"
+                    ):
+                        conversation_wav_url = generate_presigned_download_url(
+                            conversation_wav_s3_key, bucket=s3_bucket
+                        )
+                        sim_result["conversation_wav_url"] = (
+                            conversation_wav_url if conversation_wav_url else ""
+                        )
+                        urls_regenerated = True
+                        logger.info(
+                            f"Generated presigned URL for conversation.wav for simulation {sim_result.get('simulation_name')}"
+                        )
+                    elif not conversation_wav_s3_key:
+                        sim_result["conversation_wav_url"] = ""
+
+                # Store the updated results with the timestamp back to the database
+                if urls_regenerated:
+                    results["simulation_results"] = simulation_results
+                    results["presigned_urls_generated_at"] = (
+                        datetime.utcnow().isoformat()
                     )
-                    sim_result["conversation_wav_url"] = (
-                        conversation_wav_url if conversation_wav_url else ""
-                    )
-                    logger.info(
-                        f"Generated presigned URL for conversation.wav for simulation {sim_result.get('simulation_name')}"
-                    )
-                else:
-                    sim_result["conversation_wav_url"] = ""
-        except Exception as e:
-            logger.warning(f"Failed to generate audio URLs: {str(e)}")
-            # Continue without audio URLs if generation fails
+                    update_simulation_job(task_id, results=results)
+                    logger.info(f"Cached presigned URLs for voice simulation {task_id}")
+
+            except Exception as e:
+                logger.warning(f"Failed to generate audio URLs: {str(e)}")
+                # Continue without audio URLs if generation fails
 
     return SimulationRunStatusResponse(
         task_id=task_id,
@@ -869,8 +931,25 @@ def _build_pense_simulation_config(
     return config
 
 
+def _extract_persona_scenario_indices(sim_name: str) -> tuple:
+    """
+    Extract persona and scenario indices from simulation directory name.
+    Format: simulation_persona_N_scenario_M (1-based indices)
+    Returns (persona_index, scenario_index) as 0-based indices, or (None, None) if parsing fails.
+    """
+    import re
+
+    match = re.match(r"simulation_persona_(\d+)_scenario_(\d+)", sim_name)
+    if match:
+        # Convert from 1-based (in folder name) to 0-based (for list indexing)
+        return int(match.group(1)) - 1, int(match.group(2)) - 1
+    return None, None
+
+
 def _parse_text_simulation_directory(
     sim_dir: Path,
+    personas_list: Optional[List[Dict[str, Any]]] = None,
+    scenarios_list: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Parse a single text simulation directory.
@@ -880,6 +959,8 @@ def _parse_text_simulation_directory(
 
     Args:
         sim_dir: Path to the simulation directory
+        personas_list: Optional list of personas from pense config (used as fallback)
+        scenarios_list: Optional list of scenarios from pense config (used as fallback)
 
     Returns:
         Dict with simulation result data, or None if directory doesn't exist
@@ -936,6 +1017,18 @@ def _parse_text_simulation_directory(
         except Exception as e:
             logger.warning(f"Failed to parse config.json for {sim_name}: {e}")
 
+    # Fallback: if persona/scenario not in config.json, extract from directory name
+    if (persona_data is None or scenario_data is None) and (
+        personas_list or scenarios_list
+    ):
+        persona_idx, scenario_idx = _extract_persona_scenario_indices(sim_name)
+        if persona_data is None and personas_list and persona_idx is not None:
+            if 0 <= persona_idx < len(personas_list):
+                persona_data = personas_list[persona_idx]
+        if scenario_data is None and scenarios_list and scenario_idx is not None:
+            if 0 <= scenario_idx < len(scenarios_list):
+                scenario_data = scenarios_list[scenario_idx]
+
     # Only return if we have at least config.json or transcript.json (simulation has started)
     if not config_file.exists() and not transcript_file.exists():
         return None
@@ -967,44 +1060,73 @@ def _update_text_simulation_intermediate_results(
     output_dir: Path,
     expected_total: int,
     s3_prefix: str,
-):
-    """Update intermediate results for a text simulation job."""
+    personas_list: Optional[List[Dict[str, Any]]] = None,
+    scenarios_list: Optional[List[Dict[str, Any]]] = None,
+    prev_state: Optional[tuple] = None,
+) -> Optional[tuple]:
+    """Update intermediate results for a text simulation job.
+
+    Args:
+        prev_state: Previous state tuple for change detection
+
+    Returns:
+        Current state tuple (to be passed as prev_state in next call)
+    """
     simulation_results = []
     completed_count = 0
+    transcript_lengths = []  # For change detection
 
     for sim_dir in _get_text_simulation_directories(output_dir):
-        sim_result = _parse_text_simulation_directory(sim_dir)
+        sim_result = _parse_text_simulation_directory(
+            sim_dir, personas_list, scenarios_list
+        )
         if sim_result:
             # Remove is_complete field before storing (internal use only)
             is_complete = sim_result.pop("is_complete", False)
             if is_complete:
                 completed_count += 1
             simulation_results.append(sim_result)
+            # Track transcript length for change detection
+            transcript = sim_result.get("transcript") or []
+            transcript_lengths.append((sim_dir.name, len(transcript)))
 
     if not simulation_results:
-        return
+        return prev_state
 
     # Check if metrics.json exists (all simulations complete)
     metrics_data = None
+    has_metrics = False
     metrics_file = output_dir / "metrics.json"
     if metrics_file.exists():
+        has_metrics = True
         try:
             with open(metrics_file, "r", encoding="utf-8") as f:
                 metrics_data = json.load(f)
         except Exception:
             pass
 
-    update_simulation_job(
-        task_id,
-        status=TaskStatus.IN_PROGRESS.value,
-        results={
-            "total_simulations": expected_total,
-            "completed_simulations": completed_count,
-            "simulation_results": simulation_results,
-            "results_s3_prefix": s3_prefix,
-            "metrics": metrics_data,
-        },
+    # Build current state for change detection
+    current_state = (
+        completed_count,
+        tuple(sorted(transcript_lengths)),
+        has_metrics,
     )
+
+    # Only update DB if state changed
+    if current_state != prev_state:
+        update_simulation_job(
+            task_id,
+            status=TaskStatus.IN_PROGRESS.value,
+            results={
+                "total_simulations": expected_total,
+                "completed_simulations": completed_count,
+                "simulation_results": simulation_results,
+                "results_s3_prefix": s3_prefix,
+                "metrics": metrics_data,
+            },
+        )
+
+    return current_state
 
 
 def _run_pense_text_simulation(
@@ -1054,10 +1176,10 @@ def _run_pense_text_simulation(
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
-    # Calculate expected number of simulations
-    num_personas = len(pense_config.get("personas", []))
-    num_scenarios = len(pense_config.get("scenarios", []))
-    expected_total = num_personas * num_scenarios
+    # Get personas and scenarios lists for intermediate results
+    personas_list = pense_config.get("personas", [])
+    scenarios_list = pense_config.get("scenarios", [])
+    expected_total = len(personas_list) * len(scenarios_list)
 
     # Run pense llm simulations run command
     # Use absolute paths for config and output
@@ -1092,17 +1214,31 @@ def _run_pense_text_simulation(
 
         # Poll for process completion while updating intermediate results
         poll_interval = 2  # seconds
+        prev_state = None  # Track state to avoid unnecessary DB updates
+
         while process.poll() is None:
             if task_id:
-                _update_text_simulation_intermediate_results(
-                    task_id, output_dir, expected_total, s3_prefix
+                prev_state = _update_text_simulation_intermediate_results(
+                    task_id,
+                    output_dir,
+                    expected_total,
+                    s3_prefix,
+                    personas_list,
+                    scenarios_list,
+                    prev_state,
                 )
             time.sleep(poll_interval)
 
         # Final update after process completes
         if task_id:
             _update_text_simulation_intermediate_results(
-                task_id, output_dir, expected_total, s3_prefix
+                task_id,
+                output_dir,
+                expected_total,
+                s3_prefix,
+                personas_list,
+                scenarios_list,
+                prev_state,
             )
 
         # Read stdout/stderr
@@ -1134,7 +1270,9 @@ def _run_pense_text_simulation(
 
     # Parse all simulation directories
     for sim_dir in _get_text_simulation_directories(output_dir):
-        sim_result = _parse_text_simulation_directory(sim_dir)
+        sim_result = _parse_text_simulation_directory(
+            sim_dir, personas_list, scenarios_list
+        )
         if sim_result:
             # Remove is_complete field (internal use only)
             sim_result.pop("is_complete", None)
@@ -1284,6 +1422,87 @@ def _is_simulation_complete(sim_dir: Path) -> bool:
     return eval_results_file.exists()
 
 
+def _is_simulation_started(sim_dir: Path) -> bool:
+    """
+    Check if a simulation has started (has config.json or transcript.json).
+    """
+    config_file = sim_dir / "config.json"
+    transcript_file = sim_dir / "transcript.json"
+    return config_file.exists() or transcript_file.exists()
+
+
+def _parse_voice_simulation_in_progress(
+    sim_dir: Path,
+    personas_list: Optional[List[Dict[str, Any]]] = None,
+    scenarios_list: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Parse an in-progress voice simulation directory for intermediate results.
+    Returns persona, scenario, and transcript data without S3 uploads.
+
+    Args:
+        sim_dir: Path to the simulation directory
+        personas_list: Optional list of personas from pense config (used as fallback)
+        scenarios_list: Optional list of scenarios from pense config (used as fallback)
+
+    Returns:
+        Dict with simulation data, or None if simulation hasn't started
+    """
+    if not sim_dir.exists():
+        return None
+
+    sim_name = sim_dir.name
+    transcript_file = sim_dir / "transcript.json"
+    config_file = sim_dir / "config.json"
+
+    # Only return if simulation has started
+    if not config_file.exists() and not transcript_file.exists():
+        return None
+
+    # Parse transcript.json if it exists
+    transcript = None
+    if transcript_file.exists():
+        try:
+            with open(transcript_file, "r", encoding="utf-8") as f:
+                transcript = json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to parse transcript.json for {sim_name}: {e}")
+
+    # Parse config.json to get persona and scenario data
+    persona_data = None
+    scenario_data = None
+    if config_file.exists():
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                persona_data = config_data.get("persona")
+                scenario_data = config_data.get("scenario")
+        except Exception as e:
+            logger.warning(f"Failed to parse config.json for {sim_name}: {e}")
+
+    # Fallback: if persona/scenario not in config.json, extract from directory name
+    if (persona_data is None or scenario_data is None) and (
+        personas_list or scenarios_list
+    ):
+        persona_idx, scenario_idx = _extract_persona_scenario_indices(sim_name)
+        if persona_data is None and personas_list and persona_idx is not None:
+            if 0 <= persona_idx < len(personas_list):
+                persona_data = personas_list[persona_idx]
+        if scenario_data is None and scenarios_list and scenario_idx is not None:
+            if 0 <= scenario_idx < len(scenarios_list):
+                scenario_data = scenarios_list[scenario_idx]
+
+    return {
+        "simulation_name": sim_name,
+        "persona": persona_data,
+        "scenario": scenario_data,
+        "evaluation_results": None,  # In-progress, no evaluation yet
+        "transcript": transcript,
+        "audios_s3_path": None,  # Don't upload audio for in-progress
+        "conversation_wav_s3_key": None,
+    }
+
+
 def _run_pense_voice_simulation(
     pense_config: Dict[str, Any],
     input_dir: Path,
@@ -1375,60 +1594,87 @@ def _run_pense_voice_simulation(
         )
 
         # Track processed simulations and uploaded files
-        processed_simulations = set()
+        completed_simulations = set()
         uploaded_audio_files = set()
-        simulation_results = []
+        completed_results = []  # Results for completed simulations
 
-        # Calculate expected number of simulations
-        num_personas = len(pense_config.get("personas", []))
-        num_scenarios = len(pense_config.get("scenarios", []))
-        expected_total = num_personas * num_scenarios
+        # Get personas and scenarios lists for intermediate results
+        personas_list = pense_config.get("personas", [])
+        scenarios_list = pense_config.get("scenarios", [])
+        expected_total = len(personas_list) * len(scenarios_list)
         logger.info(
-            f"{log_prefix}: Expecting {expected_total} simulations ({num_personas} personas x {num_scenarios} scenarios)"
+            f"{log_prefix}: Expecting {expected_total} simulations ({len(personas_list)} personas x {len(scenarios_list)} scenarios)"
         )
 
         # Monitor for new simulation directories while the process runs
         poll_interval = 2  # seconds between checks
+        prev_state = None  # Track state to avoid unnecessary DB updates
+
         while process.poll() is None:
+            in_progress_results = []  # Rebuilt each iteration
+            in_progress_transcript_lengths = (
+                []
+            )  # Track transcript lengths for change detection
+
             # Find all simulation directories
             for item in output_dir.iterdir():
-                if (
-                    item.is_dir()
-                    and item.name.startswith("simulation_persona_")
-                    and item.name not in processed_simulations
-                ):
-                    # Check if this simulation is complete
+                if item.is_dir() and item.name.startswith("simulation_persona_"):
                     if _is_simulation_complete(item):
-                        logger.info(
-                            f"{log_prefix}: Found completed simulation directory: {item.name}"
-                        )
-                        # Parse the simulation directory
-                        sim_result = _parse_simulation_directory(
-                            sim_dir=item,
-                            output_dir=output_dir,
-                            s3_bucket=s3_bucket,
-                            s3_prefix=s3_prefix,
-                            uploaded_audio_files=uploaded_audio_files,
-                        )
-                        if sim_result:
-                            simulation_results.append(sim_result)
-                            processed_simulations.add(item.name)
-
-                            # Update the database with incremental results
-                            results_dict = {
-                                "total_simulations": expected_total,
-                                "completed_simulations": len(simulation_results),
-                                "simulation_results": simulation_results,
-                                "results_s3_prefix": s3_prefix,
-                            }
-                            update_simulation_job(
-                                task_id,
-                                status=TaskStatus.IN_PROGRESS.value,
-                                results=results_dict,
-                            )
+                        # Simulation is complete
+                        if item.name not in completed_simulations:
                             logger.info(
-                                f"{log_prefix}: Updated DB with {len(simulation_results)}/{expected_total} completed simulations"
+                                f"{log_prefix}: Found completed simulation directory: {item.name}"
                             )
+                            # Parse and upload the completed simulation
+                            sim_result = _parse_simulation_directory(
+                                sim_dir=item,
+                                output_dir=output_dir,
+                                s3_bucket=s3_bucket,
+                                s3_prefix=s3_prefix,
+                                uploaded_audio_files=uploaded_audio_files,
+                            )
+                            if sim_result:
+                                completed_results.append(sim_result)
+                                completed_simulations.add(item.name)
+                    elif _is_simulation_started(item):
+                        # Simulation in progress - get intermediate data
+                        if item.name not in completed_simulations:
+                            sim_result = _parse_voice_simulation_in_progress(
+                                item, personas_list, scenarios_list
+                            )
+                            if sim_result:
+                                in_progress_results.append(sim_result)
+                                # Track transcript length for change detection
+                                transcript = sim_result.get("transcript") or []
+                                in_progress_transcript_lengths.append(
+                                    (item.name, len(transcript))
+                                )
+
+            # Build current state for change detection
+            current_state = (
+                len(completed_results),
+                tuple(sorted(in_progress_transcript_lengths)),
+            )
+
+            # Only update DB if state changed
+            if current_state != prev_state:
+                all_results = completed_results + in_progress_results
+                if all_results:
+                    results_dict = {
+                        "total_simulations": expected_total,
+                        "completed_simulations": len(completed_results),
+                        "simulation_results": all_results,
+                        "results_s3_prefix": s3_prefix,
+                    }
+                    update_simulation_job(
+                        task_id,
+                        status=TaskStatus.IN_PROGRESS.value,
+                        results=results_dict,
+                    )
+                    logger.info(
+                        f"{log_prefix}: Updated DB with {len(completed_results)} completed + {len(in_progress_results)} in-progress simulations"
+                    )
+                prev_state = current_state
 
             time.sleep(poll_interval)
 
@@ -1454,7 +1700,7 @@ def _run_pense_voice_simulation(
         if (
             item.is_dir()
             and item.name.startswith("simulation_persona_")
-            and item.name not in processed_simulations
+            and item.name not in completed_simulations
         ):
             if _is_simulation_complete(item):
                 logger.info(
@@ -1468,8 +1714,8 @@ def _run_pense_voice_simulation(
                     uploaded_audio_files=uploaded_audio_files,
                 )
                 if sim_result:
-                    simulation_results.append(sim_result)
-                    processed_simulations.add(item.name)
+                    completed_results.append(sim_result)
+                    completed_simulations.add(item.name)
 
     # Parse final results (metrics.json and results.csv)
     metrics_data = None
@@ -1508,9 +1754,9 @@ def _run_pense_voice_simulation(
 
     return {
         "success": process.returncode == 0,
-        "total_simulations": len(simulation_results),
+        "total_simulations": len(completed_results),
         "metrics": metrics_data,
-        "simulation_results": simulation_results,
+        "simulation_results": completed_results,
         "error": error,
     }
 

@@ -388,22 +388,33 @@ Both text simulations (`pense llm simulations run`) and voice simulations (`pens
 - **Polling interval**: Every 2 seconds while the subprocess is running
 - **Completion marker**: A simulation folder is considered complete when `evaluation_results.csv` exists (created after the LLM judge evaluation step finishes)
 - **In-progress detection**: A simulation is considered in-progress when `transcript.json` or `config.json` exists but `evaluation_results.csv` does not
+- **Persona/scenario data resolution** (both text and voice):
+  1. First try reading from `config.json` in the simulation directory
+  2. Fallback: parse directory name `simulation_persona_N_scenario_M` to get 1-based indices, then look up `personas_list[N-1]` and `scenarios_list[M-1]` from the original pense config
 - **During execution**: Status API returns partial `simulation_results` including:
   - **For completed simulations**:
-    - `persona` and `scenario` data from `config.json`
+    - `persona` and `scenario` data (always populated via config.json or fallback)
     - `transcript` from `transcript.json`
     - `evaluation_results` with per-criterion metrics (name, value, reasoning) from `evaluation_results.csv`
-  - **For in-progress simulations** (text only):
-    - `persona` and `scenario` data from `config.json`
+  - **For in-progress simulations** (both text and voice):
+    - `persona` and `scenario` data (always populated via config.json or fallback)
     - `transcript` from `transcript.json` (partial conversation so far)
     - `evaluation_results` is `null`
-  - **Voice-specific fields**:
+    - No S3 uploads for in-progress voice simulations (`audios_s3_path` and `conversation_wav_s3_key` are `null`)
+  - **Voice-specific fields** (completed simulations only):
     - `audio_urls` (presigned S3 URLs for individual audio files in the `audios/` folder)
     - `conversation_wav_url` (presigned S3 URL for the combined `conversation.wav` file, or empty string if not present)
-  - Plus `completed_simulations` count for progress tracking
+  - Plus `completed_simulations` count for progress tracking (counts only fully completed simulations)
 - **On completion**: Final aggregated `metrics` (from `metrics.json`) are added to the response
+- **Presigned URL caching** (voice simulations):
+  - URLs are cached in the job results with a `presigned_urls_generated_at` timestamp
+  - On status check, `_should_regenerate_presigned_urls()` checks if URLs have expired
+  - URLs are regenerated only if elapsed time exceeds `PRESIGNED_URL_EXPIRY_SECONDS - PRESIGNED_URL_REFRESH_BUFFER_SECONDS` (55 minutes by default)
+  - Constants: `PRESIGNED_URL_EXPIRY_SECONDS = 3600` (1 hour), `PRESIGNED_URL_REFRESH_BUFFER_SECONDS = 300` (5 min buffer)
+  - **Race condition handling**: Before generating URLs, check if they already exist in `simulation_results` (`not sim_result.get("audio_urls")`) to handle concurrent requests that read before either saves
+  - DB is only updated if `urls_regenerated` is True (i.e., URLs were actually generated)
 
-This allows clients to display progress and per-simulation results (including partial transcripts for in-progress text simulations) without waiting for all simulations to complete.
+This allows clients to display progress and per-simulation results (including partial transcripts for in-progress simulations of both types) without waiting for all simulations to complete.
 
 ### Agent Test Job Results Format
 
@@ -866,26 +877,42 @@ def run_incremental_task(task_id: str, output_dir: Path):
 
     processed_items = set()
     results = []
+    prev_state = None  # Track state to avoid unnecessary DB updates
 
     # Monitor for new outputs while process runs
     while process.poll() is None:
+        transcript_lengths = []  # For change detection
+
         for item in output_dir.iterdir():
             if item.name not in processed_items and is_item_complete(item):
                 result = parse_item(item)
                 results.append(result)
                 processed_items.add(item.name)
+            # Track in-progress items too (e.g., transcript length)
+            transcript = get_transcript(item)
+            transcript_lengths.append((item.name, len(transcript)))
 
-                # Update DB with partial results
-                update_job(task_id, status="in_progress", results={
-                    "completed": len(results),
-                    "items": results
-                })
+        # Build state tuple for comparison
+        current_state = (len(results), tuple(sorted(transcript_lengths)))
+
+        # Only update DB if state changed
+        if current_state != prev_state:
+            update_job(task_id, status="in_progress", results={
+                "completed": len(results),
+                "items": results
+            })
+            prev_state = current_state
 
         time.sleep(2)  # Poll interval
 
     # Final update with all results
     update_job(task_id, status="done", results={"items": results, "metrics": ...})
 ```
+
+**Critical**: Track previous state and only update DB when state changes. This:
+
+- Avoids unnecessary DB writes every 2-second poll when nothing changed
+- Preserves `updated_at` timestamp for the 5-minute timeout check (without this, every poll would reset `updated_at`, making stuck job detection unreliable)
 
 Key aspects:
 
