@@ -661,6 +661,29 @@ async def get_entity_endpoint(uuid: str, user_id: str = Depends(get_current_user
     return entity
 ```
 
+### Nested Resource Auth Pattern
+
+For resources that don't have direct `user_id` (e.g., `simulation_jobs` linked via `simulation_id`), verify ownership through the parent entity:
+
+```python
+@router.get("/run/{task_id}", response_model=JobStatusResponse)
+async def get_job_status(task_id: str, user_id: str = Depends(get_current_user_id)):
+    job = get_job(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Verify user owns the parent entity
+    parent_id = job.get("parent_id")
+    if parent_id:
+        parent = get_parent(parent_id)
+        if not parent or parent.get("user_id") != user_id:
+            raise HTTPException(status_code=404, detail="Task not found")  # 404, not 403
+
+    return JobStatusResponse(...)
+```
+
+**Security note**: Return 404 (not 403) when access is denied to prevent information leakage about whether a resource exists.
+
 ### Background Task Pattern (with Queueing)
 
 ```python

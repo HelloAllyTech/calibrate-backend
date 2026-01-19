@@ -3778,3 +3778,331 @@ I did not make any code changes in my last response - I only verified that the a
 
 ---
 
+_**User (2026-01-17 22:04Z)**_
+
+even for simulation job status api apply the auth check
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to add auth check to the simulation job status API. Let me first look at the simulation router to see how job status is retrieved and if it needs auth.</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "@router.get.*run|get_simulation_job|get_simulation_run" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py" • 9 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/routers/simulations.py` | `get_simulation_job,` | L35 |
+| `src/routers/simulations.py` | `get_simulation_jobs_for_simulation,` | L37 |
+| `src/routers/simulations.py` | `@router.get("/run/\{task_id\}", response_model=SimulationRunStatusResponse)` | L408 |
+| `src/routers/simulations.py` | `async def get_simulation_run_status(` | L409 |
+| `src/routers/simulations.py` | `job = get_simulation_job(task_id)` | L417 |
+| `src/routers/simulations.py` | `all_jobs = get_simulation_jobs_for_simulation(simulation_id)` | L425 |
+| `src/routers/simulations.py` | `@router.get("/\{simulation_uuid\}/runs", response_model=SimulationRunsResponse)` | L485 |
+| `src/routers/simulations.py` | `async def get_simulation_runs(` | L486 |
+| `src/routers/simulations.py` | `jobs = get_simulation_jobs_for_simulation(simulation_uuid)` | L504 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I can see that:
+
+1. `get_simulation_run_status` (line 408-418) already has `user_id: str = Depends(get_current_user_id)` BUT it doesn't use it to filter the job - it just calls `get_simulation_job(task_id)` without checking if the user owns the job.
+
+2. `get_simulation_runs` (line 485-504) already has auth and checks if the user owns the simulation.
+
+I need to:
+1. Check the `get_simulation_job` function in db.py to see if it can filter by user_id, or
+2. Look at how simulation_jobs table is structured and if it has user_id
+
+Let me check the simulation_jobs table and the get_simulation_job function:</details></think>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def get_simulation_job|CREATE TABLE.*simulation_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 3 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `CREATE TABLE IF NOT EXISTS simulation_jobs (` | L172 |
+| `src/db.py` | `def get_simulation_job(job_uuid: str) -> Optional[Dict[str, Any]]:` | L2426 |
+| `src/db.py` | `def get_simulation_jobs_for_simulation(` | L2437 |
+
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I see that `simulation_jobs` table doesn't have a direct `user_id` column - instead, it has `simulation_id` which references `simulations(uuid)`. The `simulations` table does have `user_id`.
+
+So to check if a user has access to a simulation job, I need to:
+1. Get the simulation_job
+2. Get the simulation_id from the job
+3. Get the simulation and check if the user owns it
+
+Let me look at how this is done in the current `get_simulation_run_status` function and update it to check ownership:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I can see that:1. `get_simulation_run_status` has `user_id` as a parameter but doesn't use it to verify ownership2. The job has a `simulation_id` which I can use to get the parent simulation3. I need to verify the user owns the simulation before returning the job status
+
+Let me update the function to check ownership by getting the simulation and verifying the user_id:</details></think>
+
+---
+
+I can see the issue. The `get_simulation_run_status` function has the `user_id` parameter but doesn't use it to verify ownership. Let me fix this:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+**Chunk 1**
+Lines added: 5, lines removed: 1
+
+```diff
+@@ -419,6 +419,10 @@
+          raise HTTPException(status_code=404, detail="Task not found")
+  
+-     # Calculate run index based on creation order
++     # Verify user owns the parent simulation
+      simulation_id = job.get("simulation_id")
++     if simulation_id:
++         simulation = get_simulation(simulation_id)
++         if not simulation or simulation.get("user_id") != user_id:
++             raise HTTPException(status_code=404, detail="Task not found")
+      run_name = "Run 1"  # Default
+      if simulation_id:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now I need to add a second occurrence of the `# Calculate run index based on creation order` section since I removed the `simulation_id` line. Let me check if the simulation_id is now defined correctly for the rest of the function:</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, the simulation_id is now defined before the access check and then used for the run name calculation. Let me add a comment to separate the access check from the run name calculation:</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: undefined
+
+```diff
+@@ -425,4 +425,6 @@
+          if not simulation or simulation.get("user_id") != user_id:
+              raise HTTPException(status_code=404, detail="Task not found")
++ 
++     # Calculate run index based on creation order
+      run_name = "Run 1"  # Default
+      if simulation_id:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Now let me check for lint errors:</details></think>
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py`
+
+Lint results
+
+
+**No lint errors found**
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, no lint errors. The change is complete. The `get_simulation_run_status` function now:
+1. Gets the job
+2. Gets the simulation_id from the job
+3. Gets the parent simulation
+4. Verifies the user owns the simulation
+5. Returns 404 "Task not found" if the user doesn't own it (same error as if job doesn't exist for security)
+
+Let me verify the final state:</details></think>
+
+---
+
+Done! The simulation job status endpoint now properly checks authorization. Here's the change:
+
+**Before:** The endpoint had `user_id` as a parameter but didn't use it to verify ownership.
+
+**After:** The endpoint now:
+1. Gets the job
+2. Retrieves the parent simulation via `simulation_id`
+3. Verifies the authenticated user owns the simulation
+4. Returns 404 "Task not found" if access is denied (same error to prevent information leakage)
+
+```python
+# Verify user owns the parent simulation
+simulation_id = job.get("simulation_id")
+if simulation_id:
+    simulation = get_simulation(simulation_id)
+    if not simulation or simulation.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+```
+
+---
+
+_**User (2026-01-17 22:04Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+I made code changes to `simulations.py` to add auth check for the simulation job status API. Let me update the architecture.md to document this pattern of checking ownership through parent entity relationships.</details></think>
+
+---
+
+I made code changes to `simulations.py`. Let me update the architecture documentation to document the auth pattern for nested resources:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+I see there's a Router Endpoint Pattern that shows direct ownership check via `user_id`. I should add a pattern for nested resources where you check ownership via parent entity (like simulation_jobs -> simulations).</details></think>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 23, lines removed: undefined
+
+```diff
+@@ -661,4 +661,27 @@
+      return entity
+  &#96;&#96;&#96;
++ 
++ ### Nested Resource Auth Pattern
++ 
++ For resources that don't have direct &#96;user_id&#96; (e.g., &#96;simulation_jobs&#96; linked via &#96;simulation_id&#96;), verify ownership through the parent entity:
++ 
++ &#96;&#96;&#96;python
++ @router.get("/run/{task_id}", response_model=JobStatusResponse)
++ async def get_job_status(task_id: str, user_id: str = Depends(get_current_user_id)):
++     job = get_job(task_id)
++     if not job:
++         raise HTTPException(status_code=404, detail="Task not found")
++ 
++     # Verify user owns the parent entity
++     parent_id = job.get("parent_id")
++     if parent_id:
++         parent = get_parent(parent_id)
++         if not parent or parent.get("user_id") != user_id:
++             raise HTTPException(status_code=404, detail="Task not found")  # 404, not 403
++     
++     return JobStatusResponse(...)
++ &#96;&#96;&#96;
++ 
++ **Security note**: Return 404 (not 403) when access is denied to prevent information leakage about whether a resource exists.
+  
+  ### Background Task Pattern (with Queueing)
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+Good, I've added the nested resource auth pattern documentation. No new environment variables were added.</details></think>
+
+---
+
+Updated the architecture documentation with a new "Nested Resource Auth Pattern" section that documents:
+
+1. **Pattern**: How to verify ownership for resources that don't have direct `user_id` (e.g., `simulation_jobs` which has `simulation_id` FK to `simulations`)
+2. **Security note**: Return 404 (not 403) when access is denied to prevent information leakage about whether a resource exists
+
+No new environment variables were added, so no updates needed to other config files.
+
+---
+

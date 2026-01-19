@@ -418,8 +418,14 @@ async def get_simulation_run_status(
     if not job:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Calculate run index based on creation order
+    # Verify user owns the parent simulation
     simulation_id = job.get("simulation_id")
+    if simulation_id:
+        simulation = get_simulation(simulation_id)
+        if not simulation or simulation.get("user_id") != user_id:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+    # Calculate run index based on creation order
     run_name = "Run 1"  # Default
     if simulation_id:
         all_jobs = get_simulation_jobs_for_simulation(simulation_id)
