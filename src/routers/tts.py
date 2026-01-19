@@ -3,12 +3,13 @@ import csv
 import json
 import subprocess
 import tempfile
+import time
 import traceback
 import concurrent.futures
 import threading
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -77,6 +78,130 @@ class TTSEvaluationRequest(BaseModel):
     language: str  # Language (e.g., "english", "hindi")
 
 
+def _find_tts_provider_output_dir(output_dir: Path, provider: str) -> Optional[Path]:
+    """Find the provider-specific output directory."""
+    if not output_dir.exists():
+        return None
+    for item in output_dir.iterdir():
+        if item.is_dir() and provider in item.name.lower():
+            return item
+    # Fallback: try to find any directory
+    dirs = [d for d in output_dir.iterdir() if d.is_dir()]
+    if dirs:
+        return dirs[0]
+    return None
+
+
+def _read_tts_results_csv(provider_output_dir: Path) -> Optional[List[dict]]:
+    """Read results.csv from provider output directory if it exists."""
+    if not provider_output_dir:
+        return None
+    results_file = provider_output_dir / "results.csv"
+    if not results_file.exists():
+        return None
+    try:
+        results_data = []
+        with open(results_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                results_data.append(dict(row))
+        return results_data
+    except Exception:
+        return None
+
+
+def _update_tts_intermediate_results(
+    output_dir: Path,
+    provider: str,
+    task_id: str,
+    run_id: str,
+    s3_bucket: str,
+    intermediate_results: dict,
+    uploaded_audio_cache: dict,
+    results_lock: threading.Lock,
+):
+    """Update intermediate results for a TTS provider and save to job.
+
+    Uploads audio files to S3 as they become available and stores presigned URLs
+    in the intermediate results for immediate playback.
+    """
+    provider_output_dir = _find_tts_provider_output_dir(output_dir, provider)
+    if not provider_output_dir:
+        return
+
+    results_data = _read_tts_results_csv(provider_output_dir)
+    if results_data is None:
+        return
+
+    # Get S3 client for uploading
+    s3 = get_s3_client()
+    results_prefix = f"tts/evals/{run_id}/outputs/{provider}"
+
+    # Process each row and upload audio files as they become available
+    for result_row in results_data:
+        if "audio_path" not in result_row or not result_row["audio_path"]:
+            continue
+
+        local_audio_path = result_row["audio_path"]
+
+        # Skip if already a presigned URL (already processed)
+        if local_audio_path.startswith("http"):
+            continue
+
+        # Check if we've already uploaded this audio file
+        if local_audio_path in uploaded_audio_cache:
+            # Use cached presigned URL
+            result_row["audio_path"] = uploaded_audio_cache[local_audio_path]
+            continue
+
+        # Check if the audio file exists on disk
+        audio_file = Path(local_audio_path)
+        if not audio_file.exists():
+            continue
+
+        try:
+            # Upload audio file to S3
+            relative_path = audio_file.relative_to(provider_output_dir)
+            s3_key = f"{results_prefix}/{relative_path}"
+
+            s3.upload_file(str(audio_file), s3_bucket, s3_key)
+            logger.info(f"Uploaded intermediate audio file to S3: {s3_key}")
+
+            # Generate presigned URL for immediate access
+            presigned_url = generate_presigned_download_url(s3_key)
+            if presigned_url:
+                # Cache the presigned URL for this local path
+                uploaded_audio_cache[local_audio_path] = presigned_url
+                result_row["audio_path"] = presigned_url
+            else:
+                # Fallback to S3 key if presigned URL generation fails
+                uploaded_audio_cache[local_audio_path] = s3_key
+                result_row["audio_path"] = s3_key
+        except Exception as e:
+            logger.warning(
+                f"Failed to upload intermediate audio {local_audio_path}: {e}"
+            )
+            continue
+
+    with results_lock:
+        intermediate_results[provider] = {
+            "provider": provider,
+            "success": None,  # Still in progress
+            "message": "Processing...",
+            "metrics": None,
+            "results": results_data,
+        }
+        # Update job with current intermediate results
+        update_job(
+            task_id,
+            results={
+                "provider_results": list(intermediate_results.values()),
+                "leaderboard_summary": None,
+                "error": None,
+            },
+        )
+
+
 def evaluate_tts_provider(
     run_id: str,
     provider: str,
@@ -87,6 +212,8 @@ def evaluate_tts_provider(
     s3_bucket: str,
     task_id: str,
     running_pids: dict,
+    intermediate_results: dict,
+    results_lock: threading.Lock,
 ) -> ProviderResult:
     """Evaluate a single TTS provider."""
     try:
@@ -111,25 +238,69 @@ def evaluate_tts_provider(
 
         logger.info(f"Running TTS eval {run_id} with command: {' '.join(eval_cmd)}")
 
-        # Use Popen with start_new_session to create a process group for cleanup
-        process = subprocess.Popen(
-            eval_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,  # Create new process group for cleanup
-            cwd=str(output_dir.parent),
-        )
+        # Create temp files for stdout/stderr to avoid pipe buffer issues during polling
+        stdout_path = output_dir / f"{provider}_stdout.log"
+        stderr_path = output_dir / f"{provider}_stderr.log"
 
-        # Track the process PID for cleanup on server restart
-        running_pids[provider] = process.pid
-        logger.info(f"TTS eval for {provider} started with PID {process.pid}")
+        stdout_f = open(stdout_path, "w")
+        stderr_f = open(stderr_path, "w")
 
-        # Update job details with current running PIDs
-        update_job(task_id, details={"running_pids": dict(running_pids)})
+        try:
+            # Use Popen with start_new_session to create a process group for cleanup
+            process = subprocess.Popen(
+                eval_cmd,
+                stdout=stdout_f,
+                stderr=stderr_f,
+                text=True,
+                start_new_session=True,  # Create new process group for cleanup
+                cwd=str(output_dir.parent),
+            )
 
-        # Wait for process to complete
-        stdout, stderr = process.communicate()
+            # Track the process PID for cleanup on server restart
+            running_pids[provider] = process.pid
+            logger.info(f"TTS eval for {provider} started with PID {process.pid}")
+
+            # Update job details with current running PIDs
+            update_job(task_id, details={"running_pids": dict(running_pids)})
+
+            # Cache for uploaded audio files (maps local path -> presigned URL)
+            uploaded_audio_cache = {}
+
+            # Poll for process completion while updating intermediate results
+            while process.poll() is None:
+                _update_tts_intermediate_results(
+                    output_dir,
+                    provider,
+                    task_id,
+                    run_id,
+                    s3_bucket,
+                    intermediate_results,
+                    uploaded_audio_cache,
+                    results_lock,
+                )
+                time.sleep(2)  # Check every 2 seconds
+
+            # One final update after process completes
+            _update_tts_intermediate_results(
+                output_dir,
+                provider,
+                task_id,
+                run_id,
+                s3_bucket,
+                intermediate_results,
+                uploaded_audio_cache,
+                results_lock,
+            )
+
+        finally:
+            stdout_f.close()
+            stderr_f.close()
+
+        # Read stdout/stderr from files
+        with open(stdout_path, "r") as f:
+            stdout = f.read()
+        with open(stderr_path, "r") as f:
+            stderr = f.read()
 
         # Remove from running PIDs
         running_pids.pop(provider, None)
@@ -141,21 +312,10 @@ def evaluate_tts_provider(
             )
 
         # Find the provider-specific output directory
-        provider_output_dir = None
-        for item in output_dir.iterdir():
-            if item.is_dir() and provider in item.name.lower():
-                provider_output_dir = item
-                break
+        provider_output_dir = _find_tts_provider_output_dir(output_dir, provider)
 
         if provider_output_dir is None:
-            # Try to find any directory in output_dir
-            dirs = [d for d in output_dir.iterdir() if d.is_dir()]
-            if dirs:
-                provider_output_dir = dirs[0]
-            else:
-                raise Exception(
-                    f"Could not find provider output directory for {provider}"
-                )
+            raise Exception(f"Could not find provider output directory for {provider}")
 
         # Upload TTS eval results to S3
         results_prefix = f"tts/evals/{run_id}/outputs/{provider}"
@@ -299,6 +459,10 @@ def run_tts_evaluation_task(
                 # Shared dict to track running process PIDs for cleanup
                 running_pids = {}
 
+                # Shared dict and lock for intermediate results
+                intermediate_results = {}
+                results_lock = threading.Lock()
+
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(request.providers)
                 ) as executor:
@@ -314,6 +478,8 @@ def run_tts_evaluation_task(
                             s3_bucket,
                             task_id,
                             running_pids,
+                            intermediate_results,
+                            results_lock,
                         ): provider
                         for provider in request.providers
                     }

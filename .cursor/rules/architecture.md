@@ -298,6 +298,38 @@ STT, TTS, and voice simulation jobs spawn subprocesses that run on specific port
 
 This prevents orphaned processes from accumulating across server restarts and frees up ports.
 
+### STT/TTS Evaluation Incremental Updates
+
+STT and TTS evaluations run multiple providers in parallel, with each provider processing multiple items sequentially. The backend monitors the `results.csv` file for each provider during execution and updates the database incrementally:
+
+- **Polling interval**: Every 2 seconds while each provider subprocess is running
+- **During execution**: Status API returns partial `provider_results` for each provider
+- **On completion**: Final results include `metrics` data and `leaderboard_summary`
+
+**TTS-specific behavior**: Audio files are uploaded to S3 as they become available during processing:
+
+- Each audio file is uploaded immediately when it appears in `results.csv`
+- Presigned URLs are generated and cached for intermediate results (allows immediate playback)
+- The `uploaded_audio_cache` dict prevents re-uploading the same file on each polling iteration
+- When the job completes, final results store S3 keys (not presigned URLs); the status API generates presigned URLs on-the-fly for done jobs
+
+**Response Model (`ProviderResult`):**
+
+| Field      | Type                   | When Present                                      |
+| ---------- | ---------------------- | ------------------------------------------------- |
+| `provider` | `str`                  | Always                                            |
+| `success`  | `Optional[bool]`       | `None` while processing, `True`/`False` when done |
+| `message`  | `str`                  | Always (`"Processing..."` while in progress)      |
+| `metrics`  | `Optional[List[Dict]]` | Only when provider completes                      |
+| `results`  | `Optional[List[Dict]]` | Partial rows during execution, complete when done |
+
+**TTS `results` row `audio_path` field:**
+
+- **While in progress**: Contains presigned URL for immediate playback
+- **When done**: Contains S3 key; status API generates presigned URL on fetch
+
+This allows clients to track progress per-provider and play audio files without waiting for all providers to complete.
+
 ### Voice Simulation Incremental Updates
 
 Voice simulations (`pense agent simulation`) run multiple persona-scenario combinations sequentially. Each combination creates a folder named `simulation_persona_<n>_scenario_<m>`. The backend monitors for these folders during execution and updates the database incrementally:
@@ -674,9 +706,9 @@ def run_task(task_id: str, request: TaskRequest):
         try_start_queued_job(JOB_TYPES)
 ```
 
-### Incremental Job Processing Pattern (Voice Simulations)
+### Incremental Job Processing Pattern (STT Evaluations, Voice Simulations)
 
-For long-running jobs that produce multiple outputs (like voice simulations), use non-blocking subprocess execution with directory monitoring:
+For long-running jobs that produce incremental outputs (like STT evaluations and voice simulations), use non-blocking subprocess execution with polling:
 
 ```python
 def run_incremental_task(task_id: str, output_dir: Path):
@@ -709,9 +741,32 @@ def run_incremental_task(task_id: str, output_dir: Path):
 Key aspects:
 
 - Use `subprocess.Popen` instead of `subprocess.run` for non-blocking execution
-- Write stdout/stderr to log files instead of pipes to avoid deadlocks
-- Check for completion markers (e.g., `evaluation_results.csv` exists) before processing - this ensures the evaluation step has finished
-- Update DB incrementally so status API can return partial results including per-simulation evaluation metrics
+- **Important**: Write stdout/stderr to temp files instead of pipes when polling with `process.poll()`. Using pipes with polling can cause deadlocks if the subprocess output exceeds the pipe buffer size:
+
+```python
+# Redirect to files to avoid pipe buffer deadlock during polling
+stdout_path = output_dir / f"{provider}_stdout.log"
+stderr_path = output_dir / f"{provider}_stderr.log"
+stdout_f = open(stdout_path, "w")
+stderr_f = open(stderr_path, "w")
+
+try:
+    process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, ...)
+    while process.poll() is None:
+        # Read intermediate results from output directory
+        time.sleep(2)
+finally:
+    stdout_f.close()
+    stderr_f.close()
+
+# Read captured output after process completes
+with open(stdout_path) as f:
+    stdout = f.read()
+```
+
+- Check for completion markers (e.g., `evaluation_results.csv` exists for voice simulations, or just read `results.csv` for STT evaluations)
+- Update DB incrementally so status API can return partial results
+- Use thread-safe mechanisms (locks) when multiple threads update shared state
 - Final aggregated metrics only computed after all items complete
 
 ---
