@@ -595,6 +595,7 @@ External:
 
 - `pense` CLI (installed via wheel file: `pense-0.1.0-py3-none-any.whl`)
 - `ffmpeg` - Audio format conversion
+- `nltk` data (`punkt_tab`) - Required by pipecat for sentence tokenization; pre-downloaded in Dockerfile to avoid runtime network issues
 
 ---
 
