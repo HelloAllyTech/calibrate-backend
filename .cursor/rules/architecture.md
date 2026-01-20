@@ -400,21 +400,19 @@ Both text simulations (`pense llm simulations run`) and voice simulations (`pens
     - `persona` and `scenario` data (always populated via config.json or fallback)
     - `transcript` from `transcript.json` (partial conversation so far)
     - `evaluation_results` is `null`
-    - No S3 uploads for in-progress voice simulations (`audios_s3_path` and `conversation_wav_s3_key` are `null`)
-  - **Voice-specific fields** (completed simulations only):
-    - `audio_urls` (presigned S3 URLs for individual audio files in the `audios/` folder)
-    - `conversation_wav_url` (presigned S3 URL for the combined `conversation.wav` file, or empty string if not present)
+    - **Voice simulations**: No audio URLs returned until evaluation completes (all audio fields are `null`)
   - Plus `completed_simulations` count for progress tracking (counts only fully completed simulations)
-- **On completion**: Final aggregated `metrics` (from `metrics.json`) are added to the response
-- **Presigned URL caching** (voice simulations):
-  - URLs are cached in the job results with a `presigned_urls_generated_at` timestamp
-  - On status check, `_should_regenerate_presigned_urls()` checks if URLs have expired
-  - URLs are regenerated only if elapsed time exceeds `PRESIGNED_URL_EXPIRY_SECONDS - PRESIGNED_URL_REFRESH_BUFFER_SECONDS` (55 minutes by default)
-  - Constants: `PRESIGNED_URL_EXPIRY_SECONDS = 3600` (1 hour), `PRESIGNED_URL_REFRESH_BUFFER_SECONDS = 300` (5 min buffer)
-  - **Race condition handling**: Before generating URLs, check if they already exist in `simulation_results` (`not sim_result.get("audio_urls")`) to handle concurrent requests that read before either saves
-  - DB is only updated if `urls_regenerated` is True (i.e., URLs were actually generated)
+  - **`metrics` field is `null` during in-progress**: The `pense` CLI creates `metrics.json` incrementally as each simulation completes, so reading it before all simulations finish would give incomplete aggregate data (e.g., `values` array with fewer entries than expected). The backend intentionally does NOT read `metrics.json` until the job completes.
+- **On completion**: Final aggregated `metrics` (from `metrics.json`) are added to the response only after the subprocess exits
+- **Presigned URL handling** (voice simulations):
+  - **During in-progress**: No audio URLs are returned for simulations until their `evaluation_results` are available. This means:
+    - In-progress simulations (no `evaluation_results.csv` yet) have all audio fields as `null`
+    - Completed simulations (have `evaluation_results.csv`) include `audio_urls` and `conversation_wav_url` presigned URLs stored in DB
+  - **When job status becomes done**: Presigned URLs are stripped from the stored results; only S3 paths (`audios_s3_path`, `conversation_wav_s3_key`) remain
+  - **When fetching done status**: Presigned URLs are generated on-the-fly from S3 paths using `_get_audio_urls_from_s3_key()` and `generate_presigned_download_url()`, but NOT saved back to DB
+  - This ensures audio is only accessible after evaluation completes and prevents stale URLs from accumulating
 
-This allows clients to display progress and per-simulation results (including partial transcripts for in-progress simulations of both types) without waiting for all simulations to complete.
+This allows clients to display progress and per-simulation results (including partial transcripts for in-progress simulations) without waiting for all simulations to complete.
 
 ### Agent Test Job Results Format
 
@@ -860,7 +858,7 @@ def run_task(task_id: str, request: TaskRequest):
         # ... do work ...
         update_job(task_id, status=TaskStatus.DONE.value, results={...})
     except Exception as e:
-        update_job(task_id, status=TaskStatus.DONE.value, results={"error": str(e)})
+        update_job(task_id, status=TaskStatus.FAILED.value, results={"error": str(e)})
     finally:
         # Start next queued job if capacity allows
         try_start_queued_job(JOB_TYPES)

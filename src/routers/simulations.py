@@ -512,64 +512,46 @@ async def get_simulation_run_status(
 
     simulation_results = results.get("simulation_results") or []
 
-    # If this is a voice simulation, generate presigned URLs for audio files
-    # Only regenerate if URLs have expired or are about to expire
+    # If this is a voice simulation, handle presigned URLs based on status
     if job.get("type") == "voice" and simulation_results:
-        presigned_urls_generated_at = results.get("presigned_urls_generated_at")
-        should_regenerate = _should_regenerate_presigned_urls(
-            presigned_urls_generated_at
-        )
-
-        if should_regenerate:
+        if status == TaskStatus.DONE.value:
+            # For done status: generate presigned URLs on-the-fly from S3 paths
+            # Don't cache them in the database
             try:
                 s3_bucket = get_s3_output_config()
-                urls_regenerated = False
 
-                # Update each simulation result with audio URLs if audios_s3_path (S3 key prefix) is present
                 for sim_result in simulation_results:
+                    # Generate audio URLs from S3 path
                     audios_s3_key_prefix = sim_result.get("audios_s3_path")
-                    # Skip if already has cached audio_urls (handles race conditions)
-                    if audios_s3_key_prefix and not sim_result.get("audio_urls"):
+                    if audios_s3_key_prefix:
                         audio_urls = _get_audio_urls_from_s3_key(
                             audios_s3_key_prefix, s3_bucket
                         )
                         sim_result["audio_urls"] = audio_urls
-                        urls_regenerated = True
                         logger.info(
-                            f"Generated {len(audio_urls)} presigned URLs for simulation {sim_result.get('simulation_name')}"
+                            f"Generated {len(audio_urls)} presigned URLs on-the-fly for simulation {sim_result.get('simulation_name')}"
                         )
 
-                    # Generate presigned URL for conversation.wav if the S3 key is present
-                    # Skip if already has cached URL
+                    # Generate presigned URL for conversation.wav
                     conversation_wav_s3_key = sim_result.get("conversation_wav_s3_key")
-                    if conversation_wav_s3_key and not sim_result.get(
-                        "conversation_wav_url"
-                    ):
+                    if conversation_wav_s3_key:
                         conversation_wav_url = generate_presigned_download_url(
                             conversation_wav_s3_key, bucket=s3_bucket
                         )
                         sim_result["conversation_wav_url"] = (
                             conversation_wav_url if conversation_wav_url else ""
                         )
-                        urls_regenerated = True
                         logger.info(
-                            f"Generated presigned URL for conversation.wav for simulation {sim_result.get('simulation_name')}"
+                            f"Generated presigned URL on-the-fly for conversation.wav for simulation {sim_result.get('simulation_name')}"
                         )
-                    elif not conversation_wav_s3_key:
+                    else:
                         sim_result["conversation_wav_url"] = ""
-
-                # Store the updated results with the timestamp back to the database
-                if urls_regenerated:
-                    results["simulation_results"] = simulation_results
-                    results["presigned_urls_generated_at"] = (
-                        datetime.utcnow().isoformat()
-                    )
-                    update_simulation_job(task_id, results=results)
-                    logger.info(f"Cached presigned URLs for voice simulation {task_id}")
 
             except Exception as e:
                 logger.warning(f"Failed to generate audio URLs: {str(e)}")
                 # Continue without audio URLs if generation fails
+        # For in-progress status: presigned URLs are already stored in results during monitoring
+        # Just return them as-is (they were generated when the audio files were uploaded)
 
     return SimulationRunStatusResponse(
         task_id=task_id,
@@ -1093,23 +1075,13 @@ def _update_text_simulation_intermediate_results(
     if not simulation_results:
         return prev_state
 
-    # Check if metrics.json exists (all simulations complete)
-    metrics_data = None
-    has_metrics = False
-    metrics_file = output_dir / "metrics.json"
-    if metrics_file.exists():
-        has_metrics = True
-        try:
-            with open(metrics_file, "r", encoding="utf-8") as f:
-                metrics_data = json.load(f)
-        except Exception:
-            pass
-
     # Build current state for change detection
+    # Note: Don't read metrics.json during in-progress - pense creates it incrementally
+    # and reading it before all simulations complete will give incomplete metrics.
+    # The final metrics are read after the process completes in _run_pense_text_simulation.
     current_state = (
         completed_count,
         tuple(sorted(transcript_lengths)),
-        has_metrics,
     )
 
     # Only update DB if state changed
@@ -1122,7 +1094,7 @@ def _update_text_simulation_intermediate_results(
                 "completed_simulations": completed_count,
                 "simulation_results": simulation_results,
                 "results_s3_prefix": s3_prefix,
-                "metrics": metrics_data,
+                "metrics": None,  # Don't include metrics during in-progress
             },
         )
 
@@ -1305,6 +1277,7 @@ def _parse_simulation_directory(
     s3_bucket: str,
     s3_prefix: str,
     uploaded_audio_files: set,
+    include_presigned_urls: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Parse a single simulation directory and upload its audio files to S3.
@@ -1315,16 +1288,15 @@ def _parse_simulation_directory(
         s3_bucket: S3 bucket name
         s3_prefix: S3 key prefix for uploading results
         uploaded_audio_files: Set to track uploaded audio files (modified in place)
+        include_presigned_urls: If True, include presigned URLs in the result (for in-progress status)
 
     Returns:
         Dict with simulation result data, or None if parsing failed
     """
-    s3 = get_s3_client()
     sim_name = sim_dir.name
     eval_results_file = sim_dir / "evaluation_results.csv"
     transcript_file = sim_dir / "transcript.json"
     config_file = sim_dir / "config.json"
-    audios_dir = sim_dir / "audios"
 
     eval_results = []
     if eval_results_file.exists():
@@ -1362,46 +1334,14 @@ def _parse_simulation_directory(
         except Exception as e:
             logger.warning(f"Failed to parse config.json for {sim_name}: {e}")
 
-    # Upload audios folder for this simulation to S3
-    audios_s3_path = None
-    if audios_dir.exists() and audios_dir.is_dir():
-        audios_s3_prefix = f"{s3_prefix}/{sim_name}/audios"
-        audio_files_uploaded = 0
-        for audio_file in audios_dir.iterdir():
-            if audio_file.is_file() and (
-                audio_file.suffix == ".wav"
-                or audio_file.suffix == ".mp3"
-                or audio_file.suffix == ".ogg"
-            ):
-                # Skip if already uploaded
-                if str(audio_file) in uploaded_audio_files:
-                    continue
-                relative_audio_path = audio_file.relative_to(output_dir)
-                audio_s3_key = f"{s3_prefix}/{relative_audio_path}"
-                s3.upload_file(str(audio_file), s3_bucket, audio_s3_key)
-                uploaded_audio_files.add(str(audio_file))
-                audio_files_uploaded += 1
-                logger.info(
-                    f"Uploaded audio file {audio_file.name} to S3: {audio_s3_key}"
-                )
-        if audio_files_uploaded > 0:
-            # Store just the S3 key prefix, not the full s3:// path
-            audios_s3_path = audios_s3_prefix
-            logger.info(
-                f"Uploaded {audio_files_uploaded} audio file(s) for {sim_name} to s3://{s3_bucket}/{audios_s3_prefix}"
-            )
-
-    # Upload conversation.wav if it exists
-    conversation_wav_s3_key = None
-    conversation_wav_file = sim_dir / "conversation.wav"
-    if conversation_wav_file.exists() and conversation_wav_file.is_file():
-        conversation_wav_s3_key = f"{s3_prefix}/{sim_name}/conversation.wav"
-        s3.upload_file(str(conversation_wav_file), s3_bucket, conversation_wav_s3_key)
-        logger.info(
-            f"Uploaded conversation.wav for {sim_name} to s3://{s3_bucket}/{conversation_wav_s3_key}"
+    # Upload audio files and optionally generate presigned URLs
+    audios_s3_path, conversation_wav_s3_key, audio_urls, conversation_wav_url = (
+        _upload_audio_and_generate_urls(
+            sim_dir, output_dir, s3_bucket, s3_prefix, uploaded_audio_files
         )
+    )
 
-    return {
+    result = {
         "simulation_name": sim_name,
         "persona": persona_data,
         "scenario": scenario_data,
@@ -1410,6 +1350,13 @@ def _parse_simulation_directory(
         "audios_s3_path": audios_s3_path,
         "conversation_wav_s3_key": conversation_wav_s3_key,
     }
+
+    # Include presigned URLs only during in-progress status
+    if include_presigned_urls:
+        result["audio_urls"] = audio_urls if audio_urls else None
+        result["conversation_wav_url"] = conversation_wav_url
+
+    return result
 
 
 def _is_simulation_complete(sim_dir: Path) -> bool:
@@ -1431,6 +1378,98 @@ def _is_simulation_started(sim_dir: Path) -> bool:
     return config_file.exists() or transcript_file.exists()
 
 
+def _upload_audio_and_generate_urls(
+    sim_dir: Path,
+    output_dir: Path,
+    s3_bucket: str,
+    s3_prefix: str,
+    uploaded_audio_files: set,
+) -> tuple:
+    """
+    Upload audio files for a simulation directory and generate presigned URLs.
+
+    Args:
+        sim_dir: Path to the simulation directory
+        output_dir: Base output directory
+        s3_bucket: S3 bucket name
+        s3_prefix: S3 key prefix for uploading results
+        uploaded_audio_files: Set to track uploaded audio files (modified in place)
+
+    Returns:
+        Tuple of (audios_s3_path, conversation_wav_s3_key, audio_urls, conversation_wav_url)
+    """
+    s3 = get_s3_client()
+    sim_name = sim_dir.name
+    audios_dir = sim_dir / "audios"
+
+    audios_s3_path = None
+    conversation_wav_s3_key = None
+    audio_urls = []
+    conversation_wav_url = None
+
+    # Upload audios folder for this simulation to S3
+    if audios_dir.exists() and audios_dir.is_dir():
+        audios_s3_prefix = f"{s3_prefix}/{sim_name}/audios"
+        audio_files_to_upload = []
+
+        for audio_file in audios_dir.iterdir():
+            if audio_file.is_file() and audio_file.suffix in {".wav", ".mp3", ".ogg"}:
+                audio_files_to_upload.append(audio_file)
+
+        # Sort audio files for consistent URL ordering
+        def natural_sort_key(path: Path) -> tuple:
+            filename = path.name
+            parts = filename.split("_", 1)
+            if len(parts) > 1 and parts[0].isdigit():
+                return (int(parts[0]), parts[1])
+            return (float("inf"), filename)
+
+        audio_files_to_upload.sort(key=natural_sort_key)
+
+        for audio_file in audio_files_to_upload:
+            # Upload if not already uploaded
+            if str(audio_file) not in uploaded_audio_files:
+                relative_audio_path = audio_file.relative_to(output_dir)
+                audio_s3_key = f"{s3_prefix}/{relative_audio_path}"
+                s3.upload_file(str(audio_file), s3_bucket, audio_s3_key)
+                uploaded_audio_files.add(str(audio_file))
+                logger.info(
+                    f"Uploaded audio file {audio_file.name} to S3: {audio_s3_key}"
+                )
+
+            # Generate presigned URL
+            relative_audio_path = audio_file.relative_to(output_dir)
+            audio_s3_key = f"{s3_prefix}/{relative_audio_path}"
+            presigned_url = generate_presigned_download_url(
+                audio_s3_key, bucket=s3_bucket
+            )
+            if presigned_url:
+                audio_urls.append(presigned_url)
+
+        if audio_files_to_upload:
+            audios_s3_path = audios_s3_prefix
+
+    # Upload conversation.wav if it exists
+    conversation_wav_file = sim_dir / "conversation.wav"
+    if conversation_wav_file.exists() and conversation_wav_file.is_file():
+        conversation_wav_s3_key = f"{s3_prefix}/{sim_name}/conversation.wav"
+        if str(conversation_wav_file) not in uploaded_audio_files:
+            s3.upload_file(
+                str(conversation_wav_file), s3_bucket, conversation_wav_s3_key
+            )
+            uploaded_audio_files.add(str(conversation_wav_file))
+            logger.info(
+                f"Uploaded conversation.wav for {sim_name} to s3://{s3_bucket}/{conversation_wav_s3_key}"
+            )
+
+        # Generate presigned URL
+        conversation_wav_url = generate_presigned_download_url(
+            conversation_wav_s3_key, bucket=s3_bucket
+        )
+
+    return audios_s3_path, conversation_wav_s3_key, audio_urls, conversation_wav_url
+
+
 def _parse_voice_simulation_in_progress(
     sim_dir: Path,
     personas_list: Optional[List[Dict[str, Any]]] = None,
@@ -1438,7 +1477,8 @@ def _parse_voice_simulation_in_progress(
 ) -> Optional[Dict[str, Any]]:
     """
     Parse an in-progress voice simulation directory for intermediate results.
-    Returns persona, scenario, and transcript data without S3 uploads.
+    Does NOT upload audio or generate presigned URLs - those are only available
+    after evaluation_results are ready.
 
     Args:
         sim_dir: Path to the simulation directory
@@ -1446,7 +1486,7 @@ def _parse_voice_simulation_in_progress(
         scenarios_list: Optional list of scenarios from pense config (used as fallback)
 
     Returns:
-        Dict with simulation data, or None if simulation hasn't started
+        Dict with simulation data (no audio URLs), or None if simulation hasn't started
     """
     if not sim_dir.exists():
         return None
@@ -1492,14 +1532,18 @@ def _parse_voice_simulation_in_progress(
             if 0 <= scenario_idx < len(scenarios_list):
                 scenario_data = scenarios_list[scenario_idx]
 
+    # Don't upload audio or generate URLs for in-progress simulations
+    # Audio URLs are only returned after evaluation_results are available
     return {
         "simulation_name": sim_name,
         "persona": persona_data,
         "scenario": scenario_data,
         "evaluation_results": None,  # In-progress, no evaluation yet
         "transcript": transcript,
-        "audios_s3_path": None,  # Don't upload audio for in-progress
+        "audios_s3_path": None,
         "conversation_wav_s3_key": None,
+        "audio_urls": None,
+        "conversation_wav_url": None,
     }
 
 
@@ -1625,22 +1669,25 @@ def _run_pense_voice_simulation(
                             logger.info(
                                 f"{log_prefix}: Found completed simulation directory: {item.name}"
                             )
-                            # Parse and upload the completed simulation
+                            # Parse and upload the completed simulation with presigned URLs (for in-progress display)
                             sim_result = _parse_simulation_directory(
                                 sim_dir=item,
                                 output_dir=output_dir,
                                 s3_bucket=s3_bucket,
                                 s3_prefix=s3_prefix,
                                 uploaded_audio_files=uploaded_audio_files,
+                                include_presigned_urls=True,  # Include URLs during in-progress
                             )
                             if sim_result:
                                 completed_results.append(sim_result)
                                 completed_simulations.add(item.name)
                     elif _is_simulation_started(item):
-                        # Simulation in progress - get intermediate data
+                        # Simulation in progress - get intermediate data (no audio URLs)
                         if item.name not in completed_simulations:
                             sim_result = _parse_voice_simulation_in_progress(
-                                item, personas_list, scenarios_list
+                                sim_dir=item,
+                                personas_list=personas_list,
+                                scenarios_list=scenarios_list,
                             )
                             if sim_result:
                                 in_progress_results.append(sim_result)
@@ -1696,6 +1743,7 @@ def _run_pense_voice_simulation(
             logger.info(f"{log_prefix} stderr: {stderr}")
 
     # Final pass: check for any remaining simulation directories that weren't processed
+    # Don't include presigned URLs since status will be done
     for item in output_dir.iterdir():
         if (
             item.is_dir()
@@ -1712,10 +1760,17 @@ def _run_pense_voice_simulation(
                     s3_bucket=s3_bucket,
                     s3_prefix=s3_prefix,
                     uploaded_audio_files=uploaded_audio_files,
+                    include_presigned_urls=False,  # Don't include URLs for final done status
                 )
                 if sim_result:
                     completed_results.append(sim_result)
                     completed_simulations.add(item.name)
+
+    # Strip presigned URLs from all completed_results before storing (for done status)
+    # Only keep S3 paths for on-the-fly URL generation when status is fetched
+    for sim_result in completed_results:
+        sim_result.pop("audio_urls", None)
+        sim_result.pop("conversation_wav_url", None)
 
     # Parse final results (metrics.json and results.csv)
     metrics_data = None
@@ -1850,7 +1905,7 @@ def run_simulation_task(
                 traceback.print_exc()
                 update_simulation_job(
                     task_id,
-                    status=TaskStatus.DONE.value,
+                    status=TaskStatus.FAILED.value,
                     results={"error": f"Unexpected error during simulation: {str(e)}"},
                 )
         # Temporary directory is automatically cleaned up here
@@ -1859,7 +1914,7 @@ def run_simulation_task(
         traceback.print_exc()
         update_simulation_job(
             task_id,
-            status=TaskStatus.DONE.value,
+            status=TaskStatus.FAILED.value,
             results={"error": f"Task failed: {str(e)}"},
         )
     finally:
