@@ -294,7 +294,7 @@ try_start_queued_*_job()
 
 ### Process Management for Long-Running Jobs
 
-STT, TTS, and voice simulation jobs spawn subprocesses that run on specific ports. To handle server restarts and cleanup gracefully:
+Voice simulation jobs spawn subprocesses that may run on specific ports. STT and TTS jobs do not require ports. To handle server restarts and cleanup gracefully:
 
 - **Process isolation**: All subprocesses started with `start_new_session=True` (creates new process group)
 - **PID tracking**: Process PIDs stored in job `details`:
@@ -302,10 +302,10 @@ STT, TTS, and voice simulation jobs spawn subprocesses that run on specific port
   - STT/TTS evaluations: `running_pids` dict mapping provider name to PID (e.g., `{"deepgram": 12345, "openai": 12346}`)
 - **Port tracking**: Reserved ports stored in job `details`:
   - Voice simulations: Single `port` field (only for voice type)
-  - STT/TTS evaluations: `provider_ports` dict mapping provider name to port (e.g., `{"deepgram": 8765, "openai": 8766}`)
+  - STT/TTS evaluations: No ports required
 - **Orphan cleanup**: On recovery, `job_recovery.py` kills process groups using `os.killpg()` before restarting
 - **Graceful termination**: Sends SIGTERM first, waits briefly, then SIGKILL if still running
-- **Port release**: Ports are released back to the pool after process termination
+- **Port release**: Ports are released back to the pool after process termination (voice simulations only)
 
 This prevents orphaned processes from accumulating across server restarts and frees up ports.
 
@@ -313,16 +313,16 @@ This prevents orphaned processes from accumulating across server restarts and fr
 
 Jobs can be deleted via DELETE endpoints:
 
-| Endpoint                             | Table             | Notes                                               |
-| ------------------------------------ | ----------------- | --------------------------------------------------- |
-| `DELETE /jobs/{job_uuid}`            | `jobs`            | STT/TTS eval jobs; kills processes, releases ports  |
-| `DELETE /agent-tests/job/{job_uuid}` | `agent_test_jobs` | Agent test jobs; no process cleanup (blocking call) |
-| `DELETE /simulations/run/{job_uuid}` | `simulation_jobs` | Simulation jobs; kills process, releases port       |
+| Endpoint                             | Table             | Notes                                                              |
+| ------------------------------------ | ----------------- | ------------------------------------------------------------------ |
+| `DELETE /jobs/{job_uuid}`            | `jobs`            | STT/TTS eval jobs; kills processes (no ports needed)               |
+| `DELETE /agent-tests/job/{job_uuid}` | `agent_test_jobs` | Agent test jobs; no process cleanup (blocking call)                |
+| `DELETE /simulations/run/{job_uuid}` | `simulation_jobs` | Simulation jobs; kills process, releases port (voice only)         |
 
 When deleting a running job:
 
 1. Kill running processes (if applicable)
-2. Release reserved ports (if applicable)
+2. Release reserved ports (if applicable, voice simulations only)
 3. Delete job from database
 4. Trigger next queued job in the same queue
 
@@ -334,7 +334,7 @@ Jobs that haven't updated their `updated_at` timestamp in 5+ minutes are conside
 - **Detection**: Status API checks `updated_at` for `in_progress` jobs
 - **Timeout handling**:
   1. Kill running processes (if applicable)
-  2. Release reserved ports (if applicable)
+  2. Release reserved ports (if applicable, voice simulations only)
   3. Mark job as `failed` with error (existing partial results are preserved)
   4. Trigger next queued job
 
@@ -350,7 +350,7 @@ The `is_job_timed_out(updated_at)` utility function in `utils.py` handles timest
 
 ### STT/TTS Evaluation Incremental Updates
 
-STT and TTS evaluations run multiple providers in parallel, with each provider processing multiple items sequentially. The backend monitors both `results.csv` and `metrics.json` for each provider during execution and updates the database incrementally:
+STT and TTS evaluations run multiple providers with a maximum of 2 concurrent executions (to avoid resource exhaustion), with each provider processing multiple items sequentially. When one provider completes, the next queued provider starts automatically. The backend monitors both `results.csv` and `metrics.json` for each provider during execution and updates the database incrementally:
 
 - **Polling interval**: Every 2 seconds while each provider subprocess is running
 - **During execution**: Status API returns partial `provider_results` for each provider
@@ -364,15 +364,49 @@ STT and TTS evaluations run multiple providers in parallel, with each provider p
 - The `uploaded_audio_cache` dict prevents re-uploading the same file on each polling iteration
 - When the job completes, final results store S3 keys (not presigned URLs); the status API generates presigned URLs on-the-fly for done jobs
 
+**Response Model (`TaskStatusResponse`):**
+
+| Field                 | Type                        | Description                                                    |
+| --------------------- | --------------------------- | -------------------------------------------------------------- |
+| `task_id`             | `str`                       | Job UUID                                                       |
+| `status`              | `str`                       | Job status: `queued`, `in_progress`, `done`, `failed`          |
+| `language`            | `Optional[str]`             | Language from job details (e.g., "english", "hindi")           |
+| `provider_results`    | `Optional[List[ProviderResult]]` | Results per provider                                      |
+| `leaderboard_summary` | `Optional[List[Dict]]`      | Summary after all providers complete                           |
+| `error`               | `Optional[str]`             | Error message if job failed                                    |
+
 **Response Model (`ProviderResult`):**
 
-| Field      | Type                   | When Present                                                          |
-| ---------- | ---------------------- | --------------------------------------------------------------------- |
-| `provider` | `str`                  | Always                                                                |
-| `success`  | `Optional[bool]`       | `None` while processing, `True` when `metrics.json` exists            |
-| `message`  | `str`                  | `"Processing..."` while in progress, `"Completed"` when metrics exist |
-| `metrics`  | `Optional[List[Dict]]` | When `metrics.json` exists (provider complete)                        |
-| `results`  | `Optional[List[Dict]]` | Partial rows during execution, complete when done                     |
+| Field      | Type                               | When Present                                                          |
+| ---------- | ---------------------------------- | --------------------------------------------------------------------- |
+| `provider` | `str`                              | Always                                                                |
+| `success`  | `Optional[bool]`                   | `None` while queued/processing, `True`/`False` when complete (see below) |
+| `message`  | `str`                              | `"Queued..."` before start, `"Processing..."` in progress, `"Completed"` or error message when done |
+| `metrics`  | `Optional[Dict \| List[Dict]]`     | When `metrics.json` exists (provider complete); dict in new format, list for backward compatibility |
+| `results`  | `Optional[List[Dict]]`             | `null` while queued, partial rows during execution, complete when done |
+
+**TTS success determination**: A TTS provider is marked `success: true` only if at least one text was successfully synthesized (has an `audio_path` in results). If the pense CLI completes but no audio files were generated (e.g., voice not found, API errors), `success: false` is returned with an error message. This prevents false positives where the process exits normally but all synthesis attempts failed.
+
+**All requested providers always included**: The status API reads the list of requested providers from `job.details.providers` and ensures all are present in the response. Providers that haven't started processing yet are shown with `success: null`, `message: "Queued..."`, and `metrics`/`results` as `null`. This allows clients to see the full list of providers and their states (queued → processing → completed) without needing to track the original request.
+
+**Metrics normalization**: The status API normalizes old list-of-dicts metrics format to the new dict format before returning. The `_normalize_metrics()` helper handles two old formats:
+- Simple metrics: `[{"wer": 2.4}, {"string_similarity": 0.15}, ...]` → merged into result dict
+- Latency metrics: `[{"metric_name": "ttfb", "mean": 0.1, ...}, ...]` → uses `metric_name` as key, rest as value
+
+This ensures clients always receive metrics in dict format (e.g., `{"wer": 2.4, "ttfb": {"mean": 0.1, ...}}`) regardless of when the job was created.
+
+**STT Metrics** (returned by `pense stt eval`):
+- `wer` - Word Error Rate (float)
+- `string_similarity` - String similarity score (float)
+- `llm_judge_score` - LLM judge accuracy score (float)
+- `processing_time` - Processing time stats: `{mean, std, values}` (may be absent/null)
+- `ttfb` - Time to First Byte stats: `{mean, std, values}` (may be absent/null)
+
+**TTS Metrics** (returned by `pense tts eval`):
+- `llm_judge_score` - LLM judge accuracy score (float)
+- `ttfb` - Time to First Byte stats: `{mean, std, values}` (may be absent/null)
+
+Note: TTS does not return `processing_time`. Both `ttfb` values may be absent if the provider doesn't support streaming or the measurement failed - clients should handle null/missing values.
 
 **TTS `results` row `audio_path` field:**
 
@@ -718,7 +752,7 @@ Key Python packages:
 External:
 
 - `pense` CLI (installed via wheel file: `pense-0.1.0-py3-none-any.whl`)
-- `ffmpeg` - Audio format conversion
+- `ffmpeg` - Required by pense CLI for audio processing (TTS, voice simulations)
 - `nltk` data (`punkt_tab`) - Required by pipecat for sentence tokenization; pre-downloaded in Dockerfile to avoid runtime network issues
 
 ---

@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 
 import boto3
 from pydantic import BaseModel
@@ -41,7 +41,9 @@ class ProviderResult(BaseModel):
     provider: str
     success: Optional[bool] = None  # None while in progress, True/False when done
     message: str
-    metrics: Optional[List[Dict[str, Any]]] = None
+    metrics: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = (
+        None  # dict (new format) or list (backward compat)
+    )
     results: Optional[List[Dict[str, Any]]] = None
 
 
@@ -53,6 +55,7 @@ class TaskCreateResponse(BaseModel):
 class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
+    language: Optional[str] = None
     provider_results: Optional[List[ProviderResult]] = None
     leaderboard_summary: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None

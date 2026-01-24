@@ -69,6 +69,7 @@ jobs:
             export SMALLEST_API_KEY="${{ secrets.SMALLEST_API_KEY }}"
             export GROQ_API_KEY="${{ secrets.GROQ_API_KEY }}"
             export GOOGLE_APPLICATION_CREDENTIALS="${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}"
+            export GOOGLE_CLOUD_PROJECT_ID="${{ secrets.GOOGLE_CLOUD_PROJECT_ID }}"
             export GOOGLE_API_KEY="${{ secrets.GOOGLE_API_KEY }}"
             export SARVAM_API_KEY="${{ secrets.SARVAM_API_KEY }}"
             export ELEVENLABS_API_KEY="${{ secrets.ELEVENLABS_API_KEY }}"

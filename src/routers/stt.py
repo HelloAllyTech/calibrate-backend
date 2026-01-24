@@ -22,8 +22,6 @@ from utils import (
     ProviderResult,
     TaskCreateResponse,
     TaskStatusResponse,
-    reserve_port,
-    release_port,
     get_s3_client,
     get_s3_output_config,
     can_start_job,
@@ -73,6 +71,34 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stt", tags=["stt"])
 
 
+def _normalize_metrics(metrics):
+    """Convert old list-of-dicts metrics format to new dict format.
+
+    Old format: [{"wer": 2.4}, {"string_similarity": 0.15}, {"metric_name": "ttfb", "mean": 0.1, ...}, ...]
+    New format: {"wer": 2.4, "string_similarity": 0.15, "ttfb": {"mean": 0.1, ...}, ...}
+    """
+    if metrics is None:
+        return None
+    if isinstance(metrics, dict):
+        return metrics
+    if isinstance(metrics, list):
+        # Convert list of dicts to single dict
+        result = {}
+        for item in metrics:
+            if isinstance(item, dict):
+                # Check if it's a latency metric with metric_name field
+                if "metric_name" in item:
+                    metric_name = item["metric_name"]
+                    # Create a copy without metric_name for the value
+                    value = {k: v for k, v in item.items() if k != "metric_name"}
+                    result[metric_name] = value
+                else:
+                    # Simple metric: {"wer": 2.4} - merge directly
+                    result.update(item)
+        return result if result else metrics  # Return original if conversion fails
+    return metrics
+
+
 class STTEvaluationRequest(BaseModel):
     audio_paths: List[str]  # S3 paths to audio files
     texts: List[str]  # Ground truth text for each audio file
@@ -110,8 +136,11 @@ def _read_results_csv(provider_output_dir: Path) -> Optional[List[dict]]:
         return None
 
 
-def _read_metrics_json(provider_output_dir: Path) -> Optional[List[dict]]:
-    """Read metrics.json from provider output directory if it exists."""
+def _read_metrics_json(provider_output_dir: Path) -> Optional[dict]:
+    """Read metrics.json from provider output directory if it exists.
+
+    Handles both new format (dict) and old format (list of dicts) for backward compatibility.
+    """
     if not provider_output_dir:
         return None
     metrics_file = provider_output_dir / "metrics.json"
@@ -119,7 +148,10 @@ def _read_metrics_json(provider_output_dir: Path) -> Optional[List[dict]]:
         return None
     try:
         with open(metrics_file, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            # Handle backward compatibility: if it's a list, return as-is
+            # New format is a dict
+            return data
     except Exception:
         return None
 
@@ -169,7 +201,6 @@ def evaluate_provider(
     language: str,
     input_dir: Path,
     output_dir: Path,
-    port: int,
     s3_bucket: str,
     task_id: str,
     running_pids: dict,
@@ -193,8 +224,6 @@ def evaluate_provider(
             str(input_dir),
             "-o",
             str(output_dir),
-            "--port",
-            str(port),
         ]
 
         logger.info(f"Running {run_id} with command: {' '.join(eval_cmd)}")
@@ -317,7 +346,6 @@ def run_evaluation_task(
     s3_bucket: str,
 ):
     """Run the STT evaluation in the background."""
-    provider_ports = {}  # Track reserved ports for cleanup
     try:
         logger.info(
             f"Running evaluation task {task_id} with {len(request.providers)} providers"
@@ -334,10 +362,8 @@ def run_evaluation_task(
                 # Create directory structure
                 input_dir = temp_path / "input"
                 input_dir.mkdir()
-                audios_wav_dir = input_dir / "audios" / "wav"
-                audios_pcm16_dir = input_dir / "audios" / "pcm16"
-                audios_wav_dir.mkdir(parents=True)
-                audios_pcm16_dir.mkdir(parents=True)
+                audios_dir = input_dir / "audios"
+                audios_dir.mkdir(parents=True)
 
                 # Download audio files from S3 and create CSV
                 stt_csv_path = input_dir / "stt.csv"
@@ -361,36 +387,13 @@ def run_evaluation_task(
                         # Generate audio ID
                         audio_id = f"audio_{idx + 1}"
 
-                        # Download audio file
-                        local_wav_path = audios_wav_dir / f"{audio_id}.wav"
-                        local_pcm16_path = audios_pcm16_dir / f"{audio_id}.wav"
+                        # Download audio file directly to audios folder
+                        local_audio_path = audios_dir / f"{audio_id}.wav"
 
                         logger.info(
-                            f"Downloading audio file from {bucket}/{key} to {local_wav_path}"
+                            f"Downloading audio file from {bucket}/{key} to {local_audio_path}"
                         )
-                        s3.download_file(bucket, key, str(local_wav_path))
-
-                        # Convert to pcm16 (mono, 16KHz, s16le) using ffmpeg instead of copying
-                        cmd = [
-                            "ffmpeg",
-                            "-y",
-                            "-i",
-                            str(local_wav_path),
-                            "-ac",
-                            "1",
-                            "-ar",
-                            "16000",
-                            "-f",
-                            "wav",
-                            "-sample_fmt",
-                            "s16",
-                            str(local_pcm16_path),
-                        ]
-
-                        logger.info(
-                            f"Converting audio file to pcm16 {local_pcm16_path}"
-                        )
-                        subprocess.run(cmd, check=True)
+                        s3.download_file(bucket, key, str(local_audio_path))
 
                         # Write CSV row
                         writer.writerow([audio_id, gt_text])
@@ -398,16 +401,6 @@ def run_evaluation_task(
                 # Create output directory
                 output_dir = temp_path / "output"
                 output_dir.mkdir()
-
-                # Reserve ports for each provider
-                start_port = 8765
-                for provider in request.providers:
-                    port = reserve_port(f"{task_id}_{provider}", start_port)
-                    provider_ports[provider] = port
-                    start_port = port + 1
-
-                # Store ports in job details for cleanup
-                update_job(task_id, details={"provider_ports": dict(provider_ports)})
 
                 # Run pense STT eval for all providers in parallel
                 provider_results = []
@@ -421,8 +414,9 @@ def run_evaluation_task(
                 intermediate_results = {}
                 results_lock = threading.Lock()
 
+                # Limit to 2 concurrent providers to avoid resource exhaustion
                 with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=len(request.providers)
+                    max_workers=min(2, len(request.providers))
                 ) as executor:
                     future_to_provider = {
                         executor.submit(
@@ -432,7 +426,6 @@ def run_evaluation_task(
                             request.language,
                             input_dir,
                             output_dir,
-                            provider_ports[provider],
                             s3_bucket,
                             task_id,
                             running_pids,
@@ -454,15 +447,21 @@ def run_evaluation_task(
                     failed_providers = [
                         r.provider for r in provider_results if not r.success
                     ]
+                    # Get error messages from failed providers
+                    error_details = [
+                        f"{r.provider}: {r.message}"
+                        for r in provider_results
+                        if not r.success
+                    ]
                     update_job(
                         task_id,
-                        status=TaskStatus.DONE.value,
+                        status=TaskStatus.FAILED.value,
                         results={
                             "provider_results": [
                                 r.model_dump() for r in provider_results
                             ],
                             "leaderboard_summary": None,
-                            "error": f"Some providers failed: {', '.join(failed_providers)}",
+                            "error": f"Some providers failed: {'; '.join(error_details)}",
                         },
                     )
                     return
@@ -583,7 +582,7 @@ def run_evaluation_task(
                 traceback.print_exc()
                 update_job(
                     task_id,
-                    status=TaskStatus.DONE.value,
+                    status=TaskStatus.FAILED.value,
                     results={
                         "error": f"Unexpected error during STT evaluation: {str(e)}",
                     },
@@ -593,14 +592,10 @@ def run_evaluation_task(
         traceback.print_exc()
         update_job(
             task_id,
-            status=TaskStatus.DONE.value,
+            status=TaskStatus.FAILED.value,
             results={"error": f"Task failed: {str(e)}"},
         )
     finally:
-        # Release all reserved ports
-        for port in provider_ports.values():
-            release_port(port)
-
         # Try to start the next queued job
         try_start_queued_job(EVAL_JOB_TYPES)
 
@@ -697,12 +692,6 @@ async def get_evaluation_status(
             if running_pids:
                 kill_processes_from_dict(running_pids, task_id)
 
-            # Release ports
-            provider_ports = details.get("provider_ports")
-            if provider_ports:
-                for port in provider_ports.values():
-                    release_port(port)
-
             # Mark job as failed (preserve existing results, add error)
             results["error"] = "Job timed out after 5 minutes of inactivity"
             update_job(
@@ -715,10 +704,20 @@ async def get_evaluation_status(
             # Try to start the next queued job
             try_start_queued_job(EVAL_JOB_TYPES)
 
+    # Normalize metrics format for backward compatibility (list -> dict)
+    provider_results = results.get("provider_results")
+    if provider_results:
+        for provider_result in provider_results:
+            if provider_result.get("metrics"):
+                provider_result["metrics"] = _normalize_metrics(
+                    provider_result["metrics"]
+                )
+
     return TaskStatusResponse(
         task_id=task_id,
         status=status,
-        provider_results=results.get("provider_results"),
+        language=details.get("language"),
+        provider_results=provider_results,
         leaderboard_summary=results.get("leaderboard_summary"),
         error=results.get("error"),
     )
