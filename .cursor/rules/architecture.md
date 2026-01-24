@@ -26,6 +26,7 @@ The backend wraps the `pense` CLI tool and orchestrates evaluation jobs while pr
 | **Database**         | SQLite             | Persistent data storage                                      |
 | **Storage**          | AWS S3             | File/result storage                                          |
 | **Authentication**   | Google OAuth + JWT | User authentication via Google ID tokens, API access via JWT |
+| **Monitoring**       | Sentry             | Error tracking and performance monitoring                    |
 | **Package Manager**  | uv                 | Python dependency management                                 |
 | **Containerization** | Docker             | Deployment                                                   |
 | **CLI Tool**         | pense              | Core evaluation/simulation engine                            |
@@ -596,6 +597,12 @@ CORS_ALLOWED_ORIGINS=*           # Comma-separated origins (e.g., "http://localh
 JWT_SECRET_KEY=your-secret-key   # REQUIRED: At least 32 characters, change in production!
 JWT_EXPIRATION_HOURS=168         # Token validity (default: 7 days)
 
+# Sentry (Error Tracking)
+SENTRY_DSN=                      # Sentry DSN (leave empty to disable)
+SENTRY_ENVIRONMENT=development   # Environment name (development, staging, production)
+SENTRY_TRACES_SAMPLE_RATE=1.0    # Performance monitoring sample rate (0.0-1.0)
+SENTRY_PROFILES_SAMPLE_RATE=1.0  # Profiling sample rate (0.0-1.0)
+
 # AWS
 S3_OUTPUT_BUCKET=your-bucket
 AWS_ACCESS_KEY_ID=xxx
@@ -748,6 +755,7 @@ Key Python packages:
 - `openpyxl>=3.1.5` - Excel file parsing for leaderboards
 - `httpx>=0.27.0` - Async HTTP client for Google OAuth
 - `python-jose[cryptography]>=3.3.0` - JWT token encoding/decoding
+- `sentry-sdk[fastapi]>=2.0.0` - Error tracking and performance monitoring
 
 External:
 

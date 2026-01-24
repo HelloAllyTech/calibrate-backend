@@ -77,6 +77,10 @@ jobs:
             export S3_OUTPUT_BUCKET="${{ secrets.S3_OUTPUT_BUCKET }}"
             export DB_ROOT_DIR="${{ secrets.DB_ROOT_DIR }}"
             export APP_FOLDER_PATH="${{ secrets.APP_FOLDER_PATH }}"
+            export SENTRY_DSN="${{ secrets.SENTRY_DSN }}"
+            export SENTRY_ENVIRONMENT="${{ secrets.SENTRY_ENVIRONMENT }}"
+            export SENTRY_TRACES_SAMPLE_RATE="${{ secrets.SENTRY_TRACES_SAMPLE_RATE }}"
+            export SENTRY_PROFILES_SAMPLE_RATE="${{ secrets.SENTRY_PROFILES_SAMPLE_RATE }}"
 
             # Navigate to directory with docker-compose.yml
             cd /tmp/pense-staging

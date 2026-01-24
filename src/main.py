@@ -8,6 +8,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import sentry_sdk
+
+# Initialize Sentry if DSN is configured
+sentry_dsn = os.getenv("SENTRY_DSN")
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "development"),
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "1.0")),
+        profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "1.0")),
+    )
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -161,3 +173,8 @@ async def get_presigned_url(request: PresignedURLRequest):
         s3_path=f"s3://{s3_bucket}/{s3_key}",
         expires_in=expiration,
     )
+
+
+@app.get("/sentry-debug")
+async def trigger_error():
+    division_by_zero = 1 / 0
