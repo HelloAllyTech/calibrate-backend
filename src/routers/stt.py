@@ -704,14 +704,38 @@ async def get_evaluation_status(
             # Try to start the next queued job
             try_start_queued_job(EVAL_JOB_TYPES)
 
-    # Normalize metrics format for backward compatibility (list -> dict)
+    # Get list of all requested providers from job details
+    requested_providers = details.get("providers", [])
+
+    # Build a set of providers that have results
     provider_results = results.get("provider_results")
+    providers_with_results = set()
     if provider_results:
         for provider_result in provider_results:
-            if provider_result.get("metrics"):
-                provider_result["metrics"] = _normalize_metrics(
-                    provider_result["metrics"]
-                )
+            providers_with_results.add(provider_result.get("provider"))
+
+    # Add queued entries for providers that haven't started yet
+    if provider_results is None:
+        provider_results = []
+
+    for provider in requested_providers:
+        if provider not in providers_with_results:
+            provider_results.append(
+                {
+                    "provider": provider,
+                    "success": None,
+                    "message": "Queued...",
+                    "metrics": None,
+                    "results": None,
+                }
+            )
+
+    # Normalize metrics format for backward compatibility (list -> dict)
+    for provider_result in provider_results:
+        if provider_result.get("metrics"):
+            provider_result["metrics"] = _normalize_metrics(
+                provider_result["metrics"]
+            )
 
     return TaskStatusResponse(
         task_id=task_id,
