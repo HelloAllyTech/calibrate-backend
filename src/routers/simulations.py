@@ -51,6 +51,7 @@ from utils import (
     generate_presigned_download_url,
     kill_process_group,
     is_job_timed_out,
+    capture_exception_to_sentry,
     PRESIGNED_URL_EXPIRY_SECONDS,
     PRESIGNED_URL_REFRESH_BUFFER_SECONDS,
 )
@@ -1259,11 +1260,23 @@ def _run_pense_text_simulation(
             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
 
     error = None
-    if process.returncode != 0:
-        error = f"Command failed with exit code {process.returncode}"
+    # Check for failure: non-zero return code OR error traceback in stderr
+    has_error_in_stderr = "Traceback (most recent call last):" in stderr_content
+    is_failure = process.returncode != 0 or has_error_in_stderr
+
+    if is_failure:
+        if process.returncode != 0:
+            error = (
+                f"Command failed with exit code {process.returncode}: {stderr_content}"
+            )
+        else:
+            error = f"Command failed with error in output: {stderr_content}"
+        # Log CLI failure to Sentry
+        logger.error(f"{log_prefix} CLI failed, logging to Sentry: {error}")
+        capture_exception_to_sentry(RuntimeError(f"{log_prefix} failed: {error}"))
 
     return {
-        "success": process.returncode == 0,
+        "success": not is_failure,
         "total_simulations": len(simulation_results),
         "metrics": metrics_data,
         "simulation_results": simulation_results,
@@ -1804,11 +1817,21 @@ def _run_pense_voice_simulation(
             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
 
     error = None
-    if process.returncode != 0:
-        error = f"Command failed: {stderr}"
+    # Check for failure: non-zero return code OR error traceback in stderr
+    has_error_in_stderr = "Traceback (most recent call last):" in stderr
+    is_failure = process.returncode != 0 or has_error_in_stderr
+
+    if is_failure:
+        if process.returncode != 0:
+            error = f"Command failed with exit code {process.returncode}: {stderr}"
+        else:
+            error = f"Command failed with error in output: {stderr}"
+        # Log CLI failure to Sentry
+        logger.error(f"{log_prefix} CLI failed, logging to Sentry: {error}")
+        capture_exception_to_sentry(RuntimeError(f"{log_prefix} failed: {error}"))
 
     return {
-        "success": process.returncode == 0,
+        "success": not is_failure,
         "total_simulations": len(completed_results),
         "metrics": metrics_data,
         "simulation_results": completed_results,
@@ -1889,20 +1912,28 @@ def run_simulation_task(
                     "error": result.get("error"),
                 }
 
+                # Determine final status based on success
+                final_status = (
+                    TaskStatus.DONE.value
+                    if result["success"]
+                    else TaskStatus.FAILED.value
+                )
+
                 # Update job with results
                 update_simulation_job(
                     task_id,
-                    status=TaskStatus.DONE.value,
+                    status=final_status,
                     results=results_dict,
                 )
 
                 logger.info(
                     f"{simulation_type.capitalize()} simulation task {task_id} completed: "
-                    f"{result['total_simulations']} simulation(s) run"
+                    f"{result['total_simulations']} simulation(s) run, status={final_status}"
                 )
 
             except Exception as e:
                 traceback.print_exc()
+                capture_exception_to_sentry(e)
                 update_simulation_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
@@ -1912,6 +1943,7 @@ def run_simulation_task(
 
     except Exception as e:
         traceback.print_exc()
+        capture_exception_to_sentry(e)
         update_simulation_job(
             task_id,
             status=TaskStatus.FAILED.value,

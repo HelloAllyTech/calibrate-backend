@@ -30,6 +30,7 @@ from utils import (
     generate_presigned_download_url,
     is_job_timed_out,
     kill_processes_from_dict,
+    capture_exception_to_sentry,
 )
 
 # Job types that share the same queue
@@ -480,6 +481,8 @@ def evaluate_tts_provider(
 
     except subprocess.CalledProcessError as e:
         traceback.print_exc()
+        logger.error(f"TTS eval for {provider} failed, logging to Sentry: {e}")
+        capture_exception_to_sentry(e)
         return ProviderResult(
             provider=provider,
             success=False,
@@ -487,6 +490,7 @@ def evaluate_tts_provider(
         )
     except Exception as e:
         traceback.print_exc()
+        capture_exception_to_sentry(e)
         return ProviderResult(
             provider=provider,
             success=False,
@@ -706,6 +710,7 @@ def run_tts_evaluation_task(
 
             except Exception as e:
                 traceback.print_exc()
+                capture_exception_to_sentry(e)
                 update_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
@@ -716,6 +721,7 @@ def run_tts_evaluation_task(
 
     except Exception as e:
         traceback.print_exc()
+        capture_exception_to_sentry(e)
         update_job(
             task_id,
             status=TaskStatus.FAILED.value,

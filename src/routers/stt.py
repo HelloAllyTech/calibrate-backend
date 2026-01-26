@@ -29,6 +29,7 @@ from utils import (
     register_job_starter,
     is_job_timed_out,
     kill_processes_from_dict,
+    capture_exception_to_sentry,
 )
 
 # Job types that share the same queue
@@ -326,6 +327,8 @@ def evaluate_provider(
 
     except subprocess.CalledProcessError as e:
         traceback.print_exc()
+        logger.error(f"STT eval for {provider} failed, logging to Sentry: {e}")
+        capture_exception_to_sentry(e)
         return ProviderResult(
             provider=provider,
             success=False,
@@ -333,6 +336,7 @@ def evaluate_provider(
         )
     except Exception as e:
         traceback.print_exc()
+        capture_exception_to_sentry(e)
         return ProviderResult(
             provider=provider,
             success=False,
@@ -580,6 +584,7 @@ def run_evaluation_task(
 
             except Exception as e:
                 traceback.print_exc()
+                capture_exception_to_sentry(e)
                 update_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
@@ -590,6 +595,7 @@ def run_evaluation_task(
 
     except Exception as e:
         traceback.print_exc()
+        capture_exception_to_sentry(e)
         update_job(
             task_id,
             status=TaskStatus.FAILED.value,
@@ -733,9 +739,7 @@ async def get_evaluation_status(
     # Normalize metrics format for backward compatibility (list -> dict)
     for provider_result in provider_results:
         if provider_result.get("metrics"):
-            provider_result["metrics"] = _normalize_metrics(
-                provider_result["metrics"]
-            )
+            provider_result["metrics"] = _normalize_metrics(provider_result["metrics"])
 
     return TaskStatusResponse(
         task_id=task_id,

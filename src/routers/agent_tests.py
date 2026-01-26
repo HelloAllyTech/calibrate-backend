@@ -40,6 +40,7 @@ from utils import (
     try_start_queued_agent_test_job,
     register_job_starter,
     is_job_timed_out,
+    capture_exception_to_sentry,
 )
 
 # Job types that share the same queue
@@ -834,11 +835,23 @@ def _run_pense_test(
         failed = total_tests - passed
 
     error = None
-    if process.returncode != 0:
-        error = f"Command failed with exit code {process.returncode}"
+    # Check for failure: non-zero return code OR error traceback in stderr
+    has_error_in_stderr = "Traceback (most recent call last):" in stderr_content
+    is_failure = process.returncode != 0 or has_error_in_stderr
+
+    if is_failure:
+        if process.returncode != 0:
+            error = f"Command failed with exit code {process.returncode}: {stderr_content}"
+        else:
+            error = f"Command failed with error in output: {stderr_content}"
+        # Log CLI failure to Sentry
+        logger.error(f"{log_prefix} CLI failed, logging to Sentry: {error}")
+        capture_exception_to_sentry(
+            RuntimeError(f"{log_prefix} failed: {error}")
+        )
 
     return {
-        "success": process.returncode == 0,
+        "success": not is_failure,
         "total_tests": total_tests,
         "passed": passed,
         "failed": failed,
@@ -892,10 +905,15 @@ def run_llm_test_task(
                     log_prefix=f"LLM test {task_id}",
                 )
 
+                # Determine final status based on success
+                final_status = (
+                    TaskStatus.DONE.value if result["success"] else TaskStatus.FAILED.value
+                )
+
                 # Update job with results
                 update_agent_test_job(
                     task_id,
-                    status=TaskStatus.DONE.value,
+                    status=final_status,
                     results={
                         "total_tests": result["total_tests"],
                         "passed": result["passed"],
@@ -907,22 +925,24 @@ def run_llm_test_task(
                 )
 
                 logger.info(
-                    f"LLM test task {task_id} completed: {result['passed']}/{result['total_tests']} passed"
+                    f"LLM test task {task_id} completed: {result['passed']}/{result['total_tests']} passed, status={final_status}"
                 )
 
             except Exception as e:
                 traceback.print_exc()
+                capture_exception_to_sentry(e)
                 update_agent_test_job(
                     task_id,
-                    status=TaskStatus.DONE.value,
+                    status=TaskStatus.FAILED.value,
                     results={"error": f"Unexpected error during LLM test: {str(e)}"},
                 )
 
     except Exception as e:
         traceback.print_exc()
+        capture_exception_to_sentry(e)
         update_agent_test_job(
             task_id,
-            status=TaskStatus.DONE.value,
+            status=TaskStatus.FAILED.value,
             results={"error": f"Task failed: {str(e)}"},
         )
     finally:
@@ -1131,6 +1151,7 @@ def run_model_benchmark(
 
     except Exception as e:
         traceback.print_exc()
+        capture_exception_to_sentry(e)
         return ModelResult(
             model=model,
             success=False,
@@ -1325,33 +1346,40 @@ def run_benchmark_task(
                     f"Uploaded benchmark outputs to s3://{s3_bucket}/{results_prefix}/outputs/"
                 )
 
+                # Determine final status based on success
+                final_status = (
+                    TaskStatus.DONE.value if all_succeeded else TaskStatus.FAILED.value
+                )
+
                 # Update job with results
                 update_agent_test_job(
                     task_id,
-                    status=TaskStatus.DONE.value,
+                    status=final_status,
                     results={
                         "model_results": [r.model_dump() for r in model_results],
                         "leaderboard_summary": leaderboard_summary,
                         "results_s3_prefix": results_prefix,
-                        "error": None if all_succeeded else f"Some models failed",
+                        "error": None if all_succeeded else "Some models failed",
                     },
                 )
 
-                logger.info(f"Benchmark task {task_id} completed")
+                logger.info(f"Benchmark task {task_id} completed, status={final_status}")
 
             except Exception as e:
                 traceback.print_exc()
+                capture_exception_to_sentry(e)
                 update_agent_test_job(
                     task_id,
-                    status=TaskStatus.DONE.value,
+                    status=TaskStatus.FAILED.value,
                     results={"error": f"Unexpected error during benchmark: {str(e)}"},
                 )
 
     except Exception as e:
         traceback.print_exc()
+        capture_exception_to_sentry(e)
         update_agent_test_job(
             task_id,
-            status=TaskStatus.DONE.value,
+            status=TaskStatus.FAILED.value,
             results={"error": f"Task failed: {str(e)}"},
         )
     finally:

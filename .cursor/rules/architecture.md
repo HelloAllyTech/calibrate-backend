@@ -343,11 +343,12 @@ The `is_job_timed_out(updated_at)` utility function in `utils.py` handles timest
 
 **Important**: SQLite stores timestamps in UTC via `CURRENT_TIMESTAMP`. The timeout function uses `datetime.utcnow()` to match. Using `datetime.now()` would cause timezone mismatches and incorrect timeout detection (e.g., jobs marked as timed out immediately after creation if server is ahead of UTC).
 
-| Utility Function             | Location   | Purpose                              |
-| ---------------------------- | ---------- | ------------------------------------ |
-| `is_job_timed_out()`         | `utils.py` | Checks if job has exceeded timeout   |
-| `kill_process_group()`       | `utils.py` | Kills a single process group by PID  |
-| `kill_processes_from_dict()` | `utils.py` | Kills multiple processes from a dict |
+| Utility Function               | Location   | Purpose                                      |
+| ------------------------------ | ---------- | -------------------------------------------- |
+| `is_job_timed_out()`           | `utils.py` | Checks if job has exceeded timeout           |
+| `kill_process_group()`         | `utils.py` | Kills a single process group by PID          |
+| `kill_processes_from_dict()`   | `utils.py` | Kills multiple processes from a dict         |
+| `capture_exception_to_sentry()`| `utils.py` | Logs exception to Sentry as unhandled error  |
 
 ### STT/TTS Evaluation Incremental Updates
 
@@ -897,14 +898,36 @@ async def start_task(request: TaskRequest, user_id: str = Depends(get_current_us
 # Task function with queue trigger on completion
 def run_task(task_id: str, request: TaskRequest):
     try:
-        # ... do work ...
-        update_job(task_id, status=TaskStatus.DONE.value, results={...})
+        # ... do work (e.g., run CLI command) ...
+        result = run_cli_command(...)  # Returns {"success": bool, "error": str|None, ...}
+        
+        # Determine status based on whether the command succeeded
+        final_status = TaskStatus.DONE.value if result["success"] else TaskStatus.FAILED.value
+        update_job(task_id, status=final_status, results={...})
     except Exception as e:
+        traceback.print_exc()
+        capture_exception_to_sentry(e)  # Log to Sentry as unhandled
         update_job(task_id, status=TaskStatus.FAILED.value, results={"error": str(e)})
     finally:
         # Start next queued job if capacity allows
         try_start_queued_job(JOB_TYPES)
 ```
+
+**Sentry Error Logging**: All job failures are logged to Sentry using the `capture_exception_to_sentry()` utility function from `utils.py`. This function:
+- Marks exceptions as **unhandled** so they appear as unresolved issues in Sentry (not handled/resolved)
+- Calls `sentry_sdk.flush(timeout=2)` to ensure events are sent immediately (critical for background tasks that may complete before Sentry's async queue is processed)
+
+This applies to:
+- STT/TTS evaluation failures (provider-level and task-level)
+- Agent test and benchmark failures (model-level and task-level)
+- Simulation failures (text and voice)
+- CLI command failures (non-zero exit codes OR tracebacks in stderr) - logged with full stderr output
+
+**CLI Failure Detection**: The pense CLI may catch exceptions internally and exit with code 0 even when errors occur. To handle this, CLI wrapper functions check for BOTH:
+1. Non-zero return code (`process.returncode != 0`)
+2. Error tracebacks in stderr (`"Traceback (most recent call last):" in stderr`)
+
+If either condition is true, the job is marked as `FAILED` and logged to Sentry. This ensures errors are properly surfaced even when the CLI doesn't set an appropriate exit code.
 
 ### Incremental Job Processing Pattern (STT/TTS Evaluations, Simulations, Agent Tests)
 

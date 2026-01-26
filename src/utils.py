@@ -9,9 +9,25 @@ from enum import Enum
 from typing import List, Optional, Dict, Any, Union
 
 import boto3
+import sentry_sdk
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+def capture_exception_to_sentry(exception: Exception) -> None:
+    """
+    Capture an exception to Sentry and mark it as unhandled.
+
+    This ensures job failures appear as unresolved issues in Sentry
+    rather than handled/resolved exceptions.
+    """
+    sentry_sdk.capture_exception(
+        exception,
+        hint={"mechanism": {"type": "generic", "handled": False}},
+    )
+    # Flush to ensure the event is sent immediately (important for background tasks)
+    sentry_sdk.flush(timeout=2)
 
 # Timeout threshold for marking jobs as failed (5 minutes)
 JOB_TIMEOUT_MINUTES = 5
