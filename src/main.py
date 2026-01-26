@@ -112,6 +112,7 @@ class PresignedURLResponse(BaseModel):
 
 
 @app.get("/")
+@app.head("/")
 def read_root():
     return {"message": "Health check successful!"}
 

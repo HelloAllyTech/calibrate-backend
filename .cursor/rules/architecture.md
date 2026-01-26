@@ -190,7 +190,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 #### Utilities
 
-- `GET /` - Health check
+- `GET /` or `HEAD /` - Health check (HEAD supported for uptime monitors)
 - `POST /presigned-url` - Generate S3 presigned URL for uploads
 
 ---
