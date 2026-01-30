@@ -643,9 +643,22 @@ OPENROUTER_API_KEY=xxx
     "provider": "elevenlabs",
     "voice_id": "xxx"
   },
-  "speaks_first": true
+  "settings": {
+    "agent_speaks_first": true,
+    "max_assistant_turns": 20
+  },
+  "system_tools": {
+    "end_call": true
+  },
+  "data_extraction_fields": []
 }
 ```
+
+**Simulation Config Generation**: When running simulations, `_build_pense_simulation_config()` builds the pense config from agent/personas/scenarios/metrics. Key fields always included:
+
+- `evaluation_criteria` - Built from linked metrics (name + description)
+- `settings.agent_speaks_first` - Defaults to `true` if not specified in agent config
+- `settings.max_turns` - Mapped from agent config's `settings.max_assistant_turns` (defaults to `50` if not set)
 
 ### Test Case Configuration Schema
 

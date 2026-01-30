@@ -327,7 +327,6 @@ def evaluate_provider(
 
     except subprocess.CalledProcessError as e:
         traceback.print_exc()
-        logger.error(f"STT eval for {provider} failed, logging to Sentry: {e}")
         capture_exception_to_sentry(e)
         return ProviderResult(
             provider=provider,
@@ -739,7 +738,9 @@ async def get_evaluation_status(
     # Normalize metrics format for backward compatibility (list -> dict)
     for provider_result in provider_results:
         if provider_result.get("metrics"):
-            provider_result["metrics"] = _normalize_metrics(provider_result["metrics"])
+            provider_result["metrics"] = _normalize_metrics(
+                provider_result["metrics"]
+            )
 
     return TaskStatusResponse(
         task_id=task_id,
