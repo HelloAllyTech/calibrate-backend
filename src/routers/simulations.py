@@ -806,7 +806,7 @@ async def delete_simulation_endpoint(
 # ============ Run Simulation API ============
 
 
-def _build_pense_simulation_config(
+def _build_calibrate_simulation_config(
     agent: Dict[str, Any],
     personas: List[Dict[str, Any]],
     scenarios: List[Dict[str, Any]],
@@ -814,7 +814,7 @@ def _build_pense_simulation_config(
     simulation_type: str = "text",
 ) -> Dict[str, Any]:
     """
-    Build the pense simulation config from agent, personas, scenarios, and metrics.
+    Build the calibrate simulation config from agent, personas, scenarios, and metrics.
 
     Args:
         agent: Agent dict with config containing system_prompt and llm.model
@@ -944,8 +944,8 @@ def _parse_text_simulation_directory(
 
     Args:
         sim_dir: Path to the simulation directory
-        personas_list: Optional list of personas from pense config (used as fallback)
-        scenarios_list: Optional list of scenarios from pense config (used as fallback)
+        personas_list: Optional list of personas from calibrate config (used as fallback)
+        scenarios_list: Optional list of scenarios from calibrate config (used as fallback)
 
     Returns:
         Dict with simulation result data, or None if directory doesn't exist
@@ -1079,9 +1079,9 @@ def _update_text_simulation_intermediate_results(
         return prev_state
 
     # Build current state for change detection
-    # Note: Don't read metrics.json during in-progress - pense creates it incrementally
+    # Note: Don't read metrics.json during in-progress - calibrate creates it incrementally
     # and reading it before all simulations complete will give incomplete metrics.
-    # The final metrics are read after the process completes in _run_pense_text_simulation.
+    # The final metrics are read after the process completes in _run_calibrate_text_simulation.
     current_state = (
         completed_count,
         tuple(sorted(transcript_lengths)),
@@ -1104,9 +1104,9 @@ def _update_text_simulation_intermediate_results(
     return current_state
 
 
-def _run_pense_text_simulation(
+def _run_calibrate_text_simulation(
     model: str,
-    pense_config: Dict[str, Any],
+    calibrate_config: Dict[str, Any],
     input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
@@ -1115,12 +1115,12 @@ def _run_pense_text_simulation(
     log_prefix: str = "LLM simulation",
 ) -> Dict[str, Any]:
     """
-    Run pense llm simulations run command and return parsed results.
+    Run calibrate llm simulations run command and return parsed results.
     Updates the database incrementally as each simulation completes.
 
     Args:
         model: Model name to use
-        pense_config: The pense config dict
+        calibrate_config: The calibrate config dict
         input_dir: Directory to write config files
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
@@ -1134,7 +1134,7 @@ def _run_pense_text_simulation(
     s3 = get_s3_client()
 
     # Update config with model
-    config = pense_config.copy()
+    config = calibrate_config.copy()
     config["params"] = {"model": model}
 
     # Resolve directories to absolute paths
@@ -1152,14 +1152,14 @@ def _run_pense_text_simulation(
         json.dump(config, f, indent=2)
 
     # Get personas and scenarios lists for intermediate results
-    personas_list = pense_config.get("personas", [])
-    scenarios_list = pense_config.get("scenarios", [])
+    personas_list = calibrate_config.get("personas", [])
+    scenarios_list = calibrate_config.get("scenarios", [])
     expected_total = len(personas_list) * len(scenarios_list)
 
-    # Run pense llm simulations run command
+    # Run calibrate llm simulations run command
     # Use absolute paths for config and output
     run_cmd = [
-        "pense",
+        "calibrate",
         "llm",
         "simulations",
         "run",
@@ -1497,8 +1497,8 @@ def _parse_voice_simulation_in_progress(
 
     Args:
         sim_dir: Path to the simulation directory
-        personas_list: Optional list of personas from pense config (used as fallback)
-        scenarios_list: Optional list of scenarios from pense config (used as fallback)
+        personas_list: Optional list of personas from calibrate config (used as fallback)
+        scenarios_list: Optional list of scenarios from calibrate config (used as fallback)
 
     Returns:
         Dict with simulation data (no audio URLs), or None if simulation hasn't started
@@ -1562,8 +1562,8 @@ def _parse_voice_simulation_in_progress(
     }
 
 
-def _run_pense_voice_simulation(
-    pense_config: Dict[str, Any],
+def _run_calibrate_voice_simulation(
+    calibrate_config: Dict[str, Any],
     input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
@@ -1573,11 +1573,11 @@ def _run_pense_voice_simulation(
     log_prefix: str = "Voice simulation",
 ) -> Dict[str, Any]:
     """
-    Run pense agent simulation command and return parsed results.
+    Run calibrate agent simulation command and return parsed results.
     Updates the database incrementally as each simulation completes.
 
     Args:
-        pense_config: The pense config dict (for voice simulations)
+        calibrate_config: The calibrate config dict (for voice simulations)
         input_dir: Directory to write config files
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
@@ -1605,11 +1605,11 @@ def _run_pense_voice_simulation(
     config_file_name = "simulation_config"
     config_file = input_dir / f"{config_file_name}.json"
     with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(pense_config, f, indent=2)
+        json.dump(calibrate_config, f, indent=2)
 
-    # Run pense agent simulation command as a non-blocking process
+    # Run calibrate agent simulation command as a non-blocking process
     run_cmd = [
-        "pense",
+        "calibrate",
         "agent",
         "simulation",
         "-c",
@@ -1658,8 +1658,8 @@ def _run_pense_voice_simulation(
         completed_results = []  # Results for completed simulations
 
         # Get personas and scenarios lists for intermediate results
-        personas_list = pense_config.get("personas", [])
-        scenarios_list = pense_config.get("scenarios", [])
+        personas_list = calibrate_config.get("personas", [])
+        scenarios_list = calibrate_config.get("scenarios", [])
         expected_total = len(personas_list) * len(scenarios_list)
         logger.info(
             f"{log_prefix}: Expecting {expected_total} simulations ({len(personas_list)} personas x {len(scenarios_list)} scenarios)"
@@ -1870,8 +1870,8 @@ def run_simulation_task(
             temp_path = Path(temp_dir)
 
             try:
-                # Build pense config
-                pense_config = _build_pense_simulation_config(
+                # Build calibrate config
+                calibrate_config = _build_calibrate_simulation_config(
                     agent, personas, scenarios, metrics, simulation_type=simulation_type
                 )
 
@@ -1879,11 +1879,11 @@ def run_simulation_task(
                 input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
 
-                # Run pense simulation based on type
+                # Run calibrate simulation based on type
                 results_prefix = f"simulations/runs/{task_id}"
                 if simulation_type == "voice":
-                    result = _run_pense_voice_simulation(
-                        pense_config=pense_config,
+                    result = _run_calibrate_voice_simulation(
+                        calibrate_config=calibrate_config,
                         input_dir=input_dir,
                         output_dir=output_dir,
                         s3_bucket=s3_bucket,
@@ -1893,10 +1893,10 @@ def run_simulation_task(
                         log_prefix=f"Voice simulation {task_id}",
                     )
                 else:
-                    model_to_use = pense_config["params"]["model"]
-                    result = _run_pense_text_simulation(
+                    model_to_use = calibrate_config["params"]["model"]
+                    result = _run_calibrate_text_simulation(
                         model=model_to_use,
-                        pense_config=pense_config,
+                        calibrate_config=calibrate_config,
                         input_dir=input_dir,
                         output_dir=output_dir,
                         s3_bucket=s3_bucket,
@@ -1969,7 +1969,7 @@ async def run_simulation_endpoint(
     """
     Run a simulation with personas, scenarios, and metrics.
 
-    This starts a background task that runs the pense LLM simulations command
+    This starts a background task that runs the calibrate LLM simulations command
     with the agent's config and the simulation's personas, scenarios, and metrics.
 
     Uses the agent linked to the simulation and its LLM model configuration.

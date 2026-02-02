@@ -212,9 +212,9 @@ def evaluate_provider(
     try:
         s3 = get_s3_client()
 
-        # Run pense STT eval command
+        # Run calibrate STT eval command
         eval_cmd = [
-            "pense",
+            "calibrate",
             "stt",
             "eval",
             "-p",
@@ -405,7 +405,7 @@ def run_evaluation_task(
                 output_dir = temp_path / "output"
                 output_dir.mkdir()
 
-                # Run pense STT eval for all providers in parallel
+                # Run calibrate STT eval for all providers in parallel
                 provider_results = []
 
                 logger.info(f"Running {len(request.providers)} providers in parallel")
@@ -469,12 +469,12 @@ def run_evaluation_task(
                     )
                     return
 
-                # Run pense STT leaderboard command
+                # Run calibrate STT leaderboard command
                 leaderboard_dir = temp_path / "leaderboard"
                 leaderboard_dir.mkdir()
 
                 leaderboard_cmd = [
-                    "pense",
+                    "calibrate",
                     "stt",
                     "leaderboard",
                     "-o",
@@ -738,9 +738,7 @@ async def get_evaluation_status(
     # Normalize metrics format for backward compatibility (list -> dict)
     for provider_result in provider_results:
         if provider_result.get("metrics"):
-            provider_result["metrics"] = _normalize_metrics(
-                provider_result["metrics"]
-            )
+            provider_result["metrics"] = _normalize_metrics(provider_result["metrics"])
 
     return TaskStatusResponse(
         task_id=task_id,

@@ -293,9 +293,9 @@ def evaluate_tts_provider(
     try:
         s3 = get_s3_client()
 
-        # Run pense TTS eval command
+        # Run calibrate TTS eval command
         eval_cmd = [
-            "pense",
+            "calibrate",
             "tts",
             "eval",
             "-p",
@@ -529,7 +529,7 @@ def run_tts_evaluation_task(
                 output_dir = temp_path / "output"
                 output_dir.mkdir()
 
-                # Run pense TTS eval for all providers in parallel
+                # Run calibrate TTS eval for all providers in parallel
                 provider_results = []
 
                 logger.info(
@@ -595,12 +595,12 @@ def run_tts_evaluation_task(
                     )
                     return
 
-                # Run pense TTS leaderboard command
+                # Run calibrate TTS leaderboard command
                 leaderboard_dir = temp_path / "leaderboard"
                 leaderboard_dir.mkdir()
 
                 leaderboard_cmd = [
-                    "pense",
+                    "calibrate",
                     "tts",
                     "leaderboard",
                     "-o",

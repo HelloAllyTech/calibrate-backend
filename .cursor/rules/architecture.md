@@ -1,20 +1,20 @@
 ---
-description: "Pense Backend Architecture - AI Agent Testing & Evaluation Platform"
+description: "Calibrate Backend Architecture - AI Agent Testing & Evaluation Platform"
 alwaysApply: true
 ---
 
-# Pense Backend Architecture
+# Calibrate Backend Architecture
 
 ## Project Overview
 
-**Pense Backend** is a FastAPI-based REST API that serves as the backend for an AI agent testing and evaluation platform. It provides capabilities for:
+**Calibrate Backend** is a FastAPI-based REST API that serves as the backend for an AI agent testing and evaluation platform. It provides capabilities for:
 
 1. **Speech-to-Text (STT) Evaluation** - Benchmark multiple STT providers against ground truth transcriptions
 2. **Text-to-Speech (TTS) Evaluation** - Benchmark multiple TTS providers for quality metrics
 3. **LLM Agent Testing** - Run unit tests and benchmarks on LLM-based agents
 4. **Voice/Chat Simulations** - Run simulated conversations between AI agents and personas across various scenarios
 
-The backend wraps the `pense` CLI tool and orchestrates evaluation jobs while providing a RESTful API interface.
+The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs while providing a RESTful API interface.
 
 ---
 
@@ -29,14 +29,14 @@ The backend wraps the `pense` CLI tool and orchestrates evaluation jobs while pr
 | **Monitoring**       | Sentry             | Error tracking and performance monitoring                    |
 | **Package Manager**  | uv                 | Python dependency management                                 |
 | **Containerization** | Docker             | Deployment                                                   |
-| **CLI Tool**         | pense              | Core evaluation/simulation engine                            |
+| **CLI Tool**         | calibrate          | Core evaluation/simulation engine                            |
 
 ---
 
 ## Project Structure
 
 ```
-pense-backend/
+calibrate-backend/
 ├── src/
 │   ├── main.py              # FastAPI app entry point, lifespan management
 │   ├── db.py                # SQLite database layer (~2300 lines)
@@ -58,7 +58,7 @@ pense-backend/
 │       ├── tts.py           # TTS provider evaluation
 │       └── jobs.py          # Job listing API (STT/TTS eval jobs)
 ├── db/
-│   └── pense.db             # SQLite database file
+│   └── calibrate.db         # SQLite database file
 ├── pyproject.toml           # Python project configuration
 ├── Dockerfile               # Container build configuration
 └── docker-compose.yml       # Container orchestration
@@ -314,11 +314,11 @@ This prevents orphaned processes from accumulating across server restarts and fr
 
 Jobs can be deleted via DELETE endpoints:
 
-| Endpoint                             | Table             | Notes                                                              |
-| ------------------------------------ | ----------------- | ------------------------------------------------------------------ |
-| `DELETE /jobs/{job_uuid}`            | `jobs`            | STT/TTS eval jobs; kills processes (no ports needed)               |
-| `DELETE /agent-tests/job/{job_uuid}` | `agent_test_jobs` | Agent test jobs; no process cleanup (blocking call)                |
-| `DELETE /simulations/run/{job_uuid}` | `simulation_jobs` | Simulation jobs; kills process, releases port (voice only)         |
+| Endpoint                             | Table             | Notes                                                      |
+| ------------------------------------ | ----------------- | ---------------------------------------------------------- |
+| `DELETE /jobs/{job_uuid}`            | `jobs`            | STT/TTS eval jobs; kills processes (no ports needed)       |
+| `DELETE /agent-tests/job/{job_uuid}` | `agent_test_jobs` | Agent test jobs; no process cleanup (blocking call)        |
+| `DELETE /simulations/run/{job_uuid}` | `simulation_jobs` | Simulation jobs; kills process, releases port (voice only) |
 
 When deleting a running job:
 
@@ -343,12 +343,12 @@ The `is_job_timed_out(updated_at)` utility function in `utils.py` handles timest
 
 **Important**: SQLite stores timestamps in UTC via `CURRENT_TIMESTAMP`. The timeout function uses `datetime.utcnow()` to match. Using `datetime.now()` would cause timezone mismatches and incorrect timeout detection (e.g., jobs marked as timed out immediately after creation if server is ahead of UTC).
 
-| Utility Function               | Location   | Purpose                                      |
-| ------------------------------ | ---------- | -------------------------------------------- |
-| `is_job_timed_out()`           | `utils.py` | Checks if job has exceeded timeout           |
-| `kill_process_group()`         | `utils.py` | Kills a single process group by PID          |
-| `kill_processes_from_dict()`   | `utils.py` | Kills multiple processes from a dict         |
-| `capture_exception_to_sentry()`| `utils.py` | Logs exception to Sentry as unhandled error  |
+| Utility Function                | Location   | Purpose                                     |
+| ------------------------------- | ---------- | ------------------------------------------- |
+| `is_job_timed_out()`            | `utils.py` | Checks if job has exceeded timeout          |
+| `kill_process_group()`          | `utils.py` | Kills a single process group by PID         |
+| `kill_processes_from_dict()`    | `utils.py` | Kills multiple processes from a dict        |
+| `capture_exception_to_sentry()` | `utils.py` | Logs exception to Sentry as unhandled error |
 
 ### STT/TTS Evaluation Incremental Updates
 
@@ -368,43 +368,46 @@ STT and TTS evaluations run multiple providers with a maximum of 2 concurrent ex
 
 **Response Model (`TaskStatusResponse`):**
 
-| Field                 | Type                        | Description                                                    |
-| --------------------- | --------------------------- | -------------------------------------------------------------- |
-| `task_id`             | `str`                       | Job UUID                                                       |
-| `status`              | `str`                       | Job status: `queued`, `in_progress`, `done`, `failed`          |
-| `language`            | `Optional[str]`             | Language from job details (e.g., "english", "hindi")           |
-| `provider_results`    | `Optional[List[ProviderResult]]` | Results per provider                                      |
-| `leaderboard_summary` | `Optional[List[Dict]]`      | Summary after all providers complete                           |
-| `error`               | `Optional[str]`             | Error message if job failed                                    |
+| Field                 | Type                             | Description                                           |
+| --------------------- | -------------------------------- | ----------------------------------------------------- |
+| `task_id`             | `str`                            | Job UUID                                              |
+| `status`              | `str`                            | Job status: `queued`, `in_progress`, `done`, `failed` |
+| `language`            | `Optional[str]`                  | Language from job details (e.g., "english", "hindi")  |
+| `provider_results`    | `Optional[List[ProviderResult]]` | Results per provider                                  |
+| `leaderboard_summary` | `Optional[List[Dict]]`           | Summary after all providers complete                  |
+| `error`               | `Optional[str]`                  | Error message if job failed                           |
 
 **Response Model (`ProviderResult`):**
 
-| Field      | Type                               | When Present                                                          |
-| ---------- | ---------------------------------- | --------------------------------------------------------------------- |
-| `provider` | `str`                              | Always                                                                |
-| `success`  | `Optional[bool]`                   | `None` while queued/processing, `True`/`False` when complete (see below) |
-| `message`  | `str`                              | `"Queued..."` before start, `"Processing..."` in progress, `"Completed"` or error message when done |
-| `metrics`  | `Optional[Dict \| List[Dict]]`     | When `metrics.json` exists (provider complete); dict in new format, list for backward compatibility |
-| `results`  | `Optional[List[Dict]]`             | `null` while queued, partial rows during execution, complete when done |
+| Field      | Type                           | When Present                                                                                        |
+| ---------- | ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `provider` | `str`                          | Always                                                                                              |
+| `success`  | `Optional[bool]`               | `None` while queued/processing, `True`/`False` when complete (see below)                            |
+| `message`  | `str`                          | `"Queued..."` before start, `"Processing..."` in progress, `"Completed"` or error message when done |
+| `metrics`  | `Optional[Dict \| List[Dict]]` | When `metrics.json` exists (provider complete); dict in new format, list for backward compatibility |
+| `results`  | `Optional[List[Dict]]`         | `null` while queued, partial rows during execution, complete when done                              |
 
-**TTS success determination**: A TTS provider is marked `success: true` only if at least one text was successfully synthesized (has an `audio_path` in results). If the pense CLI completes but no audio files were generated (e.g., voice not found, API errors), `success: false` is returned with an error message. This prevents false positives where the process exits normally but all synthesis attempts failed.
+**TTS success determination**: A TTS provider is marked `success: true` only if at least one text was successfully synthesized (has an `audio_path` in results). If the calibrate CLI completes but no audio files were generated (e.g., voice not found, API errors), `success: false` is returned with an error message. This prevents false positives where the process exits normally but all synthesis attempts failed.
 
 **All requested providers always included**: The status API reads the list of requested providers from `job.details.providers` and ensures all are present in the response. Providers that haven't started processing yet are shown with `success: null`, `message: "Queued..."`, and `metrics`/`results` as `null`. This allows clients to see the full list of providers and their states (queued → processing → completed) without needing to track the original request.
 
 **Metrics normalization**: The status API normalizes old list-of-dicts metrics format to the new dict format before returning. The `_normalize_metrics()` helper handles two old formats:
+
 - Simple metrics: `[{"wer": 2.4}, {"string_similarity": 0.15}, ...]` → merged into result dict
 - Latency metrics: `[{"metric_name": "ttfb", "mean": 0.1, ...}, ...]` → uses `metric_name` as key, rest as value
 
 This ensures clients always receive metrics in dict format (e.g., `{"wer": 2.4, "ttfb": {"mean": 0.1, ...}}`) regardless of when the job was created.
 
-**STT Metrics** (returned by `pense stt eval`):
+**STT Metrics** (returned by `calibrate stt eval`):
+
 - `wer` - Word Error Rate (float)
 - `string_similarity` - String similarity score (float)
 - `llm_judge_score` - LLM judge accuracy score (float)
 - `processing_time` - Processing time stats: `{mean, std, values}` (may be absent/null)
 - `ttfb` - Time to First Byte stats: `{mean, std, values}` (may be absent/null)
 
-**TTS Metrics** (returned by `pense tts eval`):
+**TTS Metrics** (returned by `calibrate tts eval`):
+
 - `llm_judge_score` - LLM judge accuracy score (float)
 - `ttfb` - Time to First Byte stats: `{mean, std, values}` (may be absent/null)
 
@@ -419,14 +422,14 @@ This allows clients to track progress per-provider, see which providers have com
 
 ### Simulation Incremental Updates (Text and Voice)
 
-Both text simulations (`pense llm simulations run`) and voice simulations (`pense agent simulation`) run multiple persona-scenario combinations. Each combination creates a folder named `simulation_persona_<n>_scenario_<m>`. The backend monitors for these folders during execution and updates the database incrementally:
+Both text simulations (`calibrate llm simulations run`) and voice simulations (`calibrate agent simulation`) run multiple persona-scenario combinations. Each combination creates a folder named `simulation_persona_<n>_scenario_<m>`. The backend monitors for these folders during execution and updates the database incrementally:
 
 - **Polling interval**: Every 2 seconds while the subprocess is running
 - **Completion marker**: A simulation folder is considered complete when `evaluation_results.csv` exists (created after the LLM judge evaluation step finishes)
 - **In-progress detection**: A simulation is considered in-progress when `transcript.json` or `config.json` exists but `evaluation_results.csv` does not
 - **Persona/scenario data resolution** (both text and voice):
   1. First try reading from `config.json` in the simulation directory
-  2. Fallback: parse directory name `simulation_persona_N_scenario_M` to get 1-based indices, then look up `personas_list[N-1]` and `scenarios_list[M-1]` from the original pense config
+  2. Fallback: parse directory name `simulation_persona_N_scenario_M` to get 1-based indices, then look up `personas_list[N-1]` and `scenarios_list[M-1]` from the original calibrate config
 - **During execution**: Status API returns partial `simulation_results` including:
   - **For completed simulations**:
     - `persona` and `scenario` data (always populated via config.json or fallback)
@@ -438,7 +441,7 @@ Both text simulations (`pense llm simulations run`) and voice simulations (`pens
     - `evaluation_results` is `null`
     - **Voice simulations**: No audio URLs returned until evaluation completes (all audio fields are `null`)
   - Plus `completed_simulations` count for progress tracking (counts only fully completed simulations)
-  - **`metrics` field is `null` during in-progress**: The `pense` CLI creates `metrics.json` incrementally as each simulation completes, so reading it before all simulations finish would give incomplete aggregate data (e.g., `values` array with fewer entries than expected). The backend intentionally does NOT read `metrics.json` until the job completes.
+  - **`metrics` field is `null` during in-progress**: The `calibrate` CLI creates `metrics.json` incrementally as each simulation completes, so reading it before all simulations finish would give incomplete aggregate data (e.g., `values` array with fewer entries than expected). The backend intentionally does NOT read `metrics.json` until the job completes.
 - **On completion**: Final aggregated `metrics` (from `metrics.json`) are added to the response only after the subprocess exits
 - **Presigned URL handling** (voice simulations):
   - **During in-progress**: No audio URLs are returned for simulations until their `evaluation_results` are available. This means:
@@ -478,7 +481,7 @@ Benchmark jobs (`llm-benchmark`) run multiple models in parallel, with per-test 
 - **Polling interval**: Every 2 seconds while any model is still running
 - **Thread-safe updates**: Uses `threading.Lock` when updating shared results to prevent race conditions
 - **Output discovery**: Uses `os.walk()` on the output directory to find all `results.json` and `metrics.json` files, then matches them to models by folder name
-- **Model name matching**: `_match_model_to_folder()` handles various pense naming conventions:
+- **Model name matching**: `_match_model_to_folder()` handles various calibrate naming conventions:
   - `openai/gpt-4` → `openai_gpt-4` (single underscore)
   - `openai/gpt-4` → `openai__gpt-4` (double underscore)
   - `openai/gpt-4` → `openai-gpt-4` (dash)
@@ -509,7 +512,7 @@ This ensures consistent array length and allows clients to show progress for eac
 
 **S3 Upload Structure for Benchmarks:**
 
-Benchmarks use `skip_s3_upload=True` for individual model runs, then upload once at the end to preserve the pense CLI output structure:
+Benchmarks use `skip_s3_upload=True` for individual model runs, then upload once at the end to preserve the calibrate CLI output structure:
 
 ```
 s3://bucket/agent-tests/benchmarks/{task_id}/
@@ -525,34 +528,34 @@ s3://bucket/agent-tests/benchmarks/{task_id}/
     llm_leaderboard.csv
 ```
 
-This avoids duplicate uploads (each model uploading everyone's files) and matches the local pense output structure.
+This avoids duplicate uploads (each model uploading everyone's files) and matches the local calibrate output structure.
 
 ---
 
 ## External Integrations
 
-### Pense CLI
+### Calibrate CLI
 
-The backend orchestrates the `pense` CLI tool for actual evaluations:
+The backend orchestrates the `calibrate` CLI tool for actual evaluations:
 
 ```bash
 # STT Evaluation
-pense stt eval -p <provider> -l <language> -i <input_dir> -o <output_dir>
-pense stt leaderboard -o <output_dir> -s <summary_dir>
+calibrate stt eval -p <provider> -l <language> -i <input_dir> -o <output_dir>
+calibrate stt leaderboard -o <output_dir> -s <summary_dir>
 
 # TTS Evaluation
-pense tts eval -p <provider> -l <language> -i <input_csv> -o <output_dir>
-pense tts leaderboard -o <output_dir> -s <summary_dir>
+calibrate tts eval -p <provider> -l <language> -i <input_csv> -o <output_dir>
+calibrate tts leaderboard -o <output_dir> -s <summary_dir>
 
 # LLM Tests
-pense llm tests run -c <config.json> -o <output_dir> -m <model>
-pense llm tests leaderboard -o <output_dir> -s <summary_dir>
+calibrate llm tests run -c <config.json> -o <output_dir> -m <model>
+calibrate llm tests leaderboard -o <output_dir> -s <summary_dir>
 
 # LLM Simulations
-pense llm simulations run -c <config.json> -o <output_dir> -m <model>
+calibrate llm simulations run -c <config.json> -o <output_dir> -m <model>
 
 # Voice Agent Simulation
-pense agent simulation -c <config.json> -o <output_dir>
+calibrate agent simulation -c <config.json> -o <output_dir>
 ```
 
 ### AWS S3
@@ -586,7 +589,7 @@ Required environment variables:
 
 ```bash
 # Database
-DB_ROOT_DIR=/appdata/db          # Directory containing pense.db
+DB_ROOT_DIR=/appdata/db          # Directory containing calibrate.db
 
 # Job Queue
 MAX_CONCURRENT_JOBS=2            # Max concurrent jobs per queue type (default: 2)
@@ -654,7 +657,7 @@ OPENROUTER_API_KEY=xxx
 }
 ```
 
-**Simulation Config Generation**: When running simulations, `_build_pense_simulation_config()` builds the pense config from agent/personas/scenarios/metrics. Key fields always included:
+**Simulation Config Generation**: When running simulations, `_build_calibrate_simulation_config()` builds the calibrate config from agent/personas/scenarios/metrics. Key fields always included:
 
 - `evaluation_criteria` - Built from linked metrics (name + description)
 - `settings.agent_speaks_first` - Defaults to `true` if not specified in agent config
@@ -700,7 +703,7 @@ OPENROUTER_API_KEY=xxx
 
 ### 2. Threading over Async Tasks
 
-- **Rationale**: Long-running subprocess calls to `pense` CLI
+- **Rationale**: Long-running subprocess calls to `calibrate` CLI
 - **Implementation**: Python `threading.Thread` with `daemon=True`
 - **Recovery**: Job details stored in DB, recovered on app restart
 
@@ -773,8 +776,8 @@ Key Python packages:
 
 External:
 
-- `pense` CLI (installed via wheel file: `pense-0.1.0-py3-none-any.whl`)
-- `ffmpeg` - Required by pense CLI for audio processing (TTS, voice simulations)
+- `calibrate` CLI (installed via wheel file: `calibrate-0.1.0-py3-none-any.whl`)
+- `ffmpeg` - Required by calibrate CLI for audio processing (TTS, voice simulations)
 - `nltk` data (`punkt_tab`) - Required by pipecat for sentence tokenization; pre-downloaded in Dockerfile to avoid runtime network issues
 
 ---
@@ -784,12 +787,12 @@ External:
 ### Docker Build
 
 ```bash
-docker build -t pense-backend .
+docker build -t calibrate-backend .
 ```
 
 **Build gotcha**: The Dockerfile uses two separate package installation methods:
 
-- `pip install` for the pense wheel (includes pipecat, nltk, etc.)
+- `pip install` for the calibrate wheel (includes pipecat, nltk, etc.)
 - `uv sync` for project dependencies (fastapi, boto3, etc.)
 
 When running Python commands during build that need packages from the wheel, use `python` directly (not `uv run python`).
@@ -913,7 +916,7 @@ def run_task(task_id: str, request: TaskRequest):
     try:
         # ... do work (e.g., run CLI command) ...
         result = run_cli_command(...)  # Returns {"success": bool, "error": str|None, ...}
-        
+
         # Determine status based on whether the command succeeded
         final_status = TaskStatus.DONE.value if result["success"] else TaskStatus.FAILED.value
         update_job(task_id, status=final_status, results={...})
@@ -927,16 +930,19 @@ def run_task(task_id: str, request: TaskRequest):
 ```
 
 **Sentry Error Logging**: All job failures are logged to Sentry using the `capture_exception_to_sentry()` utility function from `utils.py`. This function:
+
 - Marks exceptions as **unhandled** so they appear as unresolved issues in Sentry (not handled/resolved)
 - Calls `sentry_sdk.flush(timeout=2)` to ensure events are sent immediately (critical for background tasks that may complete before Sentry's async queue is processed)
 
 This applies to:
+
 - STT/TTS evaluation failures (provider-level and task-level)
 - Agent test and benchmark failures (model-level and task-level)
 - Simulation failures (text and voice)
 - CLI command failures (non-zero exit codes OR tracebacks in stderr) - logged with full stderr output
 
-**CLI Failure Detection**: The pense CLI may catch exceptions internally and exit with code 0 even when errors occur. To handle this, CLI wrapper functions check for BOTH:
+**CLI Failure Detection**: The calibrate CLI may catch exceptions internally and exit with code 0 even when errors occur. To handle this, CLI wrapper functions check for BOTH:
+
 1. Non-zero return code (`process.returncode != 0`)
 2. Error tracebacks in stderr (`"Traceback (most recent call last):" in stderr`)
 

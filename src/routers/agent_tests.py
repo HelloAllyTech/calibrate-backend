@@ -179,7 +179,7 @@ class TestOutput(BaseModel):
 
 
 class TestCaseResult(BaseModel):
-    """Result for a single test case matching pense results.json structure"""
+    """Result for a single test case matching calibrate results.json structure"""
 
     name: Optional[str] = None  # Test name, present during in-progress and done states
     passed: Optional[bool] = None  # Only present when done
@@ -356,13 +356,13 @@ async def delete_agent_test_link(agent_test: AgentTestDelete):
 # ============ Shared Helper Functions ============
 
 
-def _build_pense_config(
+def _build_calibrate_config(
     agent: Dict[str, Any],
     tests: List[Dict[str, Any]],
     model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Build the pense test config from agent and tests.
+    Build the calibrate test config from agent and tests.
 
     Args:
         agent: Agent dict with config
@@ -517,7 +517,7 @@ def _match_model_to_folder(model: str, folder_names: List[str]) -> Optional[str]
     # Normalize model name for matching
     model_normalized = model.replace("/", "_").replace(":", "_").lower()
     model_alt = model.replace("/", "-").replace(":", "-").lower()
-    # Also try double underscore (some pense versions use this)
+    # Also try double underscore (some calibrate versions use this)
     model_double = model.replace("/", "__").replace(":", "__").lower()
 
     for folder in folder_names:
@@ -555,7 +555,7 @@ def _update_benchmark_intermediate_results(
         if matched_folder and matched_folder in all_results:
             results_data, metrics_data = all_results[matched_folder]
 
-            # Parse results (same as _run_pense_test)
+            # Parse results (same as _run_calibrate_test)
             completed_results = _parse_agent_test_results(results_data)
 
             # Add name field for consistency
@@ -680,9 +680,9 @@ def _update_agent_test_intermediate_results(
     )
 
 
-def _run_pense_test(
+def _run_calibrate_test(
     model: str,
-    pense_config: Dict[str, Any],
+    calibrate_config: Dict[str, Any],
     input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
@@ -693,11 +693,11 @@ def _run_pense_test(
     skip_s3_upload: bool = False,
 ) -> Dict[str, Any]:
     """
-    Run pense llm tests run command and return parsed results.
+    Run calibrate llm tests run command and return parsed results.
 
     Args:
         model: Model name to use
-        pense_config: The pense config dict
+        calibrate_config: The calibrate config dict
         input_dir: Directory to write config files
         output_dir: Directory to write output files
         s3_bucket: S3 bucket name
@@ -713,7 +713,7 @@ def _run_pense_test(
     s3 = get_s3_client()
 
     # Update config with model
-    config = pense_config.copy()
+    config = calibrate_config.copy()
     config["params"] = {"model": model}
 
     # Resolve directories to absolute paths
@@ -729,9 +729,9 @@ def _run_pense_test(
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
-    # Run pense llm tests run command (use absolute paths)
+    # Run calibrate llm tests run command (use absolute paths)
     run_cmd = [
-        "pense",
+        "calibrate",
         "llm",
         "tests",
         "run",
@@ -841,14 +841,14 @@ def _run_pense_test(
 
     if is_failure:
         if process.returncode != 0:
-            error = f"Command failed with exit code {process.returncode}: {stderr_content}"
+            error = (
+                f"Command failed with exit code {process.returncode}: {stderr_content}"
+            )
         else:
             error = f"Command failed with error in output: {stderr_content}"
         # Log CLI failure to Sentry
         logger.error(f"{log_prefix} CLI failed, logging to Sentry: {error}")
-        capture_exception_to_sentry(
-            RuntimeError(f"{log_prefix} failed: {error}")
-        )
+        capture_exception_to_sentry(RuntimeError(f"{log_prefix} failed: {error}"))
 
     return {
         "success": not is_failure,
@@ -883,19 +883,19 @@ def run_llm_test_task(
             temp_path = Path(temp_dir)
 
             try:
-                # Build pense config
-                pense_config = _build_pense_config(agent, tests)
-                model = pense_config["params"]["model"]
+                # Build calibrate config
+                calibrate_config = _build_calibrate_config(agent, tests)
+                model = calibrate_config["params"]["model"]
 
                 # Create input and output directories
                 input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
 
-                # Run pense test with intermediate updates
+                # Run calibrate test with intermediate updates
                 results_prefix = f"agent-tests/runs/{task_id}"
-                result = _run_pense_test(
+                result = _run_calibrate_test(
                     model=model,
-                    pense_config=pense_config,
+                    calibrate_config=calibrate_config,
                     input_dir=input_dir,
                     output_dir=output_dir,
                     s3_bucket=s3_bucket,
@@ -907,7 +907,9 @@ def run_llm_test_task(
 
                 # Determine final status based on success
                 final_status = (
-                    TaskStatus.DONE.value if result["success"] else TaskStatus.FAILED.value
+                    TaskStatus.DONE.value
+                    if result["success"]
+                    else TaskStatus.FAILED.value
                 )
 
                 # Update job with results
@@ -955,7 +957,7 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
     """
     Run one or more tests for an agent.
 
-    This starts a background task that runs the pense LLM tests command
+    This starts a background task that runs the calibrate LLM tests command
     with the agent's config and the combined test cases from all specified tests.
 
     Returns a task ID that can be used to poll for status and results.
@@ -1105,7 +1107,7 @@ class BenchmarkStatusResponse(BaseModel):
 def run_model_benchmark(
     task_id: str,
     model: str,
-    pense_config: Dict[str, Any],
+    calibrate_config: Dict[str, Any],
     input_dir: Path,
     output_dir: Path,
     s3_bucket: str,
@@ -1117,9 +1119,9 @@ def run_model_benchmark(
         model_input_dir = input_dir / model_name
         model_input_dir.mkdir(parents=True, exist_ok=True)
 
-        result = _run_pense_test(
+        result = _run_calibrate_test(
             model=model,
-            pense_config=pense_config,
+            calibrate_config=calibrate_config,
             input_dir=model_input_dir,
             output_dir=output_dir,
             s3_bucket=s3_bucket,
@@ -1201,9 +1203,11 @@ def run_benchmark_task(
             temp_path = Path(temp_dir)
 
             try:
-                # Build the base pense config (model will be set per-run)
-                pense_config = _build_pense_config(agent, tests, model=models[0])
-                pense_config["params"] = {}  # Clear model, will be set per-run
+                # Build the base calibrate config (model will be set per-run)
+                calibrate_config = _build_calibrate_config(
+                    agent, tests, model=models[0]
+                )
+                calibrate_config["params"] = {}  # Clear model, will be set per-run
 
                 # Create input and output directories
                 input_dir = temp_path / "input"
@@ -1224,7 +1228,7 @@ def run_benchmark_task(
                             run_model_benchmark,
                             task_id,
                             model,
-                            pense_config,
+                            calibrate_config,
                             input_dir,
                             output_dir,
                             s3_bucket,
@@ -1268,7 +1272,7 @@ def run_benchmark_task(
                 leaderboard_dir.mkdir(parents=True, exist_ok=True)
 
                 leaderboard_cmd = [
-                    "pense",
+                    "calibrate",
                     "llm",
                     "tests",
                     "leaderboard",
@@ -1332,7 +1336,7 @@ def run_benchmark_task(
                 except subprocess.CalledProcessError as e:
                     logger.warning(f"Leaderboard command failed: {e.stderr}")
 
-                # Upload output directory to S3 (preserves pense output structure)
+                # Upload output directory to S3 (preserves calibrate output structure)
                 # Structure: output_dir/test_config/<model_folder>/results.json
                 # S3: {results_prefix}/outputs/test_config/<model_folder>/results.json
                 for root, dirs, files in os.walk(output_dir):
@@ -1363,7 +1367,9 @@ def run_benchmark_task(
                     },
                 )
 
-                logger.info(f"Benchmark task {task_id} completed, status={final_status}")
+                logger.info(
+                    f"Benchmark task {task_id} completed, status={final_status}"
+                )
 
             except Exception as e:
                 traceback.print_exc()
@@ -1392,7 +1398,7 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
     """
     Run a benchmark comparing multiple models on the same tests.
 
-    This starts a background task that runs the pense LLM tests command
+    This starts a background task that runs the calibrate LLM tests command
     for each model in parallel, then generates a leaderboard comparing results.
 
     Returns a task ID that can be used to poll for status and results.

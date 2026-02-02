@@ -1,6 +1,6 @@
-# Pense Backend
+# Calibrate Backend
 
-The backend for Pense.
+The backend for Calibrate.
 
 ## Installation
 
