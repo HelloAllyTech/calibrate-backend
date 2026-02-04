@@ -52,6 +52,7 @@ from utils import (
     kill_process_group,
     is_job_timed_out,
     capture_exception_to_sentry,
+    build_tool_configs,
     PRESIGNED_URL_EXPIRY_SECONDS,
     PRESIGNED_URL_REFRESH_BUFFER_SECONDS,
 )
@@ -831,14 +832,7 @@ def _build_calibrate_simulation_config(
 
     # Get tools from agent_tools table
     agent_tools = get_tools_for_agent(agent["uuid"])
-    tool_configs = [
-        {
-            "name": tool["name"],
-            "description": tool["description"],
-            "parameters": tool.get("config", {}).get("parameters", []),
-        }
-        for tool in agent_tools
-    ]
+    tool_configs = build_tool_configs(agent_tools)
 
     # Build personas list as objects with label, characteristics, gender, and language
     persona_list = []
@@ -1260,6 +1254,12 @@ def _run_calibrate_text_simulation(
             relative_path = local_file_path.relative_to(output_dir)
             s3_key = f"{s3_prefix}/{relative_path}"
             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+
+    # Upload the config file to S3
+    if config_file.exists():
+        config_s3_key = f"{s3_prefix}/simulation_config.json"
+        s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+        logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
     error = None
     # Check for failure: non-zero return code OR error traceback in stderr
@@ -1817,6 +1817,12 @@ def _run_calibrate_voice_simulation(
             relative_path = local_file_path.relative_to(output_dir)
             s3_key = f"{s3_prefix}/{relative_path}"
             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+
+    # Upload the config file to S3
+    if config_file.exists():
+        config_s3_key = f"{s3_prefix}/simulation_config.json"
+        s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+        logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
     error = None
     # Check for failure: non-zero return code OR error traceback in stderr

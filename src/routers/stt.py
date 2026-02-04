@@ -570,6 +570,19 @@ def run_evaluation_task(
                     traceback.print_exc()
                     raise e
 
+                # Create and upload config file to S3
+                config_data = {
+                    "providers": request.providers,
+                    "language": request.language,
+                    "audio_count": len(request.audio_paths),
+                }
+                config_file = temp_path / "config.json"
+                with open(config_file, "w", encoding="utf-8") as f:
+                    json.dump(config_data, f, indent=2)
+                config_s3_key = f"stt/evals/{task_id}/config.json"
+                s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+                logger.info(f"Uploaded config file to S3: {config_s3_key}")
+
                 # Update job with results
                 update_job(
                     task_id,

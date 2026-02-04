@@ -41,6 +41,7 @@ from utils import (
     register_job_starter,
     is_job_timed_out,
     capture_exception_to_sentry,
+    build_tool_configs,
 )
 
 # Job types that share the same queue
@@ -378,14 +379,7 @@ def _build_calibrate_config(
 
     # Get tools from agent_tools table
     agent_tools = get_tools_for_agent(agent["uuid"])
-    tool_configs = [
-        {
-            "name": tool["name"],
-            "description": tool["description"],
-            "parameters": tool.get("config", {}).get("parameters", []),
-        }
-        for tool in agent_tools
-    ]
+    tool_configs = build_tool_configs(agent_tools)
 
     # Combine test cases from all tests
     all_test_cases = []
@@ -807,6 +801,12 @@ def _run_calibrate_test(
                 s3_key = f"{s3_prefix}/{relative_path}"
                 s3.upload_file(str(local_file_path), s3_bucket, s3_key)
 
+        # Upload the config file to S3
+        if config_file.exists():
+            config_s3_key = f"{s3_prefix}/test_config.json"
+            s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+            logger.info(f"Uploaded config file to S3: {config_s3_key}")
+
     # Parse metrics
     total_tests = 0
     passed = 0
@@ -933,19 +933,31 @@ def run_llm_test_task(
             except Exception as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
+                # Preserve any existing results from the job
+                existing_job = get_agent_test_job(task_id)
+                existing_results = (
+                    (existing_job.get("results") or {}) if existing_job else {}
+                )
+                existing_results["error"] = (
+                    f"Unexpected error during LLM test: {str(e)}"
+                )
                 update_agent_test_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
-                    results={"error": f"Unexpected error during LLM test: {str(e)}"},
+                    results=existing_results,
                 )
 
     except Exception as e:
         traceback.print_exc()
         capture_exception_to_sentry(e)
+        # Preserve any existing results from the job
+        existing_job = get_agent_test_job(task_id)
+        existing_results = (existing_job.get("results") or {}) if existing_job else {}
+        existing_results["error"] = f"Task failed: {str(e)}"
         update_agent_test_job(
             task_id,
             status=TaskStatus.FAILED.value,
-            results={"error": f"Task failed: {str(e)}"},
+            results=existing_results,
         )
     finally:
         # Try to start the next queued job
@@ -1350,6 +1362,18 @@ def run_benchmark_task(
                     f"Uploaded benchmark outputs to s3://{s3_bucket}/{results_prefix}/outputs/"
                 )
 
+                # Create and upload benchmark config file to S3
+                benchmark_config = {
+                    **calibrate_config,
+                    "models": models,
+                }
+                config_file = temp_path / "benchmark_config.json"
+                with open(config_file, "w", encoding="utf-8") as f:
+                    json.dump(benchmark_config, f, indent=2)
+                config_s3_key = f"{results_prefix}/benchmark_config.json"
+                s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+                logger.info(f"Uploaded benchmark config file to S3: {config_s3_key}")
+
                 # Determine final status based on success
                 final_status = (
                     TaskStatus.DONE.value if all_succeeded else TaskStatus.FAILED.value
@@ -1374,19 +1398,31 @@ def run_benchmark_task(
             except Exception as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
+                # Preserve any existing results from the job
+                existing_job = get_agent_test_job(task_id)
+                existing_results = (
+                    (existing_job.get("results") or {}) if existing_job else {}
+                )
+                existing_results["error"] = (
+                    f"Unexpected error during benchmark: {str(e)}"
+                )
                 update_agent_test_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
-                    results={"error": f"Unexpected error during benchmark: {str(e)}"},
+                    results=existing_results,
                 )
 
     except Exception as e:
         traceback.print_exc()
         capture_exception_to_sentry(e)
+        # Preserve any existing results from the job
+        existing_job = get_agent_test_job(task_id)
+        existing_results = (existing_job.get("results") or {}) if existing_job else {}
+        existing_results["error"] = f"Task failed: {str(e)}"
         update_agent_test_job(
             task_id,
             status=TaskStatus.FAILED.value,
-            results={"error": f"Task failed: {str(e)}"},
+            results=existing_results,
         )
     finally:
         # Try to start the next queued job
