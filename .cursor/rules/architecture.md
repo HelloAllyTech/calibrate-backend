@@ -40,7 +40,7 @@ calibrate-backend/
 ├── src/
 │   ├── main.py              # FastAPI app entry point, lifespan management
 │   ├── db.py                # SQLite database layer (~2300 lines)
-│   ├── utils.py             # Shared utilities (S3 client, port finding)
+│   ├── utils.py             # Shared utilities (S3 client, port finding, tool config building)
 │   ├── job_recovery.py      # Restart in-progress jobs on app startup
 │   └── routers/
 │       ├── auth.py          # Google OAuth authentication
@@ -343,12 +343,13 @@ The `is_job_timed_out(updated_at)` utility function in `utils.py` handles timest
 
 **Important**: SQLite stores timestamps in UTC via `CURRENT_TIMESTAMP`. The timeout function uses `datetime.utcnow()` to match. Using `datetime.now()` would cause timezone mismatches and incorrect timeout detection (e.g., jobs marked as timed out immediately after creation if server is ahead of UTC).
 
-| Utility Function                | Location   | Purpose                                     |
-| ------------------------------- | ---------- | ------------------------------------------- |
-| `is_job_timed_out()`            | `utils.py` | Checks if job has exceeded timeout          |
-| `kill_process_group()`          | `utils.py` | Kills a single process group by PID         |
-| `kill_processes_from_dict()`    | `utils.py` | Kills multiple processes from a dict        |
-| `capture_exception_to_sentry()` | `utils.py` | Logs exception to Sentry as unhandled error |
+| Utility Function                | Location   | Purpose                                                                                      |
+| ------------------------------- | ---------- | -------------------------------------------------------------------------------------------- |
+| `is_job_timed_out()`            | `utils.py` | Checks if job has exceeded timeout                                                           |
+| `kill_process_group()`          | `utils.py` | Kills a single process group by PID                                                          |
+| `kill_processes_from_dict()`    | `utils.py` | Kills multiple processes from a dict                                                         |
+| `capture_exception_to_sentry()` | `utils.py` | Logs exception to Sentry as unhandled error                                                  |
+| `build_tool_configs()`          | `utils.py` | Builds calibrate tool configs from agent tools (handles structured_output and webhook types) |
 
 ### STT/TTS Evaluation Incremental Updates
 
@@ -516,6 +517,7 @@ Benchmarks use `skip_s3_upload=True` for individual model runs, then upload once
 
 ```
 s3://bucket/agent-tests/benchmarks/{task_id}/
+  benchmark_config.json        # Config file with test config + list of models
   outputs/
     test_config/
       anthropic__claude-opus-4.5/
@@ -529,6 +531,26 @@ s3://bucket/agent-tests/benchmarks/{task_id}/
 ```
 
 This avoids duplicate uploads (each model uploading everyone's files) and matches the local calibrate output structure.
+
+### Config File Uploads to S3
+
+All job types upload their config files to S3 for reproducibility and debugging. The config file is uploaded after job completion to the job's output directory:
+
+| Job Type         | Config File Name         | S3 Path                                                  |
+| ---------------- | ------------------------ | -------------------------------------------------------- |
+| STT Evaluation   | `stt_config.json`        | `stt/evals/{task_id}/stt_config.json`                    |
+| TTS Evaluation   | `tts_config.json`        | `tts/evals/{task_id}/tts_config.json`                    |
+| Agent Test       | `test_config.json`       | `{s3_prefix}/test_config.json`                           |
+| Benchmark        | `benchmark_config.json`  | `agent-tests/benchmarks/{task_id}/benchmark_config.json` |
+| Text Simulation  | `simulation_config.json` | `{s3_prefix}/simulation_config.json`                     |
+| Voice Simulation | `simulation_config.json` | `{s3_prefix}/simulation_config.json`                     |
+
+**Config file contents:**
+
+- **STT/TTS**: Contains `providers`, `language`, and `audio_count`/`text_count`
+- **Agent tests**: Contains the full calibrate config (system prompt, tools, test cases, etc.)
+- **Benchmarks**: Contains the calibrate config plus the `models` list being benchmarked
+- **Simulations**: Contains the full calibrate simulation config (personas, scenarios, metrics, tools, etc.)
 
 ---
 
@@ -659,9 +681,70 @@ OPENROUTER_API_KEY=xxx
 
 **Simulation Config Generation**: When running simulations, `_build_calibrate_simulation_config()` builds the calibrate config from agent/personas/scenarios/metrics. Key fields always included:
 
+- `tools` - Built from linked agent tools (see Tool Configuration Schema below)
 - `evaluation_criteria` - Built from linked metrics (name + description)
 - `settings.agent_speaks_first` - Defaults to `true` if not specified in agent config
 - `settings.max_turns` - Mapped from agent config's `settings.max_assistant_turns` (defaults to `50` if not set)
+
+### Tool Configuration Schema (in Calibrate Config)
+
+Tools in calibrate configs (used by both simulations and agent tests) support two types: **structured_output** (default) and **webhook**. The `build_tool_configs()` utility function in `utils.py` handles building these configs from database tool records.
+
+**Structured Output Tool** (for tools that return structured data to the LLM):
+
+```json
+{
+  "type": "structured_output",
+  "name": "get_user_info",
+  "description": "Retrieves user information",
+  "parameters": [
+    {
+      "id": "user_id",
+      "type": "string",
+      "description": "The user ID",
+      "required": true
+    }
+  ]
+}
+```
+
+**Webhook Tool** (for tools that call external HTTP endpoints):
+
+```json
+{
+  "type": "webhook",
+  "name": "get_presigned_url",
+  "description": "Always call this tool after receiving a user response",
+  "parameters": [],
+  "webhook": {
+    "method": "POST",
+    "url": "http://localhost:8000/presigned-url",
+    "timeout": 20,
+    "headers": [{ "name": "Authorization", "value": "Bearer X" }],
+    "queryParameters": [
+      {
+        "id": "key",
+        "type": "string",
+        "description": "Query param description",
+        "required": true
+      }
+    ],
+    "body": {
+      "description": "Request body description",
+      "parameters": [
+        {
+          "id": "task_type",
+          "type": "string",
+          "description": "Type of task",
+          "required": true
+        }
+      ]
+    }
+  }
+}
+```
+
+The tool type is determined by the `type` field in the tool's `config` column in the database. If not specified, defaults to `"structured_output"`.
 
 ### Test Case Configuration Schema
 
@@ -923,11 +1006,17 @@ def run_task(task_id: str, request: TaskRequest):
     except Exception as e:
         traceback.print_exc()
         capture_exception_to_sentry(e)  # Log to Sentry as unhandled
-        update_job(task_id, status=TaskStatus.FAILED.value, results={"error": str(e)})
+        # Preserve existing results (e.g., partial test_results from intermediate updates)
+        existing_job = get_job(task_id)
+        existing_results = (existing_job.get("results") or {}) if existing_job else {}
+        existing_results["error"] = str(e)
+        update_job(task_id, status=TaskStatus.FAILED.value, results=existing_results)
     finally:
         # Start next queued job if capacity allows
         try_start_queued_job(JOB_TYPES)
 ```
+
+**Preserving Results on Failure**: When a job fails due to an exception, the exception handler fetches existing results from the database and preserves them (e.g., `test_results`, `model_results`) while adding the error message. This ensures that partial results from intermediate updates are still available to clients even when the job ultimately fails.
 
 **Sentry Error Logging**: All job failures are logged to Sentry using the `capture_exception_to_sentry()` utility function from `utils.py`. This function:
 

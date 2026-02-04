@@ -29,6 +29,46 @@ def capture_exception_to_sentry(exception: Exception) -> None:
     # Flush to ensure the event is sent immediately (important for background tasks)
     sentry_sdk.flush(timeout=2)
 
+
+def build_tool_configs(agent_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Build tool configurations for calibrate CLI from agent tools.
+
+    Handles both structured output tools and webhook tools:
+    - Structured output tools: Include type, name, description, and parameters
+    - Webhook tools: Include type, name, description, and full webhook configuration
+
+    Args:
+        agent_tools: List of tool dicts from get_tools_for_agent()
+
+    Returns:
+        List of tool config dicts ready for calibrate config
+    """
+    tool_configs = []
+    for tool in agent_tools:
+        tool_config = tool.get("config", {})
+        tool_type = tool_config.get("type", "structured_output")
+
+        tool_entry = {
+            "name": tool["name"],
+            "description": tool["description"],
+        }
+
+        if tool_type == "webhook":
+            # For webhook tools, include the full webhook configuration
+            tool_entry["type"] = "webhook"
+            tool_entry["parameters"] = tool_config.get("parameters", [])
+            tool_entry["webhook"] = tool_config.get("webhook", {})
+        else:
+            # For structured output tools (default)
+            tool_entry["type"] = "structured_output"
+            tool_entry["parameters"] = tool_config.get("parameters", [])
+
+        tool_configs.append(tool_entry)
+
+    return tool_configs
+
+
 # Timeout threshold for marking jobs as failed (5 minutes)
 JOB_TIMEOUT_MINUTES = 5
 # Presigned URL caching constants
