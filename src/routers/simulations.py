@@ -1274,8 +1274,8 @@ def _run_calibrate_text_simulation(
         else:
             error = f"Command failed with error in output: {stderr_content}"
         # Log CLI failure to Sentry
-        logger.error(f"{log_prefix} CLI failed, logging to Sentry: {error}")
-        capture_exception_to_sentry(RuntimeError(f"{log_prefix} failed: {error}"))
+        logger.error(error)
+        capture_exception_to_sentry(RuntimeError(error))
 
     return {
         "success": not is_failure,
@@ -1835,8 +1835,8 @@ def _run_calibrate_voice_simulation(
         else:
             error = f"Command failed with error in output: {stderr}"
         # Log CLI failure to Sentry
-        logger.error(f"{log_prefix} CLI failed, logging to Sentry: {error}")
-        capture_exception_to_sentry(RuntimeError(f"{log_prefix} failed: {error}"))
+        logger.error(error)
+        capture_exception_to_sentry(RuntimeError(error))
 
     return {
         "success": not is_failure,
