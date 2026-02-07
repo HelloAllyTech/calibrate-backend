@@ -3,9 +3,7 @@ import csv
 import json
 import subprocess
 import tempfile
-import time
 import traceback
-import concurrent.futures
 import threading
 import logging
 from pathlib import Path
@@ -29,7 +27,7 @@ from utils import (
     register_job_starter,
     generate_presigned_download_url,
     is_job_timed_out,
-    kill_processes_from_dict,
+    kill_process_group,
     capture_exception_to_sentry,
 )
 
@@ -115,10 +113,6 @@ def _find_tts_provider_output_dir(output_dir: Path, provider: str) -> Optional[P
     for item in output_dir.iterdir():
         if item.is_dir() and provider in item.name.lower():
             return item
-    # Fallback: try to find any directory
-    dirs = [d for d in output_dir.iterdir() if d.is_dir()]
-    if dirs:
-        return dirs[0]
     return None
 
 
@@ -153,349 +147,64 @@ def _read_tts_metrics_json(provider_output_dir: Path) -> Optional[dict]:
     try:
         with open(metrics_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # Handle backward compatibility: if it's a list, return as-is
-            # New format is a dict
             return data
     except Exception:
         return None
 
 
-def _update_tts_intermediate_results(
-    output_dir: Path,
-    provider: str,
-    task_id: str,
-    run_id: str,
-    s3_bucket: str,
-    intermediate_results: dict,
-    uploaded_audio_cache: dict,
-    results_lock: threading.Lock,
-):
-    """Update intermediate results for a TTS provider and save to job.
+def _read_leaderboard_xlsx(leaderboard_dir: Path) -> Optional[List[dict]]:
+    """Read the leaderboard summary from the xlsx file in leaderboard directory.
 
-    Uploads audio files to S3 as they become available and stores presigned URLs
-    in the intermediate results for immediate playback.
+    Looks for any .xlsx file in the directory (commonly tts_leaderboard.xlsx).
     """
-    provider_output_dir = _find_tts_provider_output_dir(output_dir, provider)
-    if not provider_output_dir:
-        return
+    if not leaderboard_dir.exists():
+        logger.warning(f"Leaderboard directory does not exist: {leaderboard_dir}")
+        return None
 
-    results_data = _read_tts_results_csv(provider_output_dir)
-    if results_data is None:
-        return
-
-    # Get S3 client for uploading
-    s3 = get_s3_client()
-    results_prefix = f"tts/evals/{run_id}/outputs/{provider}"
-
-    # Process each row and upload audio files as they become available
-    for result_row in results_data:
-        if "audio_path" not in result_row or not result_row["audio_path"]:
-            continue
-
-        local_audio_path = result_row["audio_path"]
-
-        # Skip if already a presigned URL (already processed)
-        if local_audio_path.startswith("http"):
-            continue
-
-        # Check if we've already uploaded this audio file
-        if local_audio_path in uploaded_audio_cache:
-            # Use cached presigned URL
-            result_row["audio_path"] = uploaded_audio_cache[local_audio_path]
-            continue
-
-        # Check if the audio file exists on disk
-        audio_file = Path(local_audio_path)
-        if not audio_file.exists():
-            continue
-
-        try:
-            # Upload audio file to S3
-            relative_path = audio_file.relative_to(provider_output_dir)
-            s3_key = f"{results_prefix}/{relative_path}"
-
-            s3.upload_file(str(audio_file), s3_bucket, s3_key)
-            logger.info(f"Uploaded intermediate audio file to S3: {s3_key}")
-
-            # Generate presigned URL for immediate access
-            presigned_url = generate_presigned_download_url(s3_key)
-            if presigned_url:
-                # Cache the presigned URL for this local path
-                uploaded_audio_cache[local_audio_path] = presigned_url
-                result_row["audio_path"] = presigned_url
-            else:
-                # Fallback to S3 key if presigned URL generation fails
-                uploaded_audio_cache[local_audio_path] = s3_key
-                result_row["audio_path"] = s3_key
-        except Exception as e:
-            logger.warning(
-                f"Failed to upload intermediate audio {local_audio_path}: {e}"
-            )
-            continue
-
-    # Check if metrics.json exists - if so, provider evaluation is complete
-    metrics_data = _read_tts_metrics_json(provider_output_dir)
-    is_complete = metrics_data is not None
-
-    # Check if any texts were successfully synthesized (have audio_path)
-    successful_count = 0
-    if results_data:
-        for row in results_data:
-            if row.get("audio_path"):
-                successful_count += 1
-
-    # Determine success: complete AND has at least one successful synthesis
-    has_successful_results = successful_count > 0
-
-    with results_lock:
-        if is_complete:
-            if has_successful_results:
-                message = "Completed"
-                success = True
-            else:
-                message = "Completed with errors: no texts synthesized successfully"
-                success = False
-        else:
-            message = "Processing..."
-            success = None
-
-        intermediate_results[provider] = {
-            "provider": provider,
-            "success": success,
-            "message": message,
-            "metrics": metrics_data,
-            "results": results_data,
-        }
-        # Update job with current intermediate results
-        update_job(
-            task_id,
-            results={
-                "provider_results": list(intermediate_results.values()),
-                "leaderboard_summary": None,
-                "error": None,
-            },
+    # Find xlsx file in leaderboard directory
+    xlsx_files = list(leaderboard_dir.glob("*.xlsx"))
+    if not xlsx_files:
+        logger.warning(
+            f"No xlsx files found in leaderboard directory: {leaderboard_dir}"
         )
+        # Log what files are present for debugging
+        all_files = list(leaderboard_dir.iterdir())
+        logger.info(f"Files in leaderboard directory: {[f.name for f in all_files]}")
+        return None
 
+    xlsx_file = xlsx_files[0]  # Use the first xlsx file found
+    logger.info(f"Reading leaderboard from: {xlsx_file}")
 
-def evaluate_tts_provider(
-    run_id: str,
-    provider: str,
-    language: str,
-    input_csv: Path,
-    output_dir: Path,
-    s3_bucket: str,
-    task_id: str,
-    running_pids: dict,
-    intermediate_results: dict,
-    results_lock: threading.Lock,
-) -> ProviderResult:
-    """Evaluate a single TTS provider."""
     try:
-        s3 = get_s3_client()
+        wb = openpyxl.load_workbook(str(xlsx_file), data_only=True)
+        logger.info(f"Workbook sheets: {wb.sheetnames}")
 
-        # Run calibrate TTS eval command
-        eval_cmd = [
-            "calibrate",
-            "tts",
-            "eval",
-            "-p",
-            provider,
-            "-l",
-            language,
-            "-i",
-            str(input_csv),
-            "-o",
-            str(output_dir),
-        ]
-
-        logger.info(f"Running TTS eval {run_id} with command: {' '.join(eval_cmd)}")
-
-        # Create temp files for stdout/stderr to avoid pipe buffer issues during polling
-        stdout_path = output_dir / f"{provider}_stdout.log"
-        stderr_path = output_dir / f"{provider}_stderr.log"
-
-        stdout_f = open(stdout_path, "w")
-        stderr_f = open(stderr_path, "w")
-
-        try:
-            # Use Popen with start_new_session to create a process group for cleanup
-            process = subprocess.Popen(
-                eval_cmd,
-                stdout=stdout_f,
-                stderr=stderr_f,
-                text=True,
-                start_new_session=True,  # Create new process group for cleanup
-                cwd=str(output_dir.parent),
+        if "summary" not in wb.sheetnames:
+            logger.warning(
+                f"'summary' sheet not found in {xlsx_file.name}, sheets: {wb.sheetnames}"
             )
+            return None
 
-            # Track the process PID for cleanup on server restart
-            running_pids[provider] = process.pid
-            logger.info(f"TTS eval for {provider} started with PID {process.pid}")
+        ws = wb["summary"]
+        # Get headers from first row (skip empty cells)
+        headers = [cell.value for cell in ws[1] if cell.value is not None]
+        logger.info(f"Leaderboard headers: {headers}")
 
-            # Update job details with current running PIDs
-            update_job(task_id, details={"running_pids": dict(running_pids)})
+        leaderboard_summary = []
+        for row in ws.iter_rows(min_row=2, values_only=False):
+            if any(cell.value is not None for cell in row):
+                row_dict = {}
+                for idx, cell in enumerate(row):
+                    if idx < len(headers):
+                        row_dict[headers[idx]] = cell.value
+                if any(v is not None for v in row_dict.values()):
+                    leaderboard_summary.append(row_dict)
 
-            # Cache for uploaded audio files (maps local path -> presigned URL)
-            uploaded_audio_cache = {}
-
-            # Poll for process completion while updating intermediate results
-            while process.poll() is None:
-                _update_tts_intermediate_results(
-                    output_dir,
-                    provider,
-                    task_id,
-                    run_id,
-                    s3_bucket,
-                    intermediate_results,
-                    uploaded_audio_cache,
-                    results_lock,
-                )
-                time.sleep(2)  # Check every 2 seconds
-
-            # One final update after process completes
-            _update_tts_intermediate_results(
-                output_dir,
-                provider,
-                task_id,
-                run_id,
-                s3_bucket,
-                intermediate_results,
-                uploaded_audio_cache,
-                results_lock,
-            )
-
-        finally:
-            stdout_f.close()
-            stderr_f.close()
-
-        # Read stdout/stderr from files
-        with open(stdout_path, "r") as f:
-            stdout = f.read()
-        with open(stderr_path, "r") as f:
-            stderr = f.read()
-
-        # Remove from running PIDs
-        running_pids.pop(provider, None)
-        update_job(task_id, details={"running_pids": dict(running_pids)})
-
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(
-                process.returncode, eval_cmd, stdout, stderr
-            )
-
-        # Find the provider-specific output directory
-        provider_output_dir = _find_tts_provider_output_dir(output_dir, provider)
-
-        if provider_output_dir is None:
-            raise Exception(f"Could not find provider output directory for {provider}")
-
-        # Upload TTS eval results to S3
-        results_prefix = f"tts/evals/{run_id}/outputs/{provider}"
-
-        # Read metrics.json and results.csv before uploading
-        metrics_data = None
-        results_data = None
-
-        metrics_file = provider_output_dir / "metrics.json"
-        results_file = provider_output_dir / "results.csv"
-
-        if metrics_file.exists():
-            with open(metrics_file, "r", encoding="utf-8") as f:
-                metrics_data = json.load(f)
-
-        if results_file.exists():
-            results_data = []
-            with open(results_file, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    results_data.append(dict(row))
-
-        # Upload all files including generated audio files
-        # Map local audio paths to S3 keys for presigned URL generation
-        audio_files_uploaded = 0
-        audio_path_to_s3_key = {}
-        for root, dirs, files in os.walk(provider_output_dir):
-            for file in files:
-                local_file_path = Path(root) / file
-                relative_path = local_file_path.relative_to(provider_output_dir)
-                s3_key = f"{results_prefix}/{relative_path}"
-
-                # Check if this is an audio file
-                is_audio_file = (
-                    file.endswith(".wav")
-                    or file.endswith(".mp3")
-                    or file.endswith(".ogg")
-                    or "audios" in str(relative_path).lower()
-                )
-
-                s3.upload_file(str(local_file_path), s3_bucket, s3_key)
-
-                if is_audio_file:
-                    audio_files_uploaded += 1
-                    # Store mapping from local path to S3 key
-                    audio_path_to_s3_key[str(local_file_path)] = s3_key
-                    logger.info(f"Uploaded audio file {file} to S3: {s3_key}")
-
-        logger.info(
-            f"Uploaded {audio_files_uploaded} audio file(s) for provider {provider}"
-        )
-
-        # Replace local audio paths with S3 keys in results (presigned URLs generated on fetch)
-        # Also count successful syntheses (rows with audio files)
-        successful_count = 0
-        if results_data:
-            for result_row in results_data:
-                if "audio_path" in result_row and result_row["audio_path"]:
-                    local_audio_path = result_row["audio_path"]
-                    # Look up S3 key from the mapping
-                    audio_s3_key = audio_path_to_s3_key.get(local_audio_path)
-
-                    if not audio_s3_key:
-                        logger.warning(
-                            f"Could not find S3 key for audio path: {local_audio_path}"
-                        )
-                        continue
-
-                    # Store S3 key instead of presigned URL
-                    result_row["audio_path"] = audio_s3_key
-                    logger.info(f"Stored S3 key for audio: {audio_s3_key}")
-                    successful_count += 1
-
-        # Check if any texts were successfully synthesized
-        if successful_count == 0:
-            return ProviderResult(
-                provider=provider,
-                success=False,
-                message=f"TTS evaluation completed with errors for {provider}: no texts synthesized successfully",
-                metrics=metrics_data,
-                results=results_data,
-            )
-
-        return ProviderResult(
-            provider=provider,
-            success=True,
-            message=f"TTS evaluation completed successfully for {provider}",
-            metrics=metrics_data,
-            results=results_data,
-        )
-
-    except subprocess.CalledProcessError as e:
-        traceback.print_exc()
-        logger.error(f"TTS eval for {provider} failed, logging to Sentry: {e}")
-        capture_exception_to_sentry(e)
-        return ProviderResult(
-            provider=provider,
-            success=False,
-            message=f"TTS eval failed: {e.stderr}",
-        )
+        logger.info(f"Read {len(leaderboard_summary)} rows from leaderboard")
+        return leaderboard_summary
     except Exception as e:
-        traceback.print_exc()
-        capture_exception_to_sentry(e)
-        return ProviderResult(
-            provider=provider,
-            success=False,
-            message=f"Unexpected error: {str(e)}",
-        )
+        logger.warning(f"Failed to read leaderboard xlsx: {e}")
+        return None
 
 
 def run_tts_evaluation_task(
@@ -529,173 +238,164 @@ def run_tts_evaluation_task(
                 output_dir = temp_path / "output"
                 output_dir.mkdir()
 
-                # Run calibrate TTS eval for all providers in parallel
-                provider_results = []
-
-                logger.info(
-                    f"Running {len(request.providers)} TTS providers in parallel"
+                # Run calibrate tts command with all providers at once
+                # The CLI now handles parallelization internally and generates leaderboard
+                eval_cmd = (
+                    [
+                        "calibrate",
+                        "tts",
+                        "-p",
+                    ]
+                    + request.providers
+                    + [
+                        "-l",
+                        request.language,
+                        "-i",
+                        str(input_csv),
+                        "-o",
+                        str(output_dir),
+                    ]
                 )
 
-                # Shared dict to track running process PIDs for cleanup
-                running_pids = {}
+                logger.info(f"Running TTS eval command: {' '.join(eval_cmd)}")
 
-                # Shared dict and lock for intermediate results
-                intermediate_results = {}
-                results_lock = threading.Lock()
+                # Create temp files for stdout/stderr
+                stdout_path = output_dir / "stdout.log"
+                stderr_path = output_dir / "stderr.log"
 
-                # Limit to 2 concurrent providers to avoid resource exhaustion
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=min(2, len(request.providers))
-                ) as executor:
-                    future_to_provider = {
-                        executor.submit(
-                            evaluate_tts_provider,
-                            task_id,
-                            provider,
-                            request.language,
-                            input_csv,
-                            output_dir,
-                            s3_bucket,
-                            task_id,
-                            running_pids,
-                            intermediate_results,
-                            results_lock,
-                        ): provider
-                        for provider in request.providers
-                    }
-
-                    for future in concurrent.futures.as_completed(future_to_provider):
-                        result = future.result()
-                        provider_results.append(result)
-
-                logger.info("Completed running all TTS providers in parallel")
-
-                # Check if all providers succeeded
-                all_succeeded = all(r.success for r in provider_results)
-                if not all_succeeded:
-                    failed_providers = [
-                        r.provider for r in provider_results if not r.success
-                    ]
-                    # Get error messages from failed providers
-                    error_details = [
-                        f"{r.provider}: {r.message}"
-                        for r in provider_results
-                        if not r.success
-                    ]
-                    update_job(
-                        task_id,
-                        status=TaskStatus.FAILED.value,
-                        results={
-                            "provider_results": [
-                                r.model_dump() for r in provider_results
-                            ],
-                            "leaderboard_summary": None,
-                            "error": f"Some providers failed: {'; '.join(error_details)}",
-                        },
+                with (
+                    open(stdout_path, "w") as stdout_f,
+                    open(stderr_path, "w") as stderr_f,
+                ):
+                    process = subprocess.Popen(
+                        eval_cmd,
+                        stdout=stdout_f,
+                        stderr=stderr_f,
+                        text=True,
+                        start_new_session=True,
+                        cwd=str(temp_path),
                     )
-                    return
 
-                # Run calibrate TTS leaderboard command
-                leaderboard_dir = temp_path / "leaderboard"
-                leaderboard_dir.mkdir()
+                    # Store PID for cleanup
+                    update_job(
+                        task_id, details={"pid": process.pid, "pgid": process.pid}
+                    )
 
-                leaderboard_cmd = [
-                    "calibrate",
-                    "tts",
-                    "leaderboard",
-                    "-o",
-                    str(output_dir),
-                    "-s",
-                    str(leaderboard_dir),
-                ]
+                    # Wait for process to complete
+                    process.wait()
 
-                leaderboard_prefix = f"tts/evals/{task_id}/leaderboard"
+                # Read stdout/stderr
+                with open(stdout_path, "r") as f:
+                    stdout = f.read()
+                with open(stderr_path, "r") as f:
+                    stderr = f.read()
+
+                if process.returncode != 0:
+                    logger.error(f"TTS eval failed with code {process.returncode}")
+                    logger.error(f"stderr: {stderr}")
+                    raise subprocess.CalledProcessError(
+                        process.returncode, eval_cmd, stdout, stderr
+                    )
+
+                logger.info("TTS eval command completed successfully")
+
+                # Read results for each provider
+                provider_results = []
+                for provider in request.providers:
+                    provider_output_dir = _find_tts_provider_output_dir(
+                        output_dir, provider
+                    )
+                    if provider_output_dir:
+                        metrics_data = _read_tts_metrics_json(provider_output_dir)
+                        results_data = _read_tts_results_csv(provider_output_dir)
+
+                        # Upload provider results to S3 and map audio paths
+                        results_prefix = f"tts/evals/{task_id}/outputs/{provider}"
+                        audio_path_to_s3_key = {}
+
+                        for root, dirs, files in os.walk(provider_output_dir):
+                            for file in files:
+                                local_file_path = Path(root) / file
+                                relative_path = local_file_path.relative_to(
+                                    provider_output_dir
+                                )
+                                s3_key = f"{results_prefix}/{relative_path}"
+                                s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+
+                                # Track audio files for path mapping
+                                if file.endswith((".wav", ".mp3", ".ogg")):
+                                    audio_path_to_s3_key[str(local_file_path)] = s3_key
+
+                        # Replace local audio paths with S3 keys in results
+                        successful_count = 0
+                        if results_data:
+                            for result_row in results_data:
+                                if (
+                                    "audio_path" in result_row
+                                    and result_row["audio_path"]
+                                ):
+                                    local_audio_path = result_row["audio_path"]
+                                    audio_s3_key = audio_path_to_s3_key.get(
+                                        local_audio_path
+                                    )
+                                    if audio_s3_key:
+                                        result_row["audio_path"] = audio_s3_key
+                                        successful_count += 1
+
+                        if successful_count > 0:
+                            provider_results.append(
+                                ProviderResult(
+                                    provider=provider,
+                                    success=True,
+                                    message=f"TTS evaluation completed successfully for {provider}",
+                                    metrics=metrics_data,
+                                    results=results_data,
+                                )
+                            )
+                        else:
+                            provider_results.append(
+                                ProviderResult(
+                                    provider=provider,
+                                    success=False,
+                                    message=f"TTS evaluation completed with errors for {provider}: no texts synthesized successfully",
+                                    metrics=metrics_data,
+                                    results=results_data,
+                                )
+                            )
+                    else:
+                        provider_results.append(
+                            ProviderResult(
+                                provider=provider,
+                                success=False,
+                                message=f"No output found for provider {provider}",
+                            )
+                        )
+
+                # Read leaderboard from output directory
+                leaderboard_dir = output_dir / "leaderboard"
                 leaderboard_summary = None
 
+                # Log what's in output_dir for debugging
                 logger.info(
-                    f"Running TTS leaderboard command: {' '.join(leaderboard_cmd)}"
+                    f"Output directory contents: {[f.name for f in output_dir.iterdir()]}"
                 )
 
-                try:
-                    result = subprocess.run(
-                        leaderboard_cmd,
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                        cwd=temp_path,
-                    )
+                if leaderboard_dir.exists():
+                    logger.info(f"Leaderboard directory exists: {leaderboard_dir}")
+                    leaderboard_summary = _read_leaderboard_xlsx(leaderboard_dir)
 
-                    logger.info("TTS leaderboard command completed successfully")
-
-                    if result.stdout:
-                        logger.info(f"Leaderboard stdout: {result.stdout}")
-                    if result.stderr:
-                        logger.info(f"Leaderboard stderr: {result.stderr}")
-
-                    # Upload leaderboard results
+                    # Upload leaderboard to S3
+                    leaderboard_prefix = f"tts/evals/{task_id}/leaderboard"
                     for root, dirs, files in os.walk(leaderboard_dir):
                         for file in files:
                             local_file_path = Path(root) / file
                             relative_path = local_file_path.relative_to(leaderboard_dir)
                             s3_key = f"{leaderboard_prefix}/{relative_path}"
-
                             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
-
-                            # Read xlsx file and extract summary sheet
-                            if file == "tts_leaderboard.xlsx":
-                                logger.info(
-                                    f"Found TTS leaderboard metrics file: {local_file_path}"
-                                )
-                                try:
-                                    wb = openpyxl.load_workbook(
-                                        str(local_file_path), data_only=True
-                                    )
-                                    if "summary" in wb.sheetnames:
-                                        ws = wb["summary"]
-                                        # Get headers from first row (skip empty cells)
-                                        headers = [
-                                            cell.value
-                                            for cell in ws[1]
-                                            if cell.value is not None
-                                        ]
-
-                                        logger.info("Preparing TTS leaderboard summary")
-
-                                        # Read all data rows
-                                        leaderboard_summary = []
-
-                                        for row in ws.iter_rows(
-                                            min_row=2, values_only=False
-                                        ):
-                                            # Check if row has any data
-                                            if any(
-                                                cell.value is not None for cell in row
-                                            ):
-                                                row_dict = {}
-                                                for idx, cell in enumerate(row):
-                                                    if idx < len(headers):
-                                                        # Use header name as key, cell value as value
-                                                        row_dict[headers[idx]] = (
-                                                            cell.value
-                                                        )
-                                                # Only add row if it has at least one non-None value
-                                                if any(
-                                                    v is not None
-                                                    for v in row_dict.values()
-                                                ):
-                                                    leaderboard_summary.append(row_dict)
-
-                                        logger.info(
-                                            f"Prepared TTS leaderboard summary with {len(leaderboard_summary)} rows"
-                                        )
-                                except Exception as e:
-                                    traceback.print_exc()
-                                    # If reading xlsx fails, continue without summary
-                                    pass
-
-                except subprocess.CalledProcessError as e:
-                    # Leaderboard failure is not critical, continue
-                    pass
+                else:
+                    logger.warning(
+                        f"Leaderboard directory does not exist: {leaderboard_dir}"
+                    )
 
                 # Create and upload config file to S3
                 config_data = {
@@ -710,17 +410,38 @@ def run_tts_evaluation_task(
                 s3.upload_file(str(config_file), s3_bucket, config_s3_key)
                 logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
+                # Check if all providers succeeded
+                all_succeeded = all(r.success for r in provider_results)
+                final_status = (
+                    TaskStatus.DONE.value if all_succeeded else TaskStatus.FAILED.value
+                )
+
+                error_msg = None
+                if not all_succeeded:
+                    failed = [r.provider for r in provider_results if not r.success]
+                    error_msg = f"Some providers failed: {', '.join(failed)}"
+
                 # Update job with results
                 update_job(
                     task_id,
-                    status=TaskStatus.DONE.value,
+                    status=final_status,
                     results={
                         "provider_results": [r.model_dump() for r in provider_results],
                         "leaderboard_summary": leaderboard_summary,
-                        "error": None,
+                        "error": error_msg,
                     },
                 )
 
+            except subprocess.CalledProcessError as e:
+                traceback.print_exc()
+                capture_exception_to_sentry(e)
+                update_job(
+                    task_id,
+                    status=TaskStatus.FAILED.value,
+                    results={
+                        "error": f"TTS evaluation failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
+                    },
+                )
             except Exception as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
@@ -824,7 +545,6 @@ async def get_tts_evaluation_status(
     status = job["status"]
     results = job.get("results") or {}
     details = job.get("details") or {}
-    provider_results = results.get("provider_results")
 
     # Check for timeout on in-progress jobs
     if status == TaskStatus.IN_PROGRESS.value:
@@ -832,12 +552,12 @@ async def get_tts_evaluation_status(
         if updated_at and is_job_timed_out(updated_at):
             logger.warning(f"Job {task_id} timed out, marking as failed")
 
-            # Kill running processes
-            running_pids = details.get("running_pids")
-            if running_pids:
-                kill_processes_from_dict(running_pids, task_id)
+            # Kill running process
+            pid = details.get("pid") or details.get("pgid")
+            if pid:
+                kill_process_group(pid, task_id)
 
-            # Mark job as failed (preserve existing results, add error)
+            # Mark job as failed
             results["error"] = "Job timed out after 5 minutes of inactivity"
             update_job(
                 task_id,
@@ -852,27 +572,20 @@ async def get_tts_evaluation_status(
     # Get list of all requested providers from job details
     requested_providers = details.get("providers", [])
 
-    # Build a set of providers that have results
-    providers_with_results = set()
-    if provider_results:
-        for provider_result in provider_results:
-            providers_with_results.add(provider_result.get("provider"))
-
-    # Add queued entries for providers that haven't started yet
+    # Build provider results
+    provider_results = results.get("provider_results")
     if provider_results is None:
-        provider_results = []
-
-    for provider in requested_providers:
-        if provider not in providers_with_results:
-            provider_results.append(
-                {
-                    "provider": provider,
-                    "success": None,
-                    "message": "Queued...",
-                    "metrics": None,
-                    "results": None,
-                }
-            )
+        # Job hasn't completed yet, show all as queued
+        provider_results = [
+            {
+                "provider": provider,
+                "success": None,
+                "message": "Queued...",
+                "metrics": None,
+                "results": None,
+            }
+            for provider in requested_providers
+        ]
 
     # Normalize metrics format for backward compatibility (list -> dict)
     for provider_result in provider_results:

@@ -43,8 +43,6 @@ from utils import (
     TaskCreateResponse,
     get_s3_client,
     get_s3_output_config,
-    reserve_port,
-    release_port,
     can_start_simulation_job,
     try_start_queued_simulation_job,
     register_job_starter,
@@ -482,11 +480,6 @@ async def get_simulation_run_status(
             pid = details.get("pid") or details.get("pgid")
             if pid:
                 kill_process_group(pid, task_id)
-
-            # Release port if allocated
-            port = details.get("port")
-            if port:
-                release_port(port)
 
             # Mark job as failed (preserve existing results, add error)
             results["error"] = "Job timed out after 5 minutes of inactivity"
@@ -1154,9 +1147,9 @@ def _run_calibrate_text_simulation(
     # Use absolute paths for config and output
     run_cmd = [
         "calibrate",
-        "llm",
         "simulations",
-        "run",
+        "--type",
+        "text",
         "-c",
         str(config_file),
         "-o",
@@ -1164,7 +1157,7 @@ def _run_calibrate_text_simulation(
         "-m",
         model,
         "-n",
-        "4",
+        "2",
     ]
 
     logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
@@ -1569,7 +1562,6 @@ def _run_calibrate_voice_simulation(
     s3_bucket: str,
     s3_prefix: str,
     task_id: str,
-    port: int,
     log_prefix: str = "Voice simulation",
 ) -> Dict[str, Any]:
     """
@@ -1583,7 +1575,6 @@ def _run_calibrate_voice_simulation(
         s3_bucket: S3 bucket name
         s3_prefix: S3 key prefix for uploading results
         task_id: The task ID for updating the database with incremental results
-        port: Port number for the simulation server
         log_prefix: Prefix for log messages
 
     Returns:
@@ -1610,14 +1601,15 @@ def _run_calibrate_voice_simulation(
     # Run calibrate agent simulation command as a non-blocking process
     run_cmd = [
         "calibrate",
-        "agent",
-        "simulation",
+        "simulations",
+        "--type",
+        "voice",
         "-c",
         str(config_file),
         "-o",
         str(output_dir),
-        "--port",
-        str(port),
+        "-n",
+        "2",
     ]
 
     logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
@@ -1639,7 +1631,7 @@ def _run_calibrate_voice_simulation(
             cwd=str(output_dir),
         )
 
-        # Store the process PID, process group ID, and port in the job for cleanup on restart
+        # Store the process PID and process group ID in the job for cleanup on restart
         # The process group ID (pgid) equals the PID when start_new_session=True
         logger.info(f"{log_prefix}: Started process with PID {process.pid}")
         update_simulation_job(
@@ -1648,7 +1640,6 @@ def _run_calibrate_voice_simulation(
             details={
                 "pid": process.pid,
                 "pgid": process.pid,  # Same as PID when start_new_session=True
-                "port": port,
             },
         )
 
@@ -1857,7 +1848,6 @@ def run_simulation_task(
     simulation_type: str = "text",
 ):
     """Run the simulation in the background (text or voice)."""
-    reserved_port = None  # Track reserved port for cleanup
     try:
         logger.info(
             f"Running {simulation_type} simulation task {task_id} for agent {agent['uuid']} "
@@ -1865,11 +1855,6 @@ def run_simulation_task(
             f"and {len(metrics)} metric(s)"
         )
         update_simulation_job(task_id, status=TaskStatus.IN_PROGRESS.value)
-
-        # Reserve a port for voice simulations
-        if simulation_type == "voice":
-            reserved_port = reserve_port(task_id, start_port=8765)
-            logger.info(f"Reserved port {reserved_port} for voice simulation {task_id}")
 
         # Create temporary directory for processing (automatically cleaned up after use)
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1895,7 +1880,6 @@ def run_simulation_task(
                         s3_bucket=s3_bucket,
                         s3_prefix=results_prefix,
                         task_id=task_id,
-                        port=reserved_port,
                         log_prefix=f"Voice simulation {task_id}",
                     )
                 else:
@@ -1958,10 +1942,6 @@ def run_simulation_task(
             results={"error": f"Task failed: {str(e)}"},
         )
     finally:
-        # Release reserved port
-        if reserved_port is not None:
-            release_port(reserved_port)
-
         # Try to start the next queued job
         try_start_queued_simulation_job(SIMULATION_JOB_TYPES)
 
@@ -2089,11 +2069,6 @@ async def delete_simulation_job_endpoint(
         pid = details.get("pid") or details.get("pgid")
         if pid:
             kill_process_group(pid, job_uuid)
-
-        # Release port if allocated
-        port = details.get("port")
-        if port:
-            release_port(port)
 
     # Delete the job
     deleted = delete_simulation_job(job_uuid)

@@ -10,7 +10,6 @@ from utils import (
     TaskStatus,
     try_start_queued_job,
     kill_processes_from_dict,
-    release_port,
 )
 
 
@@ -99,12 +98,6 @@ async def delete_job_endpoint(
         running_pids = details.get("running_pids")
         if running_pids:
             kill_processes_from_dict(running_pids, job_uuid)
-
-        # Release ports
-        provider_ports = details.get("provider_ports")
-        if provider_ports:
-            for port in provider_ports.values():
-                release_port(port)
 
     deleted = delete_job(job_uuid)
     if not deleted:

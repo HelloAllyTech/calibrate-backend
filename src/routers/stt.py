@@ -3,9 +3,7 @@ import csv
 import json
 import subprocess
 import tempfile
-import time
 import traceback
-import concurrent.futures
 import threading
 import logging
 from pathlib import Path
@@ -28,7 +26,7 @@ from utils import (
     try_start_queued_job,
     register_job_starter,
     is_job_timed_out,
-    kill_processes_from_dict,
+    kill_process_group,
     capture_exception_to_sentry,
 )
 
@@ -150,197 +148,64 @@ def _read_metrics_json(provider_output_dir: Path) -> Optional[dict]:
     try:
         with open(metrics_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # Handle backward compatibility: if it's a list, return as-is
-            # New format is a dict
             return data
     except Exception:
         return None
 
 
-def _update_intermediate_results(
-    output_dir: Path,
-    provider: str,
-    task_id: str,
-    intermediate_results: dict,
-    results_lock: threading.Lock,
-):
-    """Update intermediate results for a provider and save to job."""
-    provider_output_dir = _find_provider_output_dir(output_dir, provider)
-    if not provider_output_dir:
-        return
+def _read_leaderboard_xlsx(leaderboard_dir: Path) -> Optional[List[dict]]:
+    """Read the leaderboard summary from the xlsx file in leaderboard directory.
 
-    results_data = _read_results_csv(provider_output_dir)
-    if results_data is None:
-        return
+    Looks for any .xlsx file in the directory (commonly stt_leaderboard.xlsx).
+    """
+    if not leaderboard_dir.exists():
+        logger.warning(f"Leaderboard directory does not exist: {leaderboard_dir}")
+        return None
 
-    # Check if metrics.json exists - if so, provider evaluation is complete
-    metrics_data = _read_metrics_json(provider_output_dir)
-    is_complete = metrics_data is not None
-
-    with results_lock:
-        intermediate_results[provider] = {
-            "provider": provider,
-            "success": True if is_complete else None,
-            "message": "Completed" if is_complete else "Processing...",
-            "metrics": metrics_data,
-            "results": results_data,
-        }
-        # Update job with current intermediate results
-        update_job(
-            task_id,
-            results={
-                "provider_results": list(intermediate_results.values()),
-                "leaderboard_summary": None,
-                "error": None,
-            },
+    # Find xlsx file in leaderboard directory
+    xlsx_files = list(leaderboard_dir.glob("*.xlsx"))
+    if not xlsx_files:
+        logger.warning(
+            f"No xlsx files found in leaderboard directory: {leaderboard_dir}"
         )
+        # Log what files are present for debugging
+        all_files = list(leaderboard_dir.iterdir())
+        logger.info(f"Files in leaderboard directory: {[f.name for f in all_files]}")
+        return None
 
+    xlsx_file = xlsx_files[0]  # Use the first xlsx file found
+    logger.info(f"Reading leaderboard from: {xlsx_file}")
 
-def evaluate_provider(
-    run_id: str,
-    provider: str,
-    language: str,
-    input_dir: Path,
-    output_dir: Path,
-    s3_bucket: str,
-    task_id: str,
-    running_pids: dict,
-    intermediate_results: dict,
-    results_lock: threading.Lock,
-) -> ProviderResult:
-    """Evaluate a single STT provider."""
     try:
-        s3 = get_s3_client()
+        wb = openpyxl.load_workbook(str(xlsx_file), data_only=True)
+        logger.info(f"Workbook sheets: {wb.sheetnames}")
 
-        # Run calibrate STT eval command
-        eval_cmd = [
-            "calibrate",
-            "stt",
-            "eval",
-            "-p",
-            provider,
-            "-l",
-            language,
-            "-i",
-            str(input_dir),
-            "-o",
-            str(output_dir),
-        ]
-
-        logger.info(f"Running {run_id} with command: {' '.join(eval_cmd)}")
-
-        # Create temp files for stdout/stderr to avoid pipe buffer issues during polling
-        stdout_path = output_dir / f"{provider}_stdout.log"
-        stderr_path = output_dir / f"{provider}_stderr.log"
-
-        stdout_f = open(stdout_path, "w")
-        stderr_f = open(stderr_path, "w")
-
-        try:
-            # Use Popen with start_new_session to create a process group for cleanup
-            process = subprocess.Popen(
-                eval_cmd,
-                stdout=stdout_f,
-                stderr=stderr_f,
-                text=True,
-                start_new_session=True,  # Create new process group for cleanup
-                cwd=str(output_dir.parent),
+        if "summary" not in wb.sheetnames:
+            logger.warning(
+                f"'summary' sheet not found in {xlsx_file.name}, sheets: {wb.sheetnames}"
             )
+            return None
 
-            # Track the process PID for cleanup on server restart
-            running_pids[provider] = process.pid
-            logger.info(f"STT eval for {provider} started with PID {process.pid}")
+        ws = wb["summary"]
+        # Get headers from first row (skip empty cells)
+        headers = [cell.value for cell in ws[1] if cell.value is not None]
+        logger.info(f"Leaderboard headers: {headers}")
 
-            # Update job details with current running PIDs
-            update_job(task_id, details={"running_pids": dict(running_pids)})
+        leaderboard_summary = []
+        for row in ws.iter_rows(min_row=2, values_only=False):
+            if any(cell.value is not None for cell in row):
+                row_dict = {}
+                for idx, cell in enumerate(row):
+                    if idx < len(headers):
+                        row_dict[headers[idx]] = cell.value
+                if any(v is not None for v in row_dict.values()):
+                    leaderboard_summary.append(row_dict)
 
-            # Poll for process completion while updating intermediate results
-            while process.poll() is None:
-                _update_intermediate_results(
-                    output_dir, provider, task_id, intermediate_results, results_lock
-                )
-                time.sleep(2)  # Check every 2 seconds
-
-            # One final update after process completes
-            _update_intermediate_results(
-                output_dir, provider, task_id, intermediate_results, results_lock
-            )
-
-        finally:
-            stdout_f.close()
-            stderr_f.close()
-
-        # Read stdout/stderr from files
-        with open(stdout_path, "r") as f:
-            stdout = f.read()
-        with open(stderr_path, "r") as f:
-            stderr = f.read()
-
-        # Remove from running PIDs
-        running_pids.pop(provider, None)
-        update_job(task_id, details={"running_pids": dict(running_pids)})
-
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(
-                process.returncode, eval_cmd, stdout, stderr
-            )
-
-        # Find the provider-specific output directory
-        provider_output_dir = _find_provider_output_dir(output_dir, provider)
-
-        # Upload STT eval results to S3
-        results_prefix = f"stt/evals/{run_id}/outputs/{provider}"
-
-        # Read metrics.json and results.csv before uploading
-        metrics_data = None
-        results_data = None
-
-        metrics_file = provider_output_dir / "metrics.json"
-        results_file = provider_output_dir / "results.csv"
-
-        if metrics_file.exists():
-            with open(metrics_file, "r", encoding="utf-8") as f:
-                metrics_data = json.load(f)
-
-        if results_file.exists():
-            results_data = []
-            with open(results_file, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    results_data.append(dict(row))
-
-        for root, dirs, files in os.walk(provider_output_dir):
-            for file in files:
-                local_file_path = Path(root) / file
-                relative_path = local_file_path.relative_to(provider_output_dir)
-                s3_key = f"{results_prefix}/{relative_path}"
-
-                s3.upload_file(str(local_file_path), s3_bucket, s3_key)
-
-        return ProviderResult(
-            provider=provider,
-            success=True,
-            message=f"STT evaluation completed successfully for {provider}",
-            metrics=metrics_data,
-            results=results_data,
-        )
-
-    except subprocess.CalledProcessError as e:
-        traceback.print_exc()
-        capture_exception_to_sentry(e)
-        return ProviderResult(
-            provider=provider,
-            success=False,
-            message=f"STT eval failed: {e.stderr}",
-        )
+        logger.info(f"Read {len(leaderboard_summary)} rows from leaderboard")
+        return leaderboard_summary
     except Exception as e:
-        traceback.print_exc()
-        capture_exception_to_sentry(e)
-        return ProviderResult(
-            provider=provider,
-            success=False,
-            message=f"Unexpected error: {str(e)}",
-        )
+        logger.warning(f"Failed to read leaderboard xlsx: {e}")
+        return None
 
 
 def run_evaluation_task(
@@ -405,170 +270,131 @@ def run_evaluation_task(
                 output_dir = temp_path / "output"
                 output_dir.mkdir()
 
-                # Run calibrate STT eval for all providers in parallel
-                provider_results = []
-
-                logger.info(f"Running {len(request.providers)} providers in parallel")
-
-                # Shared dict to track running process PIDs for cleanup
-                running_pids = {}
-
-                # Shared dict and lock for intermediate results
-                intermediate_results = {}
-                results_lock = threading.Lock()
-
-                # Limit to 2 concurrent providers to avoid resource exhaustion
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=min(2, len(request.providers))
-                ) as executor:
-                    future_to_provider = {
-                        executor.submit(
-                            evaluate_provider,
-                            task_id,
-                            provider,
-                            request.language,
-                            input_dir,
-                            output_dir,
-                            s3_bucket,
-                            task_id,
-                            running_pids,
-                            intermediate_results,
-                            results_lock,
-                        ): provider
-                        for provider in request.providers
-                    }
-
-                    for future in concurrent.futures.as_completed(future_to_provider):
-                        result = future.result()
-                        provider_results.append(result)
-
-                logger.info("Completed running all providers in parallel")
-
-                # Check if all providers succeeded
-                all_succeeded = all(r.success for r in provider_results)
-                if not all_succeeded:
-                    failed_providers = [
-                        r.provider for r in provider_results if not r.success
+                # Run calibrate stt command with all providers at once
+                # The CLI now handles parallelization internally and generates leaderboard
+                eval_cmd = (
+                    [
+                        "calibrate",
+                        "stt",
+                        "-p",
                     ]
-                    # Get error messages from failed providers
-                    error_details = [
-                        f"{r.provider}: {r.message}"
-                        for r in provider_results
-                        if not r.success
+                    + request.providers
+                    + [
+                        "-l",
+                        request.language,
+                        "-i",
+                        str(input_dir),
+                        "-o",
+                        str(output_dir),
                     ]
-                    update_job(
-                        task_id,
-                        status=TaskStatus.FAILED.value,
-                        results={
-                            "provider_results": [
-                                r.model_dump() for r in provider_results
-                            ],
-                            "leaderboard_summary": None,
-                            "error": f"Some providers failed: {'; '.join(error_details)}",
-                        },
+                )
+
+                logger.info(f"Running STT eval command: {' '.join(eval_cmd)}")
+
+                # Create temp files for stdout/stderr
+                stdout_path = output_dir / "stdout.log"
+                stderr_path = output_dir / "stderr.log"
+
+                with (
+                    open(stdout_path, "w") as stdout_f,
+                    open(stderr_path, "w") as stderr_f,
+                ):
+                    process = subprocess.Popen(
+                        eval_cmd,
+                        stdout=stdout_f,
+                        stderr=stderr_f,
+                        text=True,
+                        start_new_session=True,
+                        cwd=str(temp_path),
                     )
-                    return
 
-                # Run calibrate STT leaderboard command
-                leaderboard_dir = temp_path / "leaderboard"
-                leaderboard_dir.mkdir()
+                    # Store PID for cleanup
+                    update_job(
+                        task_id, details={"pid": process.pid, "pgid": process.pid}
+                    )
 
-                leaderboard_cmd = [
-                    "calibrate",
-                    "stt",
-                    "leaderboard",
-                    "-o",
-                    str(output_dir),
-                    "-s",
-                    str(leaderboard_dir),
-                ]
+                    # Wait for process to complete
+                    process.wait()
 
-                leaderboard_prefix = f"stt/evals/{task_id}/leaderboard"
+                # Read stdout/stderr
+                with open(stdout_path, "r") as f:
+                    stdout = f.read()
+                with open(stderr_path, "r") as f:
+                    stderr = f.read()
+
+                if process.returncode != 0:
+                    logger.error(f"STT eval failed with code {process.returncode}")
+                    logger.error(f"stderr: {stderr}")
+                    raise subprocess.CalledProcessError(
+                        process.returncode, eval_cmd, stdout, stderr
+                    )
+
+                logger.info("STT eval command completed successfully")
+
+                # Read results for each provider
+                provider_results = []
+                for provider in request.providers:
+                    provider_output_dir = _find_provider_output_dir(
+                        output_dir, provider
+                    )
+                    if provider_output_dir:
+                        metrics_data = _read_metrics_json(provider_output_dir)
+                        results_data = _read_results_csv(provider_output_dir)
+
+                        # Upload provider results to S3
+                        results_prefix = f"stt/evals/{task_id}/outputs/{provider}"
+                        for root, dirs, files in os.walk(provider_output_dir):
+                            for file in files:
+                                local_file_path = Path(root) / file
+                                relative_path = local_file_path.relative_to(
+                                    provider_output_dir
+                                )
+                                s3_key = f"{results_prefix}/{relative_path}"
+                                s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+
+                        provider_results.append(
+                            ProviderResult(
+                                provider=provider,
+                                success=True,
+                                message=f"STT evaluation completed successfully for {provider}",
+                                metrics=metrics_data,
+                                results=results_data,
+                            )
+                        )
+                    else:
+                        provider_results.append(
+                            ProviderResult(
+                                provider=provider,
+                                success=False,
+                                message=f"No output found for provider {provider}",
+                            )
+                        )
+
+                # Read leaderboard from output directory
+                leaderboard_dir = output_dir / "leaderboard"
                 leaderboard_summary = None
 
-                logger.info(f"Running leaderboard command: {' '.join(leaderboard_cmd)}")
+                # Log what's in output_dir for debugging
+                logger.info(
+                    f"Output directory contents: {[f.name for f in output_dir.iterdir()]}"
+                )
 
-                try:
-                    result = subprocess.run(
-                        leaderboard_cmd,
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                        cwd=temp_path,
-                    )
+                if leaderboard_dir.exists():
+                    logger.info(f"Leaderboard directory exists: {leaderboard_dir}")
+                    leaderboard_summary = _read_leaderboard_xlsx(leaderboard_dir)
 
-                    logger.info("Leaderboard command completed successfully")
-
-                    if result.stdout:
-                        logger.info(f"Leaderboard stdout: {result.stdout}")
-                    if result.stderr:
-                        logger.info(f"Leaderboard stderr: {result.stderr}")
-
-                    # Upload leaderboard results
+                    # Upload leaderboard to S3
+                    leaderboard_prefix = f"stt/evals/{task_id}/leaderboard"
                     for root, dirs, files in os.walk(leaderboard_dir):
                         for file in files:
                             local_file_path = Path(root) / file
                             relative_path = local_file_path.relative_to(leaderboard_dir)
                             s3_key = f"{leaderboard_prefix}/{relative_path}"
-
                             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
-
-                            # Read xlsx file and extract summary sheet
-                            if file == "stt_leaderboard.xlsx":
-                                logger.info(
-                                    f"Found leaderboard metrics file: {local_file_path}"
-                                )
-                                try:
-                                    wb = openpyxl.load_workbook(
-                                        str(local_file_path), data_only=True
-                                    )
-                                    if "summary" in wb.sheetnames:
-                                        ws = wb["summary"]
-                                        # Get headers from first row (skip empty cells)
-                                        headers = [
-                                            cell.value
-                                            for cell in ws[1]
-                                            if cell.value is not None
-                                        ]
-
-                                        logger.info("Preparing leaderboard summary")
-
-                                        # Read all data rows
-                                        leaderboard_summary = []
-
-                                        for row in ws.iter_rows(
-                                            min_row=2, values_only=False
-                                        ):
-                                            # Check if row has any data
-                                            if any(
-                                                cell.value is not None for cell in row
-                                            ):
-                                                row_dict = {}
-                                                for idx, cell in enumerate(row):
-                                                    if idx < len(headers):
-                                                        # Use header name as key, cell value as value
-                                                        row_dict[headers[idx]] = (
-                                                            cell.value
-                                                        )
-                                                # Only add row if it has at least one non-None value
-                                                if any(
-                                                    v is not None
-                                                    for v in row_dict.values()
-                                                ):
-                                                    leaderboard_summary.append(row_dict)
-
-                                        logger.info(
-                                            f"Prepared leaderboard summary with {len(leaderboard_summary)} rows"
-                                        )
-                                except Exception as e:
-                                    traceback.print_exc()
-                                    # If reading xlsx fails, continue without summary
-                                    raise e
-
-                except subprocess.CalledProcessError as e:
-                    # Leaderboard failure is critical too
-                    traceback.print_exc()
-                    raise e
+                else:
+                    logger.warning(
+                        f"Leaderboard directory does not exist: {leaderboard_dir}"
+                    )
 
                 # Create and upload config file to S3
                 config_data = {
@@ -583,17 +409,38 @@ def run_evaluation_task(
                 s3.upload_file(str(config_file), s3_bucket, config_s3_key)
                 logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
+                # Check if all providers succeeded
+                all_succeeded = all(r.success for r in provider_results)
+                final_status = (
+                    TaskStatus.DONE.value if all_succeeded else TaskStatus.FAILED.value
+                )
+
+                error_msg = None
+                if not all_succeeded:
+                    failed = [r.provider for r in provider_results if not r.success]
+                    error_msg = f"Some providers failed: {', '.join(failed)}"
+
                 # Update job with results
                 update_job(
                     task_id,
-                    status=TaskStatus.DONE.value,
+                    status=final_status,
                     results={
                         "provider_results": [r.model_dump() for r in provider_results],
                         "leaderboard_summary": leaderboard_summary,
-                        "error": None,
+                        "error": error_msg,
                     },
                 )
 
+            except subprocess.CalledProcessError as e:
+                traceback.print_exc()
+                capture_exception_to_sentry(e)
+                update_job(
+                    task_id,
+                    status=TaskStatus.FAILED.value,
+                    results={
+                        "error": f"STT evaluation failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
+                    },
+                )
             except Exception as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
@@ -705,12 +552,12 @@ async def get_evaluation_status(
         if updated_at and is_job_timed_out(updated_at):
             logger.warning(f"Job {task_id} timed out, marking as failed")
 
-            # Kill running processes
-            running_pids = details.get("running_pids")
-            if running_pids:
-                kill_processes_from_dict(running_pids, task_id)
+            # Kill running process
+            pid = details.get("pid") or details.get("pgid")
+            if pid:
+                kill_process_group(pid, task_id)
 
-            # Mark job as failed (preserve existing results, add error)
+            # Mark job as failed
             results["error"] = "Job timed out after 5 minutes of inactivity"
             update_job(
                 task_id,
@@ -725,28 +572,20 @@ async def get_evaluation_status(
     # Get list of all requested providers from job details
     requested_providers = details.get("providers", [])
 
-    # Build a set of providers that have results
+    # Build provider results
     provider_results = results.get("provider_results")
-    providers_with_results = set()
-    if provider_results:
-        for provider_result in provider_results:
-            providers_with_results.add(provider_result.get("provider"))
-
-    # Add queued entries for providers that haven't started yet
     if provider_results is None:
-        provider_results = []
-
-    for provider in requested_providers:
-        if provider not in providers_with_results:
-            provider_results.append(
-                {
-                    "provider": provider,
-                    "success": None,
-                    "message": "Queued...",
-                    "metrics": None,
-                    "results": None,
-                }
-            )
+        # Job hasn't completed yet, show all as queued
+        provider_results = [
+            {
+                "provider": provider,
+                "success": None,
+                "message": "Queued...",
+                "metrics": None,
+                "results": None,
+            }
+            for provider in requested_providers
+        ]
 
     # Normalize metrics format for backward compatibility (list -> dict)
     for provider_result in provider_results:

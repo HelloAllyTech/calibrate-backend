@@ -40,7 +40,7 @@ calibrate-backend/
 ├── src/
 │   ├── main.py              # FastAPI app entry point, lifespan management
 │   ├── db.py                # SQLite database layer (~2300 lines)
-│   ├── utils.py             # Shared utilities (S3 client, port finding, tool config building)
+│   ├── utils.py             # Shared utilities (S3 client, tool config building)
 │   ├── job_recovery.py      # Restart in-progress jobs on app startup
 │   └── routers/
 │       ├── auth.py          # Google OAuth authentication
@@ -162,7 +162,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 #### Evaluation & Testing (all require JWT auth)
 
 - `GET /jobs` - List all STT/TTS evaluation jobs for authenticated user
-- `DELETE /jobs/{job_uuid}` - Delete a job (kills processes, releases ports, triggers next queued job)
+- `DELETE /jobs/{job_uuid}` - Delete a job (kills processes, triggers next queued job)
 - `POST /stt/evaluate` - Start STT evaluation task
 - `GET /stt/evaluate/{task_id}` - Get STT evaluation status (includes timeout detection)
 - `POST /tts/evaluate` - Start TTS evaluation task
@@ -178,7 +178,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 - `POST /simulations/{uuid}/run` - Start simulation (chat or voice)
 - `GET /simulations/run/{task_id}` - Get simulation run status (includes timeout detection, partial results for voice)
-- `DELETE /simulations/run/{job_uuid}` - Delete a simulation job (kills process, releases port, triggers next queued job)
+- `DELETE /simulations/run/{job_uuid}` - Delete a simulation job (kills process, triggers next queued job)
 - `GET /simulations/{uuid}/runs` - List all runs for a simulation
 
 **Status API Response Fields:**
@@ -216,8 +216,8 @@ The JWT token contains the user's UUID and is validated on every protected endpo
    - `in_progress` if capacity available (job starts immediately)
    - `queued` if capacity full (job waits in queue)
 4. **Execution**: Background thread runs the task
-5. **Process & Port Tracking**: PIDs and ports stored in job details for cleanup (STT/TTS evals and voice simulations)
-6. **Incremental Updates**: Results updated in DB during execution (STT/TTS evals, text/voice simulations, agent tests)
+5. **Process Tracking**: PIDs stored in job details for cleanup (voice simulations, STT/TTS evals only; agent tests/benchmarks use blocking `process.wait()` without PID tracking)
+6. **Incremental Updates**: Results updated in DB during execution (text/voice simulations, agent unit tests, benchmarks)
 7. **Timeout Detection**: Status API checks if job hasn't updated in 5+ minutes; if so, marks as failed
 8. **Completion**: Job updated with `done` status and `results` JSON
 9. **Queue Processing**: On completion/timeout/deletion, `try_start_queued_*_job()` starts next queued job if capacity allows
@@ -226,7 +226,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 ### Job Status Values
 
 - `queued` - Job is waiting for capacity (FIFO order)
-- `in_progress` - Job is running (may have partial results for voice simulations)
+- `in_progress` - Job is running (may have partial results for simulations, agent unit tests, and benchmarks)
 - `done` - Job completed successfully
 - `failed` - Job failed (timed out or error occurred; check `results.error` for details, partial results preserved)
 - `cancelled` - Job was cancelled (not currently used)
@@ -295,37 +295,32 @@ try_start_queued_*_job()
 
 ### Process Management for Long-Running Jobs
 
-Voice simulation jobs spawn subprocesses that may run on specific ports. STT and TTS jobs do not require ports. To handle server restarts and cleanup gracefully:
+Voice simulation and STT/TTS evaluation jobs spawn subprocesses. To handle server restarts and cleanup gracefully:
 
 - **Process isolation**: All subprocesses started with `start_new_session=True` (creates new process group)
-- **PID tracking**: Process PIDs stored in job `details`:
-  - Voice simulations: Single `pid` and `pgid` fields
-  - STT/TTS evaluations: `running_pids` dict mapping provider name to PID (e.g., `{"deepgram": 12345, "openai": 12346}`)
-- **Port tracking**: Reserved ports stored in job `details`:
-  - Voice simulations: Single `port` field (only for voice type)
-  - STT/TTS evaluations: No ports required
+- **PID tracking**: Process PIDs stored in job `details` as `pid` and `pgid` fields (STT/TTS evals and voice simulations only)
 - **Orphan cleanup**: On recovery, `job_recovery.py` kills process groups using `os.killpg()` before restarting
 - **Graceful termination**: Sends SIGTERM first, waits briefly, then SIGKILL if still running
-- **Port release**: Ports are released back to the pool after process termination (voice simulations only)
 
-This prevents orphaned processes from accumulating across server restarts and frees up ports.
+**Note**: Agent test jobs (`llm-unit-test`, `llm-benchmark`) do NOT have PID tracking because the `agent_test_jobs` table doesn't have a `details` column. These jobs use blocking `process.wait()` calls, so the process completes before the function returns.
+
+This prevents orphaned processes from accumulating across server restarts.
 
 ### Job Deletion
 
 Jobs can be deleted via DELETE endpoints:
 
-| Endpoint                             | Table             | Notes                                                      |
-| ------------------------------------ | ----------------- | ---------------------------------------------------------- |
-| `DELETE /jobs/{job_uuid}`            | `jobs`            | STT/TTS eval jobs; kills processes (no ports needed)       |
-| `DELETE /agent-tests/job/{job_uuid}` | `agent_test_jobs` | Agent test jobs; no process cleanup (blocking call)        |
-| `DELETE /simulations/run/{job_uuid}` | `simulation_jobs` | Simulation jobs; kills process, releases port (voice only) |
+| Endpoint                             | Table             | Notes                                          |
+| ------------------------------------ | ----------------- | ---------------------------------------------- |
+| `DELETE /jobs/{job_uuid}`            | `jobs`            | STT/TTS eval jobs; kills processes             |
+| `DELETE /agent-tests/job/{job_uuid}` | `agent_test_jobs` | Agent test jobs; no process cleanup (blocking) |
+| `DELETE /simulations/run/{job_uuid}` | `simulation_jobs` | Simulation jobs; kills process                 |
 
 When deleting a running job:
 
 1. Kill running processes (if applicable)
-2. Release reserved ports (if applicable, voice simulations only)
-3. Delete job from database
-4. Trigger next queued job in the same queue
+2. Delete job from database
+3. Trigger next queued job in the same queue
 
 ### Job Timeout Detection
 
@@ -335,9 +330,8 @@ Jobs that haven't updated their `updated_at` timestamp in 5+ minutes are conside
 - **Detection**: Status API checks `updated_at` for `in_progress` jobs
 - **Timeout handling**:
   1. Kill running processes (if applicable)
-  2. Release reserved ports (if applicable, voice simulations only)
-  3. Mark job as `failed` with error (existing partial results are preserved)
-  4. Trigger next queued job
+  2. Mark job as `failed` with error (existing partial results are preserved)
+  3. Trigger next queued job
 
 The `is_job_timed_out(updated_at)` utility function in `utils.py` handles timestamp comparison.
 
@@ -351,21 +345,17 @@ The `is_job_timed_out(updated_at)` utility function in `utils.py` handles timest
 | `capture_exception_to_sentry()` | `utils.py` | Logs exception to Sentry as unhandled error                                                  |
 | `build_tool_configs()`          | `utils.py` | Builds calibrate tool configs from agent tools (handles structured_output and webhook types) |
 
-### STT/TTS Evaluation Incremental Updates
+### STT/TTS Evaluation Flow
 
-STT and TTS evaluations run multiple providers with a maximum of 2 concurrent executions (to avoid resource exhaustion), with each provider processing multiple items sequentially. When one provider completes, the next queued provider starts automatically. The backend monitors both `results.csv` and `metrics.json` for each provider during execution and updates the database incrementally:
+STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command with all providers specified at once. The calibrate CLI handles parallelization internally and generates the leaderboard automatically as part of the same command.
 
-- **Polling interval**: Every 2 seconds while each provider subprocess is running
-- **During execution**: Status API returns partial `provider_results` for each provider
-- **Provider completion detection**: When `metrics.json` exists for a provider, that provider is marked as complete (`success: true`, `metrics` populated) even while other providers are still running
-- **Job completion**: Final results include `leaderboard_summary` after all providers complete
+- **Single command execution**: All providers evaluated in one CLI call (e.g., `calibrate stt -p openai deepgram sarvam -l english -i input -o output`)
+- **Internal parallelization**: The calibrate CLI handles concurrent provider execution internally
+- **Automatic leaderboard**: The CLI generates the leaderboard in `output/leaderboard/` as part of the same command
+- **Job completion**: After the command completes, the backend reads per-provider results and the leaderboard, then uploads to S3
+- **Leaderboard reading**: The backend finds any `.xlsx` file in the leaderboard directory (dynamic discovery) and reads the `summary` sheet
 
-**TTS-specific behavior**: Audio files are uploaded to S3 as they become available during processing:
-
-- Each audio file is uploaded immediately when it appears in `results.csv`
-- Presigned URLs are generated and cached for intermediate results (allows immediate playback)
-- The `uploaded_audio_cache` dict prevents re-uploading the same file on each polling iteration
-- When the job completes, final results store S3 keys (not presigned URLs); the status API generates presigned URLs on-the-fly for done jobs
+**No intermediate updates**: Unlike voice simulations, STT/TTS evaluations do not provide incremental updates. The status API returns either `queued` status (before completion) or full results (after completion).
 
 **Response Model (`TaskStatusResponse`):**
 
@@ -374,23 +364,23 @@ STT and TTS evaluations run multiple providers with a maximum of 2 concurrent ex
 | `task_id`             | `str`                            | Job UUID                                              |
 | `status`              | `str`                            | Job status: `queued`, `in_progress`, `done`, `failed` |
 | `language`            | `Optional[str]`                  | Language from job details (e.g., "english", "hindi")  |
-| `provider_results`    | `Optional[List[ProviderResult]]` | Results per provider                                  |
-| `leaderboard_summary` | `Optional[List[Dict]]`           | Summary after all providers complete                  |
+| `provider_results`    | `Optional[List[ProviderResult]]` | Results per provider (populated on completion)        |
+| `leaderboard_summary` | `Optional[List[Dict]]`           | Summary after job completes                           |
 | `error`               | `Optional[str]`                  | Error message if job failed                           |
 
 **Response Model (`ProviderResult`):**
 
-| Field      | Type                           | When Present                                                                                        |
-| ---------- | ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `provider` | `str`                          | Always                                                                                              |
-| `success`  | `Optional[bool]`               | `None` while queued/processing, `True`/`False` when complete (see below)                            |
-| `message`  | `str`                          | `"Queued..."` before start, `"Processing..."` in progress, `"Completed"` or error message when done |
-| `metrics`  | `Optional[Dict \| List[Dict]]` | When `metrics.json` exists (provider complete); dict in new format, list for backward compatibility |
-| `results`  | `Optional[List[Dict]]`         | `null` while queued, partial rows during execution, complete when done                              |
+| Field      | Type                           | When Present                                                                 |
+| ---------- | ------------------------------ | ---------------------------------------------------------------------------- |
+| `provider` | `str`                          | Always                                                                       |
+| `success`  | `Optional[bool]`               | `None` while job is running, `True`/`False` when complete                    |
+| `message`  | `str`                          | `"Queued..."` while job is running, `"Completed"` or error message when done |
+| `metrics`  | `Optional[Dict \| List[Dict]]` | When job completes; dict in new format, list for backward compatibility      |
+| `results`  | `Optional[List[Dict]]`         | `null` while job is running, complete when done                              |
 
 **TTS success determination**: A TTS provider is marked `success: true` only if at least one text was successfully synthesized (has an `audio_path` in results). If the calibrate CLI completes but no audio files were generated (e.g., voice not found, API errors), `success: false` is returned with an error message. This prevents false positives where the process exits normally but all synthesis attempts failed.
 
-**All requested providers always included**: The status API reads the list of requested providers from `job.details.providers` and ensures all are present in the response. Providers that haven't started processing yet are shown with `success: null`, `message: "Queued..."`, and `metrics`/`results` as `null`. This allows clients to see the full list of providers and their states (queued → processing → completed) without needing to track the original request.
+**Provider status while running**: While the job is `in_progress`, all providers are shown with `success: null`, `message: "Queued..."`, and `metrics`/`results` as `null`. Results are only populated after the CLI command completes.
 
 **Metrics normalization**: The status API normalizes old list-of-dicts metrics format to the new dict format before returning. The `_normalize_metrics()` helper handles two old formats:
 
@@ -399,7 +389,7 @@ STT and TTS evaluations run multiple providers with a maximum of 2 concurrent ex
 
 This ensures clients always receive metrics in dict format (e.g., `{"wer": 2.4, "ttfb": {"mean": 0.1, ...}}`) regardless of when the job was created.
 
-**STT Metrics** (returned by `calibrate stt eval`):
+**STT Metrics** (returned by `calibrate stt`):
 
 - `wer` - Word Error Rate (float)
 - `string_similarity` - String similarity score (float)
@@ -407,7 +397,7 @@ This ensures clients always receive metrics in dict format (e.g., `{"wer": 2.4, 
 - `processing_time` - Processing time stats: `{mean, std, values}` (may be absent/null)
 - `ttfb` - Time to First Byte stats: `{mean, std, values}` (may be absent/null)
 
-**TTS Metrics** (returned by `calibrate tts eval`):
+**TTS Metrics** (returned by `calibrate tts`):
 
 - `llm_judge_score` - LLM judge accuracy score (float)
 - `ttfb` - Time to First Byte stats: `{mean, std, values}` (may be absent/null)
@@ -416,10 +406,10 @@ Note: TTS does not return `processing_time`. Both `ttfb` values may be absent if
 
 **TTS `results` row `audio_path` field:**
 
-- **While in progress**: Contains presigned URL for immediate playback
-- **When done**: Contains S3 key; status API generates presigned URL on fetch
+- **Stored**: S3 key (e.g., `tts/evals/{job_id}/outputs/{provider}/audios/0.wav`)
+- **On status fetch**: Presigned URL generated on-the-fly for completed jobs
 
-This allows clients to track progress per-provider, see which providers have completed (with their metrics), and play audio files without waiting for all providers to complete.
+This allows secure, time-limited access to audio files without storing expirable URLs in the database.
 
 ### Simulation Incremental Updates (Text and Voice)
 
@@ -456,12 +446,12 @@ This allows clients to display progress and per-simulation results (including pa
 
 ### Agent Test Job Results Format
 
-Agent test jobs (`llm-unit-test`) monitor the output directory during execution and provide incremental results as each test completes:
+Agent test jobs (`llm-unit-test`) run a single `calibrate llm` command with the model specified. The backend monitors the output directory during execution and provides incremental results as each test completes.
 
+- **Single command execution**: `calibrate llm -c config.json -m model -p provider -o output`
 - **Polling interval**: Every 2 seconds while the subprocess is running
 - **During execution**: The backend reads `results.json` and updates the database incrementally
 - **Test completion detection**: When a test appears in `results.json`, it's shown with full results; pending tests show just the name
-- **Job completion**: When `metrics.json` exists, `total_tests`, `passed`, and `failed` are populated
 
 **Response Model (`TestCaseResult`):**
 
@@ -476,44 +466,43 @@ This allows clients to see which tests have completed with their results while o
 
 ### Benchmark Job Results Format
 
-Benchmark jobs (`llm-benchmark`) run multiple models in parallel, with per-test intermediate results for each model:
+Benchmark jobs (`llm-benchmark`) run a single `calibrate llm` command with all models specified at once. The calibrate CLI handles parallelization internally and generates the leaderboard automatically.
 
-- **Parallel execution**: All models run simultaneously using `ThreadPoolExecutor`
-- **Polling interval**: Every 2 seconds while any model is still running
-- **Thread-safe updates**: Uses `threading.Lock` when updating shared results to prevent race conditions
-- **Output discovery**: Uses `os.walk()` on the output directory to find all `results.json` and `metrics.json` files, then matches them to models by folder name
+- **Single command execution**: All models evaluated in one CLI call (e.g., `calibrate llm -c config.json -m gpt-4.1 claude-3.5-sonnet -p openrouter -o output`)
+- **Internal parallelization**: The calibrate CLI handles concurrent model execution internally
+- **Automatic leaderboard**: The CLI generates the leaderboard in `output/leaderboard/` as part of the same command
+- **Output discovery**: After command completes, uses `os.walk()` on the output directory to find all `results.json` and `metrics.json` files
 - **Model name matching**: `_match_model_to_folder()` handles various calibrate naming conventions:
   - `openai/gpt-4` → `openai_gpt-4` (single underscore)
   - `openai/gpt-4` → `openai__gpt-4` (double underscore)
   - `openai/gpt-4` → `openai-gpt-4` (dash)
-- **Model states**:
-  - **Queued**: No output folder found yet (`success: None`, `message: "Queued..."`)
-  - **In-progress**: Has `results.json` but no `metrics.json` (`success: None`, `message: "Processing... (X/Y tests)"`)
-  - **Completed**: Has `metrics.json` (`success: True/False`, full metrics)
-- **Job completion**: Final `leaderboard_summary` added after all models complete
+- **Polling interval**: Every 2 seconds while the subprocess is running
+- **During execution**: The backend scans output directory for per-model results and updates incrementally
+- **Job completion**: Final results and `leaderboard_summary` populated after command completes
 
 **Response Model (`ModelResult`):**
 
-| Field          | Type                   | When Present                                        |
-| -------------- | ---------------------- | --------------------------------------------------- |
-| `model`        | `str`                  | Always                                              |
-| `success`      | `Optional[bool]`       | `None` while queued/processing, `True/False` done   |
-| `message`      | `str`                  | Status message (queued/processing/completed)        |
-| `total_tests`  | `Optional[int]`        | When model completes (from `metrics.json`)          |
-| `passed`       | `Optional[int]`        | When model completes                                |
-| `failed`       | `Optional[int]`        | When model completes                                |
-| `test_results` | `Optional[List[Dict]]` | During execution (partial) and on completion (full) |
+| Field          | Type                   | When Present                                                |
+| -------------- | ---------------------- | ----------------------------------------------------------- |
+| `model`        | `str`                  | Always                                                      |
+| `success`      | `Optional[bool]`       | `None` while running/queued, `True/False` when done         |
+| `message`      | `str`                  | `"Queued..."`, `"Running... (N tests done)"`, `"Completed"` |
+| `total_tests`  | `Optional[int]`        | When model has results (partial or complete)                |
+| `passed`       | `Optional[int]`        | When model has results                                      |
+| `failed`       | `Optional[int]`        | When model has results                                      |
+| `test_results` | `Optional[List[Dict]]` | When model has results (partial or complete)                |
 
-Intermediate results always include ALL tests in `test_results`:
+**Model states during execution:**
 
-- **Completed tests**: Full data (`name`, `passed`, `output`, `test_case`)
-- **Pending tests**: `{name, passed: null, output: null, test_case: null}`
+- `"Queued..."` - No output folder found for this model yet
+- `"Running... (N tests done)"` - Has `results.json` but no `metrics.json` (partial results)
+- `"Completed"` - Has `metrics.json` (all tests done for this model)
 
-This ensures consistent array length and allows clients to show progress for each test.
+This allows clients to see per-model progress as each model completes its tests.
 
 **S3 Upload Structure for Benchmarks:**
 
-Benchmarks use `skip_s3_upload=True` for individual model runs, then upload once at the end to preserve the calibrate CLI output structure:
+After the benchmark command completes, outputs are uploaded to S3 preserving the calibrate CLI output structure:
 
 ```
 s3://bucket/agent-tests/benchmarks/{task_id}/
@@ -538,8 +527,8 @@ All job types upload their config files to S3 for reproducibility and debugging.
 
 | Job Type         | Config File Name         | S3 Path                                                  |
 | ---------------- | ------------------------ | -------------------------------------------------------- |
-| STT Evaluation   | `stt_config.json`        | `stt/evals/{task_id}/stt_config.json`                    |
-| TTS Evaluation   | `tts_config.json`        | `tts/evals/{task_id}/tts_config.json`                    |
+| STT Evaluation   | `config.json`            | `stt/evals/{task_id}/config.json`                        |
+| TTS Evaluation   | `config.json`            | `tts/evals/{task_id}/config.json`                        |
 | Agent Test       | `test_config.json`       | `{s3_prefix}/test_config.json`                           |
 | Benchmark        | `benchmark_config.json`  | `agent-tests/benchmarks/{task_id}/benchmark_config.json` |
 | Text Simulation  | `simulation_config.json` | `{s3_prefix}/simulation_config.json`                     |
@@ -561,24 +550,29 @@ All job types upload their config files to S3 for reproducibility and debugging.
 The backend orchestrates the `calibrate` CLI tool for actual evaluations:
 
 ```bash
-# STT Evaluation
-calibrate stt eval -p <provider> -l <language> -i <input_dir> -o <output_dir>
-calibrate stt leaderboard -o <output_dir> -s <summary_dir>
+# STT Evaluation (multiple providers, leaderboard generated automatically)
+calibrate stt -p <provider1> <provider2> ... -l <language> -i <input_dir> -o <output_dir>
 
-# TTS Evaluation
-calibrate tts eval -p <provider> -l <language> -i <input_csv> -o <output_dir>
-calibrate tts leaderboard -o <output_dir> -s <summary_dir>
+# TTS Evaluation (multiple providers, leaderboard generated automatically)
+calibrate tts -p <provider1> <provider2> ... -l <language> -i <input_csv> -o <output_dir>
 
-# LLM Tests
-calibrate llm tests run -c <config.json> -o <output_dir> -m <model>
-calibrate llm tests leaderboard -o <output_dir> -s <summary_dir>
+# LLM Tests / Benchmark (single or multiple models)
+# Single model = unit test, multiple models = benchmark with leaderboard
+calibrate llm -c <config.json> -m <model1> [model2 ...] -p <provider> -o <output_dir>
 
-# LLM Simulations
-calibrate llm simulations run -c <config.json> -o <output_dir> -m <model>
+# LLM Simulations (text, runs 4 simulations in parallel)
+calibrate llm simulations run -c <config.json> -o <output_dir> -m <model> -n 4
 
-# Voice Agent Simulation
-calibrate agent simulation -c <config.json> -o <output_dir>
+# Voice Agent Simulation (runs 4 simulations in parallel)
+calibrate agent simulation -c <config.json> -o <output_dir> -n 4
 ```
+
+**STT/TTS CLI Notes:**
+
+- Multiple providers can be specified with `-p` (space-separated)
+- The CLI handles parallelization internally
+- Leaderboard is generated automatically in `<output_dir>/leaderboard/`
+- No separate `eval` and `leaderboard` commands needed
 
 ### AWS S3
 
@@ -847,7 +841,7 @@ if job["status"] == TaskStatus.DONE.value:
 
 Key Python packages:
 
-- `fastapi>=0.127.0` - Web framework
+- `fastapi>=0.115.6,<0.122.0` - Web framework (upper bound required for compatibility with calibrate-agent's pipecat-ai dependency)
 - `uvicorn>=0.40.0` - ASGI server
 - `boto3>=1.34.0` - AWS SDK for S3
 - `pydantic>=2.0.0` - Data validation
@@ -859,7 +853,7 @@ Key Python packages:
 
 External:
 
-- `calibrate` CLI (installed via wheel file: `calibrate-0.1.0-py3-none-any.whl`)
+- `calibrate-agent` - Core CLI tool for evaluations and simulations (installed from PyPI via `pip install calibrate-agent`)
 - `ffmpeg` - Required by calibrate CLI for audio processing (TTS, voice simulations)
 - `nltk` data (`punkt_tab`) - Required by pipecat for sentence tokenization; pre-downloaded in Dockerfile to avoid runtime network issues
 
@@ -873,12 +867,7 @@ External:
 docker build -t calibrate-backend .
 ```
 
-**Build gotcha**: The Dockerfile uses two separate package installation methods:
-
-- `pip install` for the calibrate wheel (includes pipecat, nltk, etc.)
-- `uv sync` for project dependencies (fastapi, boto3, etc.)
-
-When running Python commands during build that need packages from the wheel, use `python` directly (not `uv run python`).
+**Package installation**: The Dockerfile installs packages via `uv sync` which reads from `pyproject.toml` and `uv.lock`. The `calibrate-agent` package (and its dependencies like pipecat, nltk, etc.) is listed as a dependency in `pyproject.toml` and installed automatically.
 
 ### Docker Compose
 
@@ -1037,9 +1026,11 @@ This applies to:
 
 If either condition is true, the job is marked as `FAILED` and logged to Sentry. This ensures errors are properly surfaced even when the CLI doesn't set an appropriate exit code.
 
-### Incremental Job Processing Pattern (STT/TTS Evaluations, Simulations, Agent Tests)
+### Incremental Job Processing Pattern (Simulations, Agent Tests, Benchmarks)
 
-For long-running jobs that produce incremental outputs (STT/TTS evaluations, text/voice simulations, and agent tests), use non-blocking subprocess execution with polling:
+For long-running jobs that produce incremental outputs (text/voice simulations, agent unit tests, and benchmarks), use non-blocking subprocess execution with polling.
+
+**Note**: This pattern applies to simulations (`text`, `voice`), agent unit tests (`llm-unit-test`), and benchmarks (`llm-benchmark`). STT/TTS evaluations do NOT use this pattern - they wait for completion without intermediate updates.
 
 ```python
 def run_incremental_task(task_id: str, output_dir: Path):
@@ -1111,7 +1102,7 @@ with open(stdout_path) as f:
     stdout = f.read()
 ```
 
-- Check for completion markers (e.g., `evaluation_results.csv` for simulations, `results.csv` for STT/TTS evaluations, `results.json` for agent tests)
+- Check for completion markers (e.g., `evaluation_results.csv` for simulations, `results.json` for agent tests)
 - Update DB incrementally so status API can return partial results
 - Use thread-safe mechanisms (locks) when multiple threads update shared state
 - Final aggregated metrics only computed after all items complete

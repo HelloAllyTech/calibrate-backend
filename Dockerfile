@@ -17,16 +17,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-COPY *.whl /tmp/
-RUN pip install --no-cache-dir /tmp/*.whl
-
 # Copy dependency files
 COPY pyproject.toml uv.lock ./
 
 # Install dependencies
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Download NLTK data required by pipecat (nltk is installed via calibrate wheel)
+# Download NLTK data required by pipecat (nltk is installed via calibrate-agent)
 RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
 
 # Copy application code

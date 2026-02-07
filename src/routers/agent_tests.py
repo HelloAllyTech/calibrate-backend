@@ -1,3 +1,4 @@
+import csv
 import os
 import json
 import subprocess
@@ -5,7 +6,6 @@ import tempfile
 import time
 import traceback
 import threading
-import concurrent.futures
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -526,124 +526,54 @@ def _match_model_to_folder(model: str, folder_names: List[str]) -> Optional[str]
     return None
 
 
-def _update_benchmark_intermediate_results(
-    task_id: str,
-    output_dir: Path,
-    models: List[str],
-    test_names: List[str],
-    results_lock: threading.Lock,
-):
-    """
-    Update intermediate results for a benchmark job.
-    Walks output_dir to find all results.json files and matches them to models.
-    """
-    # Find all results in output directory
-    all_results = _find_all_results_in_output(output_dir)
-    folder_names = list(all_results.keys())
+def _read_leaderboard_csv(leaderboard_dir: Path) -> Optional[List[dict]]:
+    """Read the leaderboard CSV from the leaderboard directory."""
+    if not leaderboard_dir.exists():
+        logger.warning(f"Leaderboard directory does not exist: {leaderboard_dir}")
+        return None
 
-    model_results = []
-    for model in models:
-        # Try to find matching folder for this model
-        matched_folder = _match_model_to_folder(model, folder_names)
-
-        if matched_folder and matched_folder in all_results:
-            results_data, metrics_data = all_results[matched_folder]
-
-            # Parse results (same as _run_calibrate_test)
-            completed_results = _parse_agent_test_results(results_data)
-
-            # Add name field for consistency
-            for i, r in enumerate(completed_results):
-                if not r.get("name") and results_data and i < len(results_data):
-                    test_case = results_data[i].get("test_case", {})
-                    r["name"] = test_case.get("name")
-
-            # Build dict of completed tests by name
-            completed_by_name = {
-                r.get("name"): r for r in completed_results if r.get("name")
-            }
-
-            # Build test_results with all tests - completed ones with data, pending with nulls
-            test_results = []
-            for name in test_names:
-                if name in completed_by_name:
-                    test_results.append(completed_by_name[name])
-                else:
-                    # Pending test - include name with null values
-                    test_results.append(
-                        {
-                            "name": name,
-                            "passed": None,
-                            "output": None,
-                            "test_case": None,
-                        }
-                    )
-
-            if metrics_data:
-                # Model complete
-                total = metrics_data.get("total", 0)
-                passed = metrics_data.get("passed", 0)
-                model_results.append(
-                    {
-                        "model": model,
-                        "success": True,
-                        "message": "Completed",
-                        "total_tests": total,
-                        "passed": passed,
-                        "failed": total - passed,
-                        "test_results": test_results,
-                    }
-                )
-            else:
-                # Model in progress
-                model_results.append(
-                    {
-                        "model": model,
-                        "success": None,
-                        "message": f"Processing... ({len(completed_by_name)}/{len(test_names)} tests)",
-                        "total_tests": None,
-                        "passed": None,
-                        "failed": None,
-                        "test_results": test_results,
-                    }
-                )
-        else:
-            # No output yet - include all tests with null values
-            test_results = [
-                {"name": name, "passed": None, "output": None, "test_case": None}
-                for name in test_names
-            ]
-            model_results.append(
-                {
-                    "model": model,
-                    "success": None,
-                    "message": "Queued...",
-                    "total_tests": None,
-                    "passed": None,
-                    "failed": None,
-                    "test_results": test_results,
-                }
-            )
-
-    with results_lock:
-        update_agent_test_job(
-            task_id,
-            results={"model_results": model_results},
+    # Find CSV file in leaderboard directory
+    csv_files = list(leaderboard_dir.glob("*.csv"))
+    if not csv_files:
+        logger.warning(
+            f"No CSV files found in leaderboard directory: {leaderboard_dir}"
         )
+        all_files = list(leaderboard_dir.iterdir())
+        logger.info(f"Files in leaderboard directory: {[f.name for f in all_files]}")
+        return None
+
+    csv_file = csv_files[0]
+    logger.info(f"Reading leaderboard from: {csv_file}")
+
+    try:
+        leaderboard_summary = []
+        with open(csv_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                leaderboard_summary.append(dict(row))
+        logger.info(f"Read {len(leaderboard_summary)} rows from leaderboard")
+        return leaderboard_summary
+    except Exception as e:
+        logger.warning(f"Failed to read leaderboard CSV: {e}")
+        return None
 
 
 def _update_agent_test_intermediate_results(
     task_id: str,
     output_dir: Path,
     test_names: List[str],
-):
-    """Update intermediate results for an agent test job."""
+) -> int:
+    """
+    Update intermediate results for an agent test job.
+    Returns the number of completed tests.
+    """
     results_data = _read_agent_test_results_json(output_dir)
     if results_data is None:
-        return
+        return 0
 
     # Parse results
     test_results = _parse_agent_test_results(results_data)
+    completed_count = len(test_results)
 
     # Create a dict of completed tests by name
     completed_tests = {r.get("name"): r for r in test_results if r.get("name")}
@@ -662,7 +592,9 @@ def _update_agent_test_intermediate_results(
     update_agent_test_job(
         task_id,
         results={
-            "total_tests": metrics_data.get("total") if metrics_data else None,
+            "total_tests": (
+                metrics_data.get("total") if metrics_data else len(test_names)
+            ),
             "passed": metrics_data.get("passed") if metrics_data else None,
             "failed": (
                 (metrics_data.get("total", 0) - metrics_data.get("passed", 0))
@@ -673,191 +605,7 @@ def _update_agent_test_intermediate_results(
         },
     )
 
-
-def _run_calibrate_test(
-    model: str,
-    calibrate_config: Dict[str, Any],
-    input_dir: Path,
-    output_dir: Path,
-    s3_bucket: str,
-    s3_prefix: str,
-    task_id: Optional[str] = None,
-    test_names: Optional[List[str]] = None,
-    log_prefix: str = "LLM test",
-    skip_s3_upload: bool = False,
-) -> Dict[str, Any]:
-    """
-    Run calibrate llm tests run command and return parsed results.
-
-    Args:
-        model: Model name to use
-        calibrate_config: The calibrate config dict
-        input_dir: Directory to write config files
-        output_dir: Directory to write output files
-        s3_bucket: S3 bucket name
-        s3_prefix: S3 key prefix for uploading results
-        task_id: Optional task ID for intermediate updates
-        test_names: Optional list of test names for intermediate updates
-        log_prefix: Prefix for log messages
-        skip_s3_upload: If True, skip S3 upload (for benchmarks that upload separately)
-
-    Returns:
-        Dict with keys: success, total_tests, passed, failed, test_results, error
-    """
-    s3 = get_s3_client()
-
-    # Update config with model
-    config = calibrate_config.copy()
-    config["params"] = {"model": model}
-
-    # Resolve directories to absolute paths
-    input_dir = input_dir.resolve()
-    output_dir = output_dir.resolve()
-
-    # Create directories
-    input_dir.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Write config to input directory
-    config_file = input_dir / "test_config.json"
-    with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
-
-    # Run calibrate llm tests run command (use absolute paths)
-    run_cmd = [
-        "calibrate",
-        "llm",
-        "tests",
-        "run",
-        "-c",
-        str(config_file),
-        "-o",
-        str(output_dir),
-        "-m",
-        model,
-    ]
-
-    logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
-
-    # Use Popen with polling for intermediate updates
-    stdout_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".log")
-    stderr_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".log")
-
-    try:
-        process = subprocess.Popen(
-            run_cmd,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            start_new_session=True,
-        )
-
-        # Poll for process completion while updating intermediate results
-        while process.poll() is None:
-            if task_id and test_names:
-                _update_agent_test_intermediate_results(task_id, output_dir, test_names)
-            time.sleep(2)  # Check every 2 seconds
-
-        # Final update after process completes
-        if task_id and test_names:
-            _update_agent_test_intermediate_results(task_id, output_dir, test_names)
-
-        # Read stdout/stderr
-        stdout_file.seek(0)
-        stderr_file.seek(0)
-        stdout_content = stdout_file.read()
-        stderr_content = stderr_file.read()
-
-        if stdout_content:
-            logger.info(f"{log_prefix} stdout: {stdout_content}")
-        if stderr_content:
-            logger.info(f"{log_prefix} stderr: {stderr_content}")
-
-    finally:
-        stdout_file.close()
-        stderr_file.close()
-        os.unlink(stdout_file.name)
-        os.unlink(stderr_file.name)
-
-    # Find results.json and metrics.json files
-    results_data = None
-    metrics_data = None
-
-    for root, dirs, files in os.walk(output_dir):
-        for file in files:
-            file_path = Path(root) / file
-            if file == "results.json" and results_data is None:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    results_data = json.load(f)
-            elif file == "metrics.json" and metrics_data is None:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    metrics_data = json.load(f)
-
-    # Upload results to S3 (unless skipped for benchmarks)
-    if not skip_s3_upload:
-        for root, dirs, files in os.walk(output_dir):
-            for file in files:
-                local_file_path = Path(root) / file
-                relative_path = local_file_path.relative_to(output_dir)
-                s3_key = f"{s3_prefix}/{relative_path}"
-                s3.upload_file(str(local_file_path), s3_bucket, s3_key)
-
-        # Upload the config file to S3
-        if config_file.exists():
-            config_s3_key = f"{s3_prefix}/test_config.json"
-            s3.upload_file(str(config_file), s3_bucket, config_s3_key)
-            logger.info(f"Uploaded config file to S3: {config_s3_key}")
-
-    # Parse metrics
-    total_tests = 0
-    passed = 0
-    failed = 0
-
-    if metrics_data and isinstance(metrics_data, dict):
-        total_tests = metrics_data.get("total", 0)
-        passed = metrics_data.get("passed", 0)
-        failed = total_tests - passed
-
-    # Parse results using the helper function
-    test_results = _parse_agent_test_results(results_data)
-
-    # Add name field for consistency
-    for i, r in enumerate(test_results):
-        if not r.get("name") and results_data and i < len(results_data):
-            test_case = results_data[i].get("test_case", {})
-            r["name"] = test_case.get("name")
-
-    # If metrics.json wasn't found, compute from results
-    if not metrics_data and results_data:
-        total_tests = len(results_data)
-        passed = sum(
-            1 for r in results_data if r.get("metrics", {}).get("passed", False)
-        )
-        failed = total_tests - passed
-
-    error = None
-    # Check for failure: non-zero return code OR error traceback in stderr
-    has_error_in_stderr = "Traceback (most recent call last):" in stderr_content
-    is_failure = process.returncode != 0 or has_error_in_stderr
-
-    if is_failure:
-        if process.returncode != 0:
-            error = (
-                f"Command failed with exit code {process.returncode}: {stderr_content}"
-            )
-        else:
-            error = f"Command failed with error in output: {stderr_content}"
-        # Log CLI failure to Sentry
-        logger.error(f"{log_prefix} CLI failed, logging to Sentry: {error}")
-        capture_exception_to_sentry(RuntimeError(f"{log_prefix} failed: {error}"))
-
-    return {
-        "success": not is_failure,
-        "total_tests": total_tests,
-        "passed": passed,
-        "failed": failed,
-        "test_results": test_results,
-        "error": error,
-    }
+    return completed_count
 
 
 def run_llm_test_task(
@@ -866,18 +614,22 @@ def run_llm_test_task(
     tests: List[Dict[str, Any]],
     s3_bucket: str,
 ):
-    """Run the LLM tests in the background."""
+    """Run the LLM tests in the background using a single CLI command with intermediate updates."""
     try:
         logger.info(
             f"Running LLM test task {task_id} for agent {agent['uuid']} with {len(tests)} test(s)"
         )
+
         # Extract test names for progress tracking
         test_names = [test.get("name") for test in tests if test.get("name")]
+
         update_agent_test_job(
             task_id,
             status=TaskStatus.IN_PROGRESS.value,
             results={"test_results": [{"name": name} for name in test_names]},
         )
+
+        s3 = get_s3_client()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -887,49 +639,189 @@ def run_llm_test_task(
                 calibrate_config = _build_calibrate_config(agent, tests)
                 model = calibrate_config["params"]["model"]
 
-                # Create input and output directories
+                # Get provider from agent config (default to openrouter)
+                agent_config = agent.get("config") or {}
+                llm_config = agent_config.get("llm", {})
+                provider = llm_config.get("provider", "openrouter")
+
+                # Create directories
                 input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
+                input_dir.mkdir(parents=True, exist_ok=True)
+                output_dir.mkdir(parents=True, exist_ok=True)
 
-                # Run calibrate test with intermediate updates
+                # Write config file
+                config_file = input_dir / "test_config.json"
+                with open(config_file, "w", encoding="utf-8") as f:
+                    json.dump(calibrate_config, f, indent=2)
+
+                # Run calibrate llm command with single model
+                run_cmd = [
+                    "calibrate",
+                    "llm",
+                    "-c",
+                    str(config_file),
+                    "-m",
+                    model,
+                    "-p",
+                    provider,
+                    "-o",
+                    str(output_dir),
+                ]
+
+                logger.info(f"Running LLM test command: {' '.join(run_cmd)}")
+
+                # Create temp files for stdout/stderr
+                stdout_path = output_dir / "stdout.log"
+                stderr_path = output_dir / "stderr.log"
+
+                with (
+                    open(stdout_path, "w") as stdout_f,
+                    open(stderr_path, "w") as stderr_f,
+                ):
+                    process = subprocess.Popen(
+                        run_cmd,
+                        stdout=stdout_f,
+                        stderr=stderr_f,
+                        text=True,
+                        start_new_session=True,
+                        cwd=str(temp_path),
+                    )
+
+                    # Poll for process completion while updating intermediate results
+                    prev_completed = 0
+                    while process.poll() is None:
+                        completed = _update_agent_test_intermediate_results(
+                            task_id, output_dir, test_names
+                        )
+                        if completed != prev_completed:
+                            logger.info(
+                                f"LLM test {task_id}: {completed}/{len(test_names)} tests completed"
+                            )
+                            prev_completed = completed
+                        time.sleep(2)  # Poll every 2 seconds
+
+                    # Final update after process completes
+                    _update_agent_test_intermediate_results(
+                        task_id, output_dir, test_names
+                    )
+
+                # Read stdout/stderr
+                with open(stdout_path, "r") as f:
+                    stdout = f.read()
+                with open(stderr_path, "r") as f:
+                    stderr = f.read()
+
+                if stdout:
+                    logger.info(f"LLM test stdout: {stdout}")
+                if stderr:
+                    logger.info(f"LLM test stderr: {stderr}")
+
+                # Check for failure
+                has_error_in_stderr = "Traceback (most recent call last):" in stderr
+                is_failure = process.returncode != 0 or has_error_in_stderr
+
+                if is_failure:
+                    error_msg = (
+                        f"LLM test failed with exit code {process.returncode}: {stderr}"
+                    )
+                    logger.error(error_msg)
+                    capture_exception_to_sentry(RuntimeError(error_msg))
+                    raise subprocess.CalledProcessError(
+                        process.returncode, run_cmd, stdout, stderr
+                    )
+
+                logger.info("LLM test command completed successfully")
+
+                # Log output directory contents for debugging
+                logger.info(
+                    f"Output directory contents: {[f.name for f in output_dir.iterdir()]}"
+                )
+
+                # Find results.json and metrics.json files
+                results_data = None
+                metrics_data = None
+
+                for root, dirs, files in os.walk(output_dir):
+                    for file in files:
+                        file_path = Path(root) / file
+                        if file == "results.json" and results_data is None:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                results_data = json.load(f)
+                        elif file == "metrics.json" and metrics_data is None:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                metrics_data = json.load(f)
+
+                # Parse results
+                test_results = _parse_agent_test_results(results_data)
+
+                # Add name field for consistency
+                for i, r in enumerate(test_results):
+                    if not r.get("name") and results_data and i < len(results_data):
+                        test_case = results_data[i].get("test_case", {})
+                        r["name"] = test_case.get("name")
+
+                # Parse metrics
+                total_tests = 0
+                passed = 0
+                failed = 0
+
+                if metrics_data and isinstance(metrics_data, dict):
+                    total_tests = metrics_data.get("total", 0)
+                    passed = metrics_data.get("passed", 0)
+                    failed = total_tests - passed
+                elif results_data:
+                    # Compute from results if metrics.json not found
+                    total_tests = len(results_data)
+                    passed = sum(
+                        1
+                        for r in results_data
+                        if r.get("metrics", {}).get("passed", False)
+                    )
+                    failed = total_tests - passed
+
+                # Upload results to S3
                 results_prefix = f"agent-tests/runs/{task_id}"
-                result = _run_calibrate_test(
-                    model=model,
-                    calibrate_config=calibrate_config,
-                    input_dir=input_dir,
-                    output_dir=output_dir,
-                    s3_bucket=s3_bucket,
-                    s3_prefix=results_prefix,
-                    task_id=task_id,
-                    test_names=test_names,
-                    log_prefix=f"LLM test {task_id}",
-                )
+                for root, dirs, files in os.walk(output_dir):
+                    for file in files:
+                        local_file_path = Path(root) / file
+                        relative_path = local_file_path.relative_to(output_dir)
+                        s3_key = f"{results_prefix}/{relative_path}"
+                        s3.upload_file(str(local_file_path), s3_bucket, s3_key)
 
-                # Determine final status based on success
-                final_status = (
-                    TaskStatus.DONE.value
-                    if result["success"]
-                    else TaskStatus.FAILED.value
-                )
+                # Upload the config file to S3
+                config_s3_key = f"{results_prefix}/test_config.json"
+                s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+                logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
                 # Update job with results
                 update_agent_test_job(
                     task_id,
-                    status=final_status,
+                    status=TaskStatus.DONE.value,
                     results={
-                        "total_tests": result["total_tests"],
-                        "passed": result["passed"],
-                        "failed": result["failed"],
-                        "test_results": result["test_results"],
+                        "total_tests": total_tests,
+                        "passed": passed,
+                        "failed": failed,
+                        "test_results": test_results,
                         "results_s3_prefix": results_prefix,
-                        "error": result["error"],
+                        "error": None,
                     },
                 )
 
                 logger.info(
-                    f"LLM test task {task_id} completed: {result['passed']}/{result['total_tests']} passed, status={final_status}"
+                    f"LLM test task {task_id} completed: {passed}/{total_tests} passed"
                 )
 
+            except subprocess.CalledProcessError as e:
+                traceback.print_exc()
+                capture_exception_to_sentry(e)
+                update_agent_test_job(
+                    task_id,
+                    status=TaskStatus.FAILED.value,
+                    results={
+                        "error": f"LLM test failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
+                    },
+                )
             except Exception as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
@@ -1116,61 +1008,100 @@ class BenchmarkStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
-def run_model_benchmark(
+def _update_benchmark_intermediate_results(
     task_id: str,
-    model: str,
-    calibrate_config: Dict[str, Any],
-    input_dir: Path,
     output_dir: Path,
-    s3_bucket: str,
-) -> ModelResult:
-    """Run benchmark for a single model. S3 upload is handled by run_benchmark_task."""
-    try:
-        # Create model-specific directories to avoid race conditions in parallel runs
-        model_name = model.replace("/", "_")
-        model_input_dir = input_dir / model_name
-        model_input_dir.mkdir(parents=True, exist_ok=True)
+    models: List[str],
+) -> int:
+    """
+    Update intermediate results for a benchmark job.
+    Returns the number of models with completed results.
+    """
+    # Find all results in output directory
+    all_results = _find_all_results_in_output(output_dir)
+    folder_names = list(all_results.keys())
 
-        result = _run_calibrate_test(
-            model=model,
-            calibrate_config=calibrate_config,
-            input_dir=model_input_dir,
-            output_dir=output_dir,
-            s3_bucket=s3_bucket,
-            s3_prefix="",  # Not used since skip_s3_upload=True
-            log_prefix=f"Benchmark {task_id} model {model}",
-            skip_s3_upload=True,  # Upload handled by run_benchmark_task
-        )
+    model_results = []
+    completed_count = 0
 
-        if not result["success"]:
-            return ModelResult(
-                model=model,
-                success=False,
-                message=f"Benchmark failed: {result['error']}",
-                total_tests=result["total_tests"],
-                passed=result["passed"],
-                failed=result["failed"],
-                test_results=result["test_results"],
+    for model in models:
+        matched_folder = _match_model_to_folder(model, folder_names)
+
+        if matched_folder and matched_folder in all_results:
+            results_data, metrics_data = all_results[matched_folder]
+
+            # Parse results
+            test_results = _parse_agent_test_results(results_data)
+
+            # Add name field for consistency
+            for i, r in enumerate(test_results):
+                if not r.get("name") and results_data and i < len(results_data):
+                    test_case = results_data[i].get("test_case", {})
+                    r["name"] = test_case.get("name")
+
+            if metrics_data:
+                total = metrics_data.get("total", 0)
+                passed = metrics_data.get("passed", 0)
+                model_results.append(
+                    {
+                        "model": model,
+                        "success": True,
+                        "message": f"Completed",
+                        "total_tests": total,
+                        "passed": passed,
+                        "failed": total - passed,
+                        "test_results": test_results,
+                    }
+                )
+                completed_count += 1
+            elif test_results:
+                # Has partial results but no metrics yet
+                total = len(test_results)
+                passed = sum(1 for r in test_results if r.get("passed", False))
+                model_results.append(
+                    {
+                        "model": model,
+                        "success": None,
+                        "message": f"Running... ({len(test_results)} tests done)",
+                        "total_tests": total,
+                        "passed": passed,
+                        "failed": total - passed,
+                        "test_results": test_results,
+                    }
+                )
+            else:
+                # No results yet for this model
+                model_results.append(
+                    {
+                        "model": model,
+                        "success": None,
+                        "message": "Queued...",
+                        "total_tests": None,
+                        "passed": None,
+                        "failed": None,
+                        "test_results": None,
+                    }
+                )
+        else:
+            # No folder found for this model yet
+            model_results.append(
+                {
+                    "model": model,
+                    "success": None,
+                    "message": "Queued...",
+                    "total_tests": None,
+                    "passed": None,
+                    "failed": None,
+                    "test_results": None,
+                }
             )
 
-        return ModelResult(
-            model=model,
-            success=True,
-            message=f"Benchmark completed successfully for {model}",
-            total_tests=result["total_tests"],
-            passed=result["passed"],
-            failed=result["failed"],
-            test_results=result["test_results"],
-        )
+    update_agent_test_job(
+        task_id,
+        results={"model_results": model_results},
+    )
 
-    except Exception as e:
-        traceback.print_exc()
-        capture_exception_to_sentry(e)
-        return ModelResult(
-            model=model,
-            success=False,
-            message=f"Unexpected error: {str(e)}",
-        )
+    return completed_count
 
 
 def run_benchmark_task(
@@ -1180,26 +1111,19 @@ def run_benchmark_task(
     models: List[str],
     s3_bucket: str,
 ):
-    """Run the benchmark for multiple models in the background."""
+    """Run the benchmark for multiple models using a single CLI command with intermediate updates.
+
+    The calibrate CLI handles parallelization internally and generates the leaderboard.
+    """
     try:
         logger.info(
             f"Running benchmark task {task_id} for agent {agent['uuid']} "
             f"with {len(tests)} test(s) and {len(models)} model(s)"
         )
-        # Extract test names for progress tracking
-        test_names = [test.get("name") for test in tests if test.get("name")]
 
-        # Initialize with all models as queued
+        # Initialize with pending model results
         initial_model_results = [
-            {
-                "model": model,
-                "success": None,
-                "message": "Queued...",
-                "total_tests": None,
-                "passed": None,
-                "failed": None,
-                "test_results": None,
-            }
+            {"model": model, "success": None, "message": "Queued..."}
             for model in models
         ]
         update_agent_test_job(
@@ -1209,148 +1133,206 @@ def run_benchmark_task(
         )
 
         s3 = get_s3_client()
-        results_lock = threading.Lock()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
             try:
-                # Build the base calibrate config (model will be set per-run)
+                # Build the calibrate config
                 calibrate_config = _build_calibrate_config(
                     agent, tests, model=models[0]
                 )
-                calibrate_config["params"] = {}  # Clear model, will be set per-run
+                calibrate_config["params"] = {}  # Clear model, will be set via CLI
 
-                # Create input and output directories
+                # Create directories
                 input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
                 input_dir.mkdir(parents=True, exist_ok=True)
                 output_dir.mkdir(parents=True, exist_ok=True)
 
-                # Run benchmarks for all models in parallel
-                model_results = []
+                # Write config file
+                config_file = input_dir / "test_config.json"
+                with open(config_file, "w", encoding="utf-8") as f:
+                    json.dump(calibrate_config, f, indent=2)
 
-                logger.info(f"Running {len(models)} models in parallel")
+                # Get provider from agent config (default to openrouter)
+                agent_config = agent.get("config") or {}
+                llm_config = agent_config.get("llm", {})
+                provider = llm_config.get("provider", "openrouter")
 
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=len(models)
-                ) as executor:
-                    future_to_model = {
-                        executor.submit(
-                            run_model_benchmark,
-                            task_id,
-                            model,
-                            calibrate_config,
-                            input_dir,
-                            output_dir,
-                            s3_bucket,
-                        ): model
-                        for model in models
-                    }
+                # Run calibrate llm command with all models at once
+                # The CLI handles parallelization internally and generates leaderboard
+                run_cmd = (
+                    [
+                        "calibrate",
+                        "llm",
+                        "-c",
+                        str(config_file),
+                        "-m",
+                    ]
+                    + models
+                    + [
+                        "-p",
+                        provider,
+                        "-o",
+                        str(output_dir),
+                    ]
+                )
 
-                    # Poll for intermediate results while models are running
-                    while True:
-                        # Update intermediate results
-                        _update_benchmark_intermediate_results(
-                            task_id,
-                            output_dir.resolve(),
-                            models,
-                            test_names,
-                            results_lock,
-                        )
+                logger.info(f"Running benchmark command: {' '.join(run_cmd)}")
 
-                        # Check if all futures are done
-                        done_futures = [f for f in future_to_model if f.done()]
-                        if len(done_futures) == len(future_to_model):
-                            break
+                # Create temp files for stdout/stderr
+                stdout_path = output_dir / "stdout.log"
+                stderr_path = output_dir / "stderr.log"
 
-                        time.sleep(2)
-
-                    # Collect final results from all futures
-                    for future in future_to_model:
-                        result = future.result()
-                        model_results.append(result)
-
-                logger.info("Completed running all models in parallel")
-
-                # Check if all models succeeded
-                all_succeeded = all(r.success for r in model_results)
-                if not all_succeeded:
-                    failed_models = [r.model for r in model_results if not r.success]
-                    logger.warning(f"Some models failed: {', '.join(failed_models)}")
-
-                # Run leaderboard command
-                leaderboard_dir = temp_path / "leaderboard"
-                leaderboard_dir.mkdir(parents=True, exist_ok=True)
-
-                leaderboard_cmd = [
-                    "calibrate",
-                    "llm",
-                    "tests",
-                    "leaderboard",
-                    "-o",
-                    str(output_dir),
-                    "-s",
-                    str(leaderboard_dir),
-                ]
-
-                leaderboard_summary = None
-                results_prefix = f"agent-tests/benchmarks/{task_id}"
-
-                logger.info(f"Running leaderboard command: {' '.join(leaderboard_cmd)}")
-
-                try:
-                    leaderboard_result = subprocess.run(
-                        leaderboard_cmd,
-                        capture_output=True,
+                with (
+                    open(stdout_path, "w") as stdout_f,
+                    open(stderr_path, "w") as stderr_f,
+                ):
+                    process = subprocess.Popen(
+                        run_cmd,
+                        stdout=stdout_f,
+                        stderr=stderr_f,
                         text=True,
-                        check=True,
+                        start_new_session=True,
+                        cwd=str(temp_path),
                     )
 
-                    logger.info("Leaderboard command completed successfully")
+                    # Poll for process completion while updating intermediate results
+                    prev_completed = 0
+                    while process.poll() is None:
+                        completed = _update_benchmark_intermediate_results(
+                            task_id, output_dir, models
+                        )
+                        if completed != prev_completed:
+                            logger.info(
+                                f"Benchmark {task_id}: {completed}/{len(models)} models completed"
+                            )
+                            prev_completed = completed
+                        time.sleep(2)  # Poll every 2 seconds
 
-                    if leaderboard_result.stdout:
-                        logger.info(f"Leaderboard stdout: {leaderboard_result.stdout}")
-                    if leaderboard_result.stderr:
-                        logger.info(f"Leaderboard stderr: {leaderboard_result.stderr}")
+                    # Final update after process completes
+                    _update_benchmark_intermediate_results(task_id, output_dir, models)
 
-                    # Upload leaderboard results
+                # Read stdout/stderr
+                with open(stdout_path, "r") as f:
+                    stdout = f.read()
+                with open(stderr_path, "r") as f:
+                    stderr = f.read()
+
+                if stdout:
+                    logger.info(f"Benchmark stdout: {stdout}")
+                if stderr:
+                    logger.info(f"Benchmark stderr: {stderr}")
+
+                # Check for failure
+                has_error_in_stderr = "Traceback (most recent call last):" in stderr
+                is_failure = process.returncode != 0 or has_error_in_stderr
+
+                if is_failure:
+                    error_msg = f"Benchmark failed with exit code {process.returncode}: {stderr}"
+                    logger.error(error_msg)
+                    capture_exception_to_sentry(RuntimeError(error_msg))
+                    raise subprocess.CalledProcessError(
+                        process.returncode, run_cmd, stdout, stderr
+                    )
+
+                logger.info("Benchmark command completed successfully")
+
+                # Log output directory contents for debugging
+                logger.info(
+                    f"Output directory contents: {[f.name for f in output_dir.iterdir()]}"
+                )
+
+                # Read results for each model from output directory
+                all_results = _find_all_results_in_output(output_dir)
+                folder_names = list(all_results.keys())
+                logger.info(f"Found result folders: {folder_names}")
+
+                model_results = []
+                for model in models:
+                    matched_folder = _match_model_to_folder(model, folder_names)
+
+                    if matched_folder and matched_folder in all_results:
+                        results_data, metrics_data = all_results[matched_folder]
+
+                        # Parse results
+                        test_results = _parse_agent_test_results(results_data)
+
+                        # Add name field for consistency
+                        for i, r in enumerate(test_results):
+                            if (
+                                not r.get("name")
+                                and results_data
+                                and i < len(results_data)
+                            ):
+                                test_case = results_data[i].get("test_case", {})
+                                r["name"] = test_case.get("name")
+
+                        if metrics_data:
+                            total = metrics_data.get("total", 0)
+                            passed = metrics_data.get("passed", 0)
+                            model_results.append(
+                                ModelResult(
+                                    model=model,
+                                    success=True,
+                                    message=f"Benchmark completed successfully for {model}",
+                                    total_tests=total,
+                                    passed=passed,
+                                    failed=total - passed,
+                                    test_results=test_results,
+                                )
+                            )
+                        else:
+                            # No metrics but has results - compute from results
+                            total = len(test_results) if test_results else 0
+                            passed = sum(
+                                1 for r in test_results if r.get("passed", False)
+                            )
+                            model_results.append(
+                                ModelResult(
+                                    model=model,
+                                    success=True,
+                                    message=f"Benchmark completed for {model}",
+                                    total_tests=total,
+                                    passed=passed,
+                                    failed=total - passed,
+                                    test_results=test_results,
+                                )
+                            )
+                    else:
+                        logger.warning(f"No output found for model {model}")
+                        model_results.append(
+                            ModelResult(
+                                model=model,
+                                success=False,
+                                message=f"No output found for model {model}",
+                            )
+                        )
+
+                # Read leaderboard from output directory
+                leaderboard_dir = output_dir / "leaderboard"
+                leaderboard_summary = None
+                if leaderboard_dir.exists():
+                    logger.info(f"Leaderboard directory exists: {leaderboard_dir}")
+                    leaderboard_summary = _read_leaderboard_csv(leaderboard_dir)
+
+                    # Upload leaderboard to S3
+                    results_prefix = f"agent-tests/benchmarks/{task_id}"
                     for root, dirs, files in os.walk(leaderboard_dir):
                         for file in files:
                             local_file_path = Path(root) / file
                             relative_path = local_file_path.relative_to(leaderboard_dir)
                             s3_key = f"{results_prefix}/leaderboard/{relative_path}"
                             s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                else:
+                    logger.warning(
+                        f"Leaderboard directory does not exist: {leaderboard_dir}"
+                    )
 
-                            # Try to read leaderboard CSV for summary
-                            if file == "llm_leaderboard.csv":
-                                logger.info(
-                                    f"Found leaderboard file: {local_file_path}"
-                                )
-                                try:
-                                    import csv
+                results_prefix = f"agent-tests/benchmarks/{task_id}"
 
-                                    leaderboard_summary = []
-                                    with open(
-                                        local_file_path, "r", encoding="utf-8"
-                                    ) as f:
-                                        reader = csv.DictReader(f)
-                                        for row in reader:
-                                            leaderboard_summary.append(dict(row))
-                                    logger.info(
-                                        f"Prepared leaderboard summary with {len(leaderboard_summary)} rows"
-                                    )
-                                except Exception as e:
-                                    logger.warning(
-                                        f"Failed to read leaderboard CSV: {e}"
-                                    )
-
-                except subprocess.CalledProcessError as e:
-                    logger.warning(f"Leaderboard command failed: {e.stderr}")
-
-                # Upload output directory to S3 (preserves calibrate output structure)
-                # Structure: output_dir/test_config/<model_folder>/results.json
-                # S3: {results_prefix}/outputs/test_config/<model_folder>/results.json
+                # Upload output directory to S3
                 for root, dirs, files in os.walk(output_dir):
                     for file in files:
                         local_file_path = Path(root) / file
@@ -1367,17 +1349,22 @@ def run_benchmark_task(
                     **calibrate_config,
                     "models": models,
                 }
-                config_file = temp_path / "benchmark_config.json"
+                config_s3_key = f"{results_prefix}/benchmark_config.json"
                 with open(config_file, "w", encoding="utf-8") as f:
                     json.dump(benchmark_config, f, indent=2)
-                config_s3_key = f"{results_prefix}/benchmark_config.json"
                 s3.upload_file(str(config_file), s3_bucket, config_s3_key)
                 logger.info(f"Uploaded benchmark config file to S3: {config_s3_key}")
 
-                # Determine final status based on success
+                # Check if all models succeeded
+                all_succeeded = all(r.success for r in model_results)
                 final_status = (
                     TaskStatus.DONE.value if all_succeeded else TaskStatus.FAILED.value
                 )
+
+                error_msg = None
+                if not all_succeeded:
+                    failed = [r.model for r in model_results if not r.success]
+                    error_msg = f"Some models failed: {', '.join(failed)}"
 
                 # Update job with results
                 update_agent_test_job(
@@ -1387,7 +1374,7 @@ def run_benchmark_task(
                         "model_results": [r.model_dump() for r in model_results],
                         "leaderboard_summary": leaderboard_summary,
                         "results_s3_prefix": results_prefix,
-                        "error": None if all_succeeded else "Some models failed",
+                        "error": error_msg,
                     },
                 )
 
@@ -1395,6 +1382,16 @@ def run_benchmark_task(
                     f"Benchmark task {task_id} completed, status={final_status}"
                 )
 
+            except subprocess.CalledProcessError as e:
+                traceback.print_exc()
+                capture_exception_to_sentry(e)
+                update_agent_test_job(
+                    task_id,
+                    status=TaskStatus.FAILED.value,
+                    results={
+                        "error": f"Benchmark failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
+                    },
+                )
             except Exception as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
