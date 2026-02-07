@@ -24,7 +24,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Download NLTK data required by pipecat (nltk is installed via calibrate-agent)
-RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
+RUN uv run python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
 
 # Copy application code
 COPY src/ ./src/

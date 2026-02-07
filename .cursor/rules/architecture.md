@@ -869,6 +869,8 @@ docker build -t calibrate-backend .
 
 **Package installation**: The Dockerfile installs packages via `uv sync` which reads from `pyproject.toml` and `uv.lock`. The `calibrate-agent` package (and its dependencies like pipecat, nltk, etc.) is listed as a dependency in `pyproject.toml` and installed automatically.
 
+**Important**: `uv sync` installs packages into a `.venv` virtual environment, not system Python. Any `RUN` commands in the Dockerfile that need installed packages must use `uv run python ...` (not bare `python`), otherwise the system Python won't find them.
+
 ### Docker Compose
 
 ```bash
