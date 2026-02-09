@@ -276,9 +276,14 @@ def run_tts_evaluation_task(
                         cwd=str(temp_path),
                     )
 
-                    # Store PID for cleanup
+                    # Store PID and output dir for cleanup and intermediate results
                     update_job(
-                        task_id, details={"pid": process.pid, "pgid": process.pid}
+                        task_id,
+                        details={
+                            "pid": process.pid,
+                            "pgid": process.pid,
+                            "output_dir": str(output_dir),
+                        },
                     )
 
                     # Wait for process to complete
@@ -574,8 +579,45 @@ async def get_tts_evaluation_status(
 
     # Build provider results
     provider_results = results.get("provider_results")
+    if provider_results is None and status == TaskStatus.IN_PROGRESS.value:
+        # Job is in progress - try to read intermediate results from disk
+        output_dir_str = details.get("output_dir")
+        if output_dir_str:
+            output_dir = Path(output_dir_str)
+            provider_results = []
+            for provider in requested_providers:
+                provider_output_dir = _find_tts_provider_output_dir(
+                    output_dir, provider
+                )
+                results_data = _read_tts_results_csv(provider_output_dir)
+                metrics_data = _read_tts_metrics_json(provider_output_dir)
+                if results_data:
+                    # Strip local audio paths - they haven't been uploaded to S3 yet
+                    for row in results_data:
+                        if "audio_path" in row:
+                            row["audio_path"] = None
+                    provider_results.append(
+                        {
+                            "provider": provider,
+                            "success": None,
+                            "message": f"Running... ({len(results_data)} texts processed)",
+                            "metrics": metrics_data,
+                            "results": results_data,
+                        }
+                    )
+                else:
+                    provider_results.append(
+                        {
+                            "provider": provider,
+                            "success": None,
+                            "message": "Queued...",
+                            "metrics": None,
+                            "results": None,
+                        }
+                    )
+
     if provider_results is None:
-        # Job hasn't completed yet, show all as queued
+        # Job hasn't completed yet or no output dir available, show all as queued
         provider_results = [
             {
                 "provider": provider,

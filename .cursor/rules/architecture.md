@@ -355,32 +355,37 @@ STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command 
 - **Job completion**: After the command completes, the backend reads per-provider results and the leaderboard, then uploads to S3
 - **Leaderboard reading**: The backend finds any `.xlsx` file in the leaderboard directory (dynamic discovery) and reads the `summary` sheet
 
-**No intermediate updates**: Unlike voice simulations, STT/TTS evaluations do not provide incremental updates. The status API returns either `queued` status (before completion) or full results (after completion).
+**Intermediate updates via on-demand disk reads**: The background task stores the `output_dir` path in job details. When the status API is called for an `in_progress` job, it reads each provider's `results.csv` (and `metrics.json` if available) directly from disk. This provides per-file progress as the CLI writes rows to `results.csv` incrementally. Unlike simulations which poll and update the DB, STT/TTS reads are on-demand from the status API — no polling loop in the background task.
 
 **Response Model (`TaskStatusResponse`):**
 
-| Field                 | Type                             | Description                                           |
-| --------------------- | -------------------------------- | ----------------------------------------------------- |
-| `task_id`             | `str`                            | Job UUID                                              |
-| `status`              | `str`                            | Job status: `queued`, `in_progress`, `done`, `failed` |
-| `language`            | `Optional[str]`                  | Language from job details (e.g., "english", "hindi")  |
-| `provider_results`    | `Optional[List[ProviderResult]]` | Results per provider (populated on completion)        |
-| `leaderboard_summary` | `Optional[List[Dict]]`           | Summary after job completes                           |
-| `error`               | `Optional[str]`                  | Error message if job failed                           |
+| Field                 | Type                             | Description                                                           |
+| --------------------- | -------------------------------- | --------------------------------------------------------------------- |
+| `task_id`             | `str`                            | Job UUID                                                              |
+| `status`              | `str`                            | Job status: `queued`, `in_progress`, `done`, `failed`                 |
+| `language`            | `Optional[str]`                  | Language from job details (e.g., "english", "hindi")                  |
+| `provider_results`    | `Optional[List[ProviderResult]]` | Results per provider (partial during in_progress, full on completion) |
+| `leaderboard_summary` | `Optional[List[Dict]]`           | Summary after job completes                                           |
+| `error`               | `Optional[str]`                  | Error message if job failed                                           |
 
 **Response Model (`ProviderResult`):**
 
-| Field      | Type                           | When Present                                                                 |
-| ---------- | ------------------------------ | ---------------------------------------------------------------------------- |
-| `provider` | `str`                          | Always                                                                       |
-| `success`  | `Optional[bool]`               | `None` while job is running, `True`/`False` when complete                    |
-| `message`  | `str`                          | `"Queued..."` while job is running, `"Completed"` or error message when done |
-| `metrics`  | `Optional[Dict \| List[Dict]]` | When job completes; dict in new format, list for backward compatibility      |
-| `results`  | `Optional[List[Dict]]`         | `null` while job is running, complete when done                              |
+| Field      | Type                           | When Present                                                                                        |
+| ---------- | ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `provider` | `str`                          | Always                                                                                              |
+| `success`  | `Optional[bool]`               | `None` while job is running, `True`/`False` when complete                                           |
+| `message`  | `str`                          | `"Queued..."` → `"Running... (N files/texts processed)"` → `"Completed"` or error message when done |
+| `metrics`  | `Optional[Dict \| List[Dict]]` | Available when provider's `metrics.json` exists (during or after execution)                         |
+| `results`  | `Optional[List[Dict]]`         | Partial rows from `results.csv` while running, complete when done                                   |
 
 **TTS success determination**: A TTS provider is marked `success: true` only if at least one text was successfully synthesized (has an `audio_path` in results). If the calibrate CLI completes but no audio files were generated (e.g., voice not found, API errors), `success: false` is returned with an error message. This prevents false positives where the process exits normally but all synthesis attempts failed.
 
-**Provider status while running**: While the job is `in_progress`, all providers are shown with `success: null`, `message: "Queued..."`, and `metrics`/`results` as `null`. Results are only populated after the CLI command completes.
+**Provider status while running**: While the job is `in_progress`, the status API reads intermediate results from disk:
+
+- **Provider with partial results**: `success: null`, `message: "Running... (N files processed)"` (STT) or `"Running... (N texts processed)"` (TTS), `results` populated from `results.csv`, `metrics` from `metrics.json` if available
+- **Provider with no output yet**: `success: null`, `message: "Queued..."`, `metrics`/`results` as `null`
+- **TTS audio paths during in-progress**: Set to `null` since files haven't been uploaded to S3 yet (local paths are meaningless to clients)
+- **Fallback**: If `output_dir` is not in job details (e.g., process hasn't started yet), all providers shown as `"Queued..."`
 
 **Metrics normalization**: The status API normalizes old list-of-dicts metrics format to the new dict format before returning. The `_normalize_metrics()` helper handles two old formats:
 
@@ -1032,7 +1037,7 @@ If either condition is true, the job is marked as `FAILED` and logged to Sentry.
 
 For long-running jobs that produce incremental outputs (text/voice simulations, agent unit tests, and benchmarks), use non-blocking subprocess execution with polling.
 
-**Note**: This pattern applies to simulations (`text`, `voice`), agent unit tests (`llm-unit-test`), and benchmarks (`llm-benchmark`). STT/TTS evaluations do NOT use this pattern - they wait for completion without intermediate updates.
+**Note**: This polling-loop pattern applies to simulations (`text`, `voice`), agent unit tests (`llm-unit-test`), and benchmarks (`llm-benchmark`). STT/TTS evaluations use a different approach: the background task blocks on `process.wait()`, but the status API reads intermediate results directly from disk on-demand (see "STT/TTS Evaluation Flow" section).
 
 ```python
 def run_incremental_task(task_id: str, output_dir: Path):
