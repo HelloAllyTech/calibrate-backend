@@ -266,181 +266,22 @@ Parameters:
   "caseInsensitive": false
 }
 ```
-Result:
+Additional data:
 
 ```json
 {
-  "success": {
-    "pattern": "def update_job",
-    "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
-    "outputMode": "content",
-    "workspaceResults": {
-      "/Users/aman/Documents/repos/artpark/pense-backend": {
-        "content": {
-          "matches": [
-            {
-              "file": "src/db.py",
-              "matches": [
-                {
-                  "lineNumber": 2125,
-                  "content": "def update_job("
-                },
-                {
-                  "lineNumber": 2126,
-                  "content": "    job_uuid: str,",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2127,
-                  "content": "    status: Optional[str] = None,",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2128,
-                  "content": "    results: Optional[Dict[str, Any]] = None,",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2129,
-                  "content": "    details: Optional[Dict[str, Any]] = None,",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2130,
-                  "content": ") -&gt; bool:",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2131,
-                  "content": "    \"\"\"Update a job. Returns True if the job was found and updated.",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2132,
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2133,
-                  "content": "    If details is provided, it will be merged with existing details (not replaced).",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2134,
-                  "content": "    \"\"\"",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2135,
-                  "content": "    updates = []",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2136,
-                  "content": "    params = []",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2137,
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2138,
-                  "content": "    if status is not None:",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2139,
-                  "content": "        updates.append(\"status = ?\")",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2140,
-                  "content": "        params.append(status)",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2141,
-                  "content": "    if results is not None:",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2142,
-                  "content": "        updates.append(\"results = ?\")",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2143,
-                  "content": "        params.append(json.dumps(results))",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2144,
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2145,
-                  "content": "    # For details, we need to merge with existing details",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2146,
-                  "content": "    if details is not None:",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2147,
-                  "content": "        # First, fetch existing details",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2148,
-                  "content": "        with get_db_connection() as conn:",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2149,
-                  "content": "            cursor = conn.cursor()",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2150,
-                  "content": "            cursor.execute(\"SELECT details FROM jobs WHERE uuid = ?\", (job_uuid,))",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2151,
-                  "content": "            row = cursor.fetchone()",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2152,
-                  "content": "            if row and row[0]:",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2153,
-                  "content": "                existing_details = json.loads(row[0])",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2154,
-                  "content": "                # Merge new details into existing",
-                  "isContextLine": true
-                },
-                {
-                  "lineNumber": 2155,
-                  "content": "                existing_details.update(details)",
-                  "isContextLine": true
-                }
-              ]
-            }
-          ],
-          "totalLines": 31,
-          "totalMatchedLines": 1
-        }
-      }
+  "isPruned": true,
+  "pattern": "def update_job",
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "outputMode": "content",
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "topFiles": [
+    {
+      "uri": "src/db.py",
+      "matchCount": 31
     }
-  }
+  ]
 }
 ```
 Status: **completed**
@@ -734,7 +575,218 @@ Also update the `provider_results` field in the `TaskStatusResponse` table.
 
 ---
 
-Now let me also update the note in the incremental job processing pattern section that says STT/TTS don't use that pattern, since the distinction is now more
+Now let me also update the note in the incremental job processing pattern section that says STT/TTS don't use that pattern, since the distinction is now more nuanced.
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+
+</tool-use>
+
+---
+
+Done. The architecture doc now accurately reflects the STT/TTS intermediate results behavior:
+
+1. **Replaced** the "No intermediate updates" statement with a description of the on-demand disk-read approach.
+2. **Updated** the "Provider status while running" section to document the new intermediate states (`"Running... (N files processed)"`, partial `results`, `metrics` when available, TTS `audio_path` nulled out).
+3. **Updated** the `ProviderResult` and `TaskStatusResponse` response model tables to reflect partial results during `in_progress`.
+4. **Updated** the incremental processing pattern note to clarify that STT/TTS use a different approach (disk reads from the status API) rather than a polling loop.
+
+No environment variables were changed, so no updates needed for `.env.example`, `docker-compose.yml`, or GitHub workflows.
+
+---
+
+_**User**_
+
+when tts intermediate outputs are being returned the audio path is being returned as null - generate presigned urls for intermediate outputs of tts too
+
+---
+
+_**Agent (model claude-4.6-opus-high-thinking, mode Agent)**_
+
+<think><details><summary>Thought Process</summary>
+The user wants me to generate presigned URLs for TTS intermediate results instead of setting audio_path to null. Let me read the current TTS status API code to see what needs to change.</details></think>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<think><details><summary>Thought Process</summary>
+The issue is that for intermediate results, the audio files are local paths (not S3 keys). They haven't been uploaded to S3 yet. So we can't generate presigned URLs from them because they're local filesystem paths, not S3 keys.
+
+Wait, let me think about this differently. The audio files exist locally in the temp directory. We need to:
+1. Upload each audio file to S3 as it becomes available
+2. Then generate presigned URLs for them
+
+OR we could serve them differently. But uploading to S3 on-the-fly during the status API call would be slow and is a side-effect in a GET endpoint.
+
+
+Actually, the real problem is that doing S3 uploads in the status API violates the principle that GET endpoints should be idempotent and side-effect free. A cleaner solution would be to upload each audio file to S3 as soon as it's generated, then store the S3 key instead of the local path—but that means restructuring the background task itself, not just patching the status endpoint. Hmm, actually the simplest approach that the user is asking for: the audio files are local, we need to upload them to S3 first before we can generate presigned URLs. But doing that in a GET endpoint is bad practice.
+
+Wait, let me reconsider. The user simply said "generate presigned urls for intermediate outputs of tts too." Maybe they expect us to upload the files to S3 and then generate presigned URLs. Or maybe they think the files are already on S3.
+
+The cleanest approach: in the status API, for intermediate results, upload the audio files to S3 (if they exist locally and haven't been uploaded yet), then generate presigned URLs. But this has side effects in a GET endpoint.
+
+Alternative: have the background task do incremental uploads. But the user asked me to only do what they asked - they said to generate presigned URLs for intermediate outputs.
+
+I keep running into the same problem: uploading in the status endpoint means either re-uploading files on every call or tracking what's already been uploaded. The simplest solution is to upload each audio file to S3 during the status check, but I need to handle the case where files might have been cleaned up from the temp directory.
+
+Let me look at the S3 key pattern to understand how to structure the intermediate uploads...
+
+So the final upload uses `tts/evals/{task_id}/outputs/{provider}/{relative_path}`. For the intermediate results, I need to extract the task_id from the API params, get the provider name, and figure out the relative path from the provider's output directory—but that's getting complicated for a GET endpoint.
+
+The simpler solution is to upload audio files to S3 during the status check using the same path convention, making it idempotent since re-uploading to the same key is harmless. Then I can generate presigned URLs. The tradeoff is that each status call will have latency from uploading files, but the user is explicitly asking for this feature so it's probably acceptable.
+
+Looking back at the job details, I can see that `s3_bucket` and `output_dir` are already stored there, so I have what I need to upload and generate presigned URLs directly in the status API.
+
+The approach is straightforward: for each intermediate result with a local audio file that exists, I'll upload it to S3 using the standard key pattern with the task ID, provider, and relative path, then return the presigned URL instead of the local path. Since the results.csv row is only written after the audio file is complete, I don't need to worry about timing issues with incomplete files.
+
+Writing the implementation...
+
+Actually, I'm realizing this approach has a problem—every time the status API is called, it would re-upload the same audio files, which is inefficient. I need to track which files have already been uploaded to avoid redundant uploads.
+
+Looking at how the TTS background task writes results, the audio paths in the CSV could be either absolute or relative paths, so I need to handle both cases carefully when computing the S3 key. I'm realizing I need to handle the case where the audio path might not be under the provider output directory, so I'll use a try-except block to safely compute the relative path and build the S3 key, then upload the file and generate a presigned URL for the results.
+
+Writing the upload logic... Handling error cases and null checks...
+
+I need to verify that `generate_presigned_download_url` is imported in tts.py, and it looks like it's already there along with `get_s3_client`. I should also add a check to ensure the s3_bucket is actually set before attempting any uploads, otherwise I'll just skip the upload step.
+
+Now I'm reconsidering whether uploading during the status check is the right approach—the user wants presigned URLs for intermediate outputs, but files need to exist in S3 first. Serving audio directly from the backend would be an alternative, but that's more complex. I think uploading to S3 during status checks is the pragmatic solution here.
+
+One optimization: I should create the S3 client once outside the provider loop rather than recreating it for each provider.
+
+Implementing the status check logic... Processing audio files to S3...</details></think>
+
+---
+
+The audio files exist locally on disk but haven't been uploaded to S3 yet during intermediate results. I need to upload them to S3 on-the-fly and then generate presigned URLs.
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="unknown" data-tool-name="read_lints">
+<details>
+<summary>Tool use: **read_lints**</summary>
+
+
+Parameters:
+
+```json
+{
+  "paths": [
+    "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py"
+  ]
+}
+```
+Result:
+
+```json
+{
+  "linterErrorsByFile": [
+    {
+      "relativeWorkspacePath": "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py"
+    }
+  ]
+}
+```
+Status: **completed**
+
+
+</details>
+</tool-use>
+
+---
+
+No lint errors. Now for each intermediate TTS result row, the status API:
+
+1. Reads the local `audio_path` from `results.csv`
+2. Uploads the local audio file to S3 using the same key convention as the final upload (`tts/evals/{task_id}/outputs/{provider}/...`)
+3. Generates a presigned download URL and returns it in `audio_path`
+4. Falls back to `null` if the file doesn't exist locally or upload/presigning fails
+
+The S3 uploads are idempotent — the final background task upload just overwrites the same keys, so there's no conflict.
+
+---
+
+_**User**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.6-opus-high-thinking, mode Agent)**_
+
+I made a code change to `tts.py` (presigned URLs for intermediate TTS results). Let me update the architecture doc where I previously said TTS audio paths are nulled out during in-progress.
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+
+</tool-use>
+
+---
+
+Updated the architecture doc to reflect that TTS intermediate results now upload audio files to S3 and return presigned URLs instead of `null`. No environment variables changed.
 
 ---
 

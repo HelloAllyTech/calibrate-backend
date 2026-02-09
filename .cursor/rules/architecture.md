@@ -384,7 +384,7 @@ STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command 
 
 - **Provider with partial results**: `success: null`, `message: "Running... (N files processed)"` (STT) or `"Running... (N texts processed)"` (TTS), `results` populated from `results.csv`, `metrics` from `metrics.json` if available
 - **Provider with no output yet**: `success: null`, `message: "Queued..."`, `metrics`/`results` as `null`
-- **TTS audio paths during in-progress**: Set to `null` since files haven't been uploaded to S3 yet (local paths are meaningless to clients)
+- **TTS audio paths during in-progress**: Local audio files are uploaded to S3 on-the-fly (using the same key convention as the final upload: `tts/evals/{task_id}/outputs/{provider}/...`) and presigned download URLs are returned. Falls back to `null` if the file doesn't exist or upload fails. The uploads are idempotent — the final background task upload overwrites the same keys.
 - **Fallback**: If `output_dir` is not in job details (e.g., process hasn't started yet), all providers shown as `"Queued..."`
 
 **Metrics normalization**: The status API normalizes old list-of-dicts metrics format to the new dict format before returning. The `_normalize_metrics()` helper handles two old formats:

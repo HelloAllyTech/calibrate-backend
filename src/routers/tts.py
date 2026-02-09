@@ -584,6 +584,8 @@ async def get_tts_evaluation_status(
         output_dir_str = details.get("output_dir")
         if output_dir_str:
             output_dir = Path(output_dir_str)
+            s3 = get_s3_client()
+            s3_bucket = details.get("s3_bucket", "")
             provider_results = []
             for provider in requested_providers:
                 provider_output_dir = _find_tts_provider_output_dir(
@@ -592,10 +594,31 @@ async def get_tts_evaluation_status(
                 results_data = _read_tts_results_csv(provider_output_dir)
                 metrics_data = _read_tts_metrics_json(provider_output_dir)
                 if results_data:
-                    # Strip local audio paths - they haven't been uploaded to S3 yet
+                    # Upload audio files to S3 and generate presigned URLs
+                    results_prefix = f"tts/evals/{task_id}/outputs/{provider}"
                     for row in results_data:
-                        if "audio_path" in row:
-                            row["audio_path"] = None
+                        audio_path = row.get("audio_path")
+                        if audio_path and not audio_path.startswith("http"):
+                            local_path = Path(audio_path)
+                            if local_path.exists() and provider_output_dir:
+                                try:
+                                    relative_path = local_path.relative_to(
+                                        provider_output_dir
+                                    )
+                                    s3_key = (
+                                        f"{results_prefix}/{relative_path}"
+                                    )
+                                    s3.upload_file(
+                                        str(local_path), s3_bucket, s3_key
+                                    )
+                                    presigned_url = (
+                                        generate_presigned_download_url(s3_key)
+                                    )
+                                    row["audio_path"] = presigned_url
+                                except Exception:
+                                    row["audio_path"] = None
+                            else:
+                                row["audio_path"] = None
                     provider_results.append(
                         {
                             "provider": provider,
