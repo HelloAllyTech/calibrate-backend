@@ -1,7 +1,9 @@
 import os
+import json
 import uuid
+import subprocess
 import logging
-from typing import Literal
+from typing import Literal, Optional, List, Dict
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -175,6 +177,81 @@ async def get_presigned_url(request: PresignedURLRequest):
         s3_path=f"s3://{s3_bucket}/{s3_key}",
         expires_in=expiration,
     )
+
+
+class ProviderStatus(BaseModel):
+    status: str
+    types: List[str]
+    error: Optional[str] = None
+    latency_ms: int
+
+
+class ProviderStatusResponse(BaseModel):
+    providers: Dict[str, ProviderStatus]
+
+
+@app.get("/provider-status", response_model=ProviderStatusResponse)
+async def get_provider_status():
+    """
+    Check the status of all configured providers by running `calibrate status`.
+
+    Returns the status of each provider. Raises 500 if any provider has failed.
+    """
+    try:
+        result = subprocess.run(
+            ["uv", "run", "calibrate", "status"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=504,
+            detail="Provider status check timed out",
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="calibrate CLI not found",
+        )
+
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"calibrate status failed: {result.stderr.strip()}",
+        )
+
+    try:
+        providers = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to parse calibrate status output",
+        )
+
+    # Check if any provider failed
+    failed_providers = {
+        name: info
+        for name, info in providers.items()
+        if info.get("status") != "pass"
+    }
+
+    if failed_providers:
+        failed_names = ", ".join(failed_providers.keys())
+        errors = {
+            name: info.get("error", "unknown error")
+            for name, info in failed_providers.items()
+        }
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": f"Providers failing: {failed_names}",
+                "failed_providers": errors,
+                "all_providers": providers,
+            },
+        )
+
+    return ProviderStatusResponse(providers=providers)
 
 
 @app.get("/sentry-debug")

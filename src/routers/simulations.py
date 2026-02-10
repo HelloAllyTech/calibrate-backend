@@ -61,6 +61,12 @@ from datetime import datetime
 SIMULATION_JOB_TYPES = ["text", "voice"]
 
 
+def _is_job_aborted(task_id: str) -> bool:
+    """Check if a simulation job was aborted by the user."""
+    job = get_simulation_job(task_id)
+    return bool(job and (job.get("details") or {}).get("aborted"))
+
+
 def _start_simulation_job_from_queue(job: dict) -> bool:
     """Start a simulation job from the queue."""
     job_id = job["uuid"]
@@ -325,6 +331,7 @@ class SimulationCaseResult(BaseModel):
     conversation_wav_url: Optional[str] = (
         None  # Presigned URL for the combined conversation.wav file (for voice simulations)
     )
+    aborted: Optional[bool] = None  # True if this simulation was aborted before completion
 
 
 class SimulationRunStatusResponse(BaseModel):
@@ -1191,8 +1198,19 @@ def _run_calibrate_text_simulation(
                 )
             time.sleep(poll_interval)
 
-        # Final update after process completes
+        # Final update after process completes (skip if job was aborted by user)
         if task_id:
+            if _is_job_aborted(task_id):
+                logger.info(
+                    f"Text simulation {task_id} was aborted by user, skipping final processing"
+                )
+                return {
+                    "success": False,
+                    "total_simulations": 0,
+                    "metrics": None,
+                    "simulation_results": [],
+                    "error": "user_aborted",
+                }
             _update_text_simulation_intermediate_results(
                 task_id,
                 output_dir,
@@ -1734,6 +1752,20 @@ def _run_calibrate_voice_simulation(
         # Process finished, wait for it to complete
         process.wait()
 
+    # Check if job was aborted by user before doing final processing
+    if task_id:
+        if _is_job_aborted(task_id):
+            logger.info(
+                f"Voice simulation {task_id} was aborted by user, skipping final processing"
+            )
+            return {
+                "success": False,
+                "total_simulations": 0,
+                "metrics": None,
+                "simulation_results": [],
+                "error": "user_aborted",
+            }
+
     # Read logs from files
     stdout = ""
     stderr = ""
@@ -1895,6 +1927,13 @@ def run_simulation_task(
                         log_prefix=f"Chat simulation {task_id}",
                     )
 
+                # Check if job was aborted by user - don't overwrite abort results
+                if _is_job_aborted(task_id):
+                    logger.info(
+                        f"Simulation task {task_id} was aborted by user, skipping final update"
+                    )
+                    return
+
                 # Prepare results dict
                 results_dict = {
                     "total_simulations": result["total_simulations"],
@@ -1924,6 +1963,13 @@ def run_simulation_task(
                 )
 
             except Exception as e:
+                # Check if job was aborted - don't overwrite abort results
+                if _is_job_aborted(task_id):
+                    logger.info(
+                        f"Simulation task {task_id} was aborted by user, skipping error update"
+                    )
+                    return
+
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
                 update_simulation_job(
@@ -1934,6 +1980,13 @@ def run_simulation_task(
         # Temporary directory is automatically cleaned up here
 
     except Exception as e:
+        # Check if job was aborted - don't overwrite abort results
+        if _is_job_aborted(task_id):
+            logger.info(
+                f"Simulation task {task_id} was aborted by user, skipping error update"
+            )
+            return
+
         traceback.print_exc()
         capture_exception_to_sentry(e)
         update_simulation_job(
@@ -2039,6 +2092,88 @@ async def run_simulation_endpoint(
         logger.info(f"Queued {request.type} simulation job {job_id}")
 
     return TaskCreateResponse(task_id=job_id, status=initial_status)
+
+
+@router.post("/run/{job_uuid}/abort", response_model=SimulationRunStatusResponse)
+async def abort_simulation_run(
+    job_uuid: str, user_id: str = Depends(get_current_user_id)
+):
+    """Abort a running simulation job, saving results collected so far.
+
+    Kills the running process, appends an abort marker to incomplete transcripts,
+    and saves the partial results with status=done. Returns the full results.
+    """
+    # Check if job exists
+    simulation_job = get_simulation_job(job_uuid)
+    if not simulation_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check ownership via simulation
+    simulation_id = simulation_job.get("simulation_id")
+    if simulation_id:
+        simulation = get_simulation(simulation_id)
+        if not simulation or simulation.get("user_id") != user_id:
+            raise HTTPException(status_code=404, detail="Job not found")
+    else:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Only allow aborting in-progress jobs
+    if simulation_job.get("status") != TaskStatus.IN_PROGRESS.value:
+        raise HTTPException(status_code=400, detail="Can only abort in-progress jobs")
+
+    details = simulation_job.get("details") or {}
+    results = simulation_job.get("results") or {}
+
+    # Kill running process
+    pid = details.get("pid") or details.get("pgid")
+    if pid:
+        kill_process_group(pid, job_uuid)
+
+    # Mark each simulation result as aborted or not
+    # Complete simulations (have evaluation_results) are not aborted
+    simulation_results = results.get("simulation_results") or []
+    for sim_result in simulation_results:
+        sim_result["aborted"] = sim_result.get("evaluation_results") is None
+
+    results["simulation_results"] = simulation_results
+
+    # Mark as aborted in details and save with done status
+    update_simulation_job(
+        job_uuid,
+        status=TaskStatus.DONE.value,
+        results=results,
+        details={"aborted": True},
+    )
+
+    # Try to start the next queued job
+    try_start_queued_simulation_job(SIMULATION_JOB_TYPES)
+
+    # Re-read the job to get the updated_at timestamp
+    updated_job = get_simulation_job(job_uuid)
+    updated_at = updated_job["updated_at"] if updated_job else ""
+
+    # Calculate run name
+    run_name = "Run 1"
+    if simulation_id:
+        all_jobs = get_simulation_jobs_for_simulation(simulation_id)
+        sorted_jobs = sorted(all_jobs, key=lambda j: j.get("created_at", ""))
+        for idx, j in enumerate(sorted_jobs, start=1):
+            if j["uuid"] == job_uuid:
+                run_name = f"Run {idx}"
+                break
+
+    return SimulationRunStatusResponse(
+        task_id=job_uuid,
+        name=run_name,
+        status=TaskStatus.DONE.value,
+        type=simulation_job["type"],
+        updated_at=updated_at,
+        total_simulations=results.get("total_simulations"),
+        completed_simulations=results.get("completed_simulations"),
+        metrics=results.get("metrics"),
+        simulation_results=simulation_results,
+        error=results.get("error"),
+    )
 
 
 @router.delete("/run/{job_uuid}")

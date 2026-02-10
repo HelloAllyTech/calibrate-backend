@@ -352,7 +352,7 @@ wheels = [
 
 [[package]]
 name = "calibrate-agent"
-version = "0.0.7"
+version = "0.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backoff" },
@@ -360,6 +360,7 @@ dependencies = [
     { name = "evaluate" },
     { name = "instructor" },
     { name = "jiwer" },
+    { name = "langfuse" },
     { name = "matplotlib" },
     { name = "natsort" },
     { name = "onnxruntime" },
@@ -377,9 +378,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "whisper-normalizer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/12/7b/b55ba91a8ea4b275984f2ca320f3ce3f870b0214da62c7d48cd6c801bb48/calibrate_agent-0.0.7.tar.gz", hash = "sha256:6d6ab972567f1aa952bb1b3f16447073ea1b91d740dffe12085052581eb1d9bd", size = 20338019, upload-time = "2026-02-07T14:52:25.86Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/06/ee024940fc10f65a09def605213d637cd5adf89dfdd5ca6739bd45ba6fa9/calibrate_agent-0.0.8.tar.gz", hash = "sha256:dc292a1b2c5bb8810a867aedebc925514d8d4bc9c65ea18e0c5dd042568f9d44", size = 20383463, upload-time = "2026-02-09T22:06:03.936Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/d7/53bd41ad23a4368145cfdb7636184a625be8c7649b15aa14f96c655a6dea/calibrate_agent-0.0.7-py3-none-any.whl", hash = "sha256:0783bbf3e2c7409ae95930c5869a24974842badff0cc73f849b555793e62e509", size = 511332, upload-time = "2026-02-07T14:52:23.606Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/a3/08fb39ad2a9cb763d52af814e7d8699097f7dfbf07864bd6578e66f83e3c/calibrate_agent-0.0.8-py3-none-any.whl", hash = "sha256:901484daa4bc9f9ea6fe65cc174df6e3f0c4fe6a6928c8f05d066ba11f48e4d9", size = 518278, upload-time = "2026-02-09T22:06:01.416Z" },
 ]
 
 [[package]]
@@ -1955,6 +1956,26 @@ wheels = [
 ]
 
 [[package]]
+name = "langfuse"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "backoff" },
+    { name = "httpx" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
+    { name = "packaging" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/28/bc/ee71839893de60de6fffd93b9ff874f50f13d5796de78fa721775b872b70/langfuse-3.3.0.tar.gz", hash = "sha256:1d951604da304a3e26d0e967adc15e5593a8d57c37bb0febe6bb1a790092f4c5", size = 153786, upload-time = "2025-08-19T13:01:35.494Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4b/33/0c3b1ef2969cd39bc8a4b411e11e0be14bfc85469d576b9c380c3e767c82/langfuse-3.3.0-py3-none-any.whl", hash = "sha256:12a3cc79f353181b5279385a0efb496368bfeacb7f1b1626df1ce4046d209770", size = 300301, upload-time = "2025-08-19T13:01:33.464Z" },
+]
+
+[[package]]
 name = "llvmlite"
 version = "0.44.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2714,11 +2735,11 @@ wheels = [
 
 [[package]]
 name = "packaging"
-version = "26.0"
+version = "25.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/65/ee/299d360cdc32edc7d2cf530f3accf79c4fca01e96ffc950d8a52213bd8e4/packaging-26.0.tar.gz", hash = "sha256:00243ae351a257117b6a241061796684b084ed1c516a08c48a3f7e147a9d80b4", size = 143416, upload-time = "2026-01-21T20:50:39.064Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/d4/1fc4078c65507b51b96ca8f8c3ba19e6a61c8253c72794544580a7b6c24d/packaging-25.0.tar.gz", hash = "sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f", size = 165727, upload-time = "2025-04-19T11:48:59.673Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/b9/c538f279a4e237a006a2c98387d081e9eb060d203d8ed34467cc0f0b9b53/packaging-26.0-py3-none-any.whl", hash = "sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529", size = 74366, upload-time = "2026-01-21T20:50:37.788Z" },
+    { url = "https://files.pythonhosted.org/packages/20/12/38679034af332785aac8774540895e234f4d07f7545804097de4b666afd8/packaging-25.0-py3-none-any.whl", hash = "sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484", size = 66469, upload-time = "2025-04-19T11:48:57.875Z" },
 ]
 
 [[package]]

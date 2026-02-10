@@ -27,6 +27,7 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 | **Storage**          | AWS S3             | File/result storage                                          |
 | **Authentication**   | Google OAuth + JWT | User authentication via Google ID tokens, API access via JWT |
 | **Monitoring**       | Sentry             | Error tracking and performance monitoring                    |
+| **Tracing**          | Langfuse (via OTEL) | LLM observability and tracing                                |
 | **Package Manager**  | uv                 | Python dependency management                                 |
 | **Containerization** | Docker             | Deployment                                                   |
 | **CLI Tool**         | calibrate          | Core evaluation/simulation engine                            |
@@ -178,6 +179,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 - `POST /simulations/{uuid}/run` - Start simulation (chat or voice)
 - `GET /simulations/run/{task_id}` - Get simulation run status (includes timeout detection, partial results for voice)
+- `POST /simulations/run/{job_uuid}/abort` - Abort a running simulation (kills process, saves partial results with abort marker, triggers next queued job); returns full `SimulationRunStatusResponse`
 - `DELETE /simulations/run/{job_uuid}` - Delete a simulation job (kills process, triggers next queued job)
 - `GET /simulations/{uuid}/runs` - List all runs for a simulation
 
@@ -185,13 +187,14 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 - `total_simulations` - Expected number of simulations (personas × scenarios)
 - `completed_simulations` - Number of completed simulations (for in_progress text/voice simulations)
-- `simulation_results` - Array of simulation results (partial for in_progress; includes both complete and in-progress simulations)
+- `simulation_results` - Array of simulation results (partial for in_progress; includes both complete and in-progress simulations). Each result includes an `aborted` field (`true`/`false`/`null`) set by the abort endpoint for incomplete/complete simulations respectively; `null` for non-aborted runs.
 - `metrics` - Aggregated evaluation metrics (only populated when all simulations complete)
 
 #### Utilities
 
 - `GET /` or `HEAD /` - Health check (HEAD supported for uptime monitors)
 - `POST /presigned-url` - Generate S3 presigned URL for uploads
+- `GET /provider-status` - Check status of all configured providers (runs `calibrate status` CLI). Returns 200 with all provider statuses if all pass, 503 with failed provider details if any fail.
 
 ---
 
@@ -300,7 +303,7 @@ Voice simulation and STT/TTS evaluation jobs spawn subprocesses. To handle serve
 - **Process isolation**: All subprocesses started with `start_new_session=True` (creates new process group)
 - **PID tracking**: Process PIDs stored in job `details` as `pid` and `pgid` fields (STT/TTS evals and voice simulations only)
 - **Orphan cleanup**: On recovery, `job_recovery.py` kills process groups using `os.killpg()` before restarting
-- **Graceful termination**: Sends SIGTERM first, waits briefly, then SIGKILL if still running
+- **Graceful termination**: Sends SIGTERM first, waits 0.5s, then SIGKILL if still running. The SIGKILL step catches both `ProcessLookupError` and `PermissionError` (on macOS, dead/zombie processes can raise `PermissionError` instead of `ProcessLookupError`)
 
 **Note**: Agent test jobs (`llm-unit-test`, `llm-benchmark`) do NOT have PID tracking because the `agent_test_jobs` table doesn't have a `details` column. These jobs use blocking `process.wait()` calls, so the process completes before the function returns.
 
@@ -321,6 +324,20 @@ When deleting a running job:
 1. Kill running processes (if applicable)
 2. Delete job from database
 3. Trigger next queued job in the same queue
+
+### Job Abort (Simulations Only)
+
+Simulation jobs can be aborted via `POST /simulations/run/{job_uuid}/abort`. Unlike deletion (which removes the job from the DB), abort preserves results:
+
+1. Kill running process
+2. Read current intermediate results from DB (already stored by the polling loop)
+3. Add `"aborted": true` to each incomplete simulation result (where `evaluation_results` is `None`), and `"aborted": false` to completed ones. Transcripts are left untouched.
+4. Save with `status=done` and `aborted: true` in job details
+
+**Race condition handling**: The `_is_job_aborted(task_id)` helper checks for the `aborted` flag in job details. It is used in all places where the background thread would otherwise overwrite abort results:
+
+- `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` call it after the polling loop exits. If set, they return early without final processing.
+- `run_simulation_task` calls it before the final `update_simulation_job` call and in all exception handlers. If set, it returns early (the `finally` block still triggers the queue).
 
 ### Job Timeout Detection
 
@@ -627,6 +644,16 @@ SENTRY_DSN=                      # Sentry DSN (leave empty to disable)
 SENTRY_ENVIRONMENT=development   # Environment name (development, staging, production)
 SENTRY_TRACES_SAMPLE_RATE=1.0    # Performance monitoring sample rate (0.0-1.0)
 SENTRY_PROFILES_SAMPLE_RATE=1.0  # Profiling sample rate (0.0-1.0)
+
+# Langfuse Tracing (LLM Observability via OpenTelemetry)
+ENVIRONMENT=development                              # Langfuse tracing environment
+ENABLE_TRACING=true                                  # Enable/disable tracing
+OTEL_EXPORTER_OTLP_ENDPOINT=https://host/api/public/otel  # OTLP endpoint (Langfuse self-hosted or cloud)
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20xxx      # Base64-encoded Langfuse public:secret key
+LANGFUSE_TRACING_ENVIRONMENT=                        # Langfuse tracing environment label
+LANGFUSE_HOST=                                       # Langfuse host URL
+LANGFUSE_PUBLIC_KEY=                                 # Langfuse public key
+LANGFUSE_SECRET_KEY=                                 # Langfuse secret key
 
 # AWS
 S3_OUTPUT_BUCKET=your-bucket

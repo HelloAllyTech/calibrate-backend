@@ -81,6 +81,15 @@ jobs:
             export SENTRY_ENVIRONMENT="${{ secrets.SENTRY_ENVIRONMENT }}"
             export SENTRY_TRACES_SAMPLE_RATE="${{ secrets.SENTRY_TRACES_SAMPLE_RATE }}"
             export SENTRY_PROFILES_SAMPLE_RATE="${{ secrets.SENTRY_PROFILES_SAMPLE_RATE }}"
+            export ENVIRONMENT="${{ secrets.ENVIRONMENT }}"
+            export ENABLE_TRACING="${{ secrets.ENABLE_TRACING }}"
+            export OTEL_EXPORTER_OTLP_ENDPOINT="${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}"
+            export OTEL_EXPORTER_OTLP_HEADERS="${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}"
+            export LANGFUSE_TRACING_ENVIRONMENT="${{ secrets.LANGFUSE_TRACING_ENVIRONMENT }}"
+            export LANGFUSE_HOST="${{ secrets.LANGFUSE_HOST }}"
+            export LANGFUSE_BASE_URL="${{ secrets.LANGFUSE_BASE_URL }}"
+            export LANGFUSE_PUBLIC_KEY="${{ secrets.LANGFUSE_PUBLIC_KEY }}"
+            export LANGFUSE_SECRET_KEY="${{ secrets.LANGFUSE_SECRET_KEY }}"
 
             # Navigate to directory with docker-compose.yml
             cd /tmp/pense-production

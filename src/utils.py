@@ -133,8 +133,9 @@ def kill_process_group(pid: int, job_id: str) -> bool:
         try:
             os.killpg(pid, signal.SIGKILL)
             logger.info(f"Job {job_id}: Sent SIGKILL to process group {pid}")
-        except ProcessLookupError:
-            logger.info(f"Job {job_id}: Process group {pid} already terminated")
+        except (ProcessLookupError, PermissionError):
+            # Process already terminated after SIGTERM
+            logger.info(f"Job {job_id}: Process group {pid} already terminated after SIGTERM")
 
         return True
     except ProcessLookupError:
