@@ -194,7 +194,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 - `GET /` or `HEAD /` - Health check (HEAD supported for uptime monitors)
 - `POST /presigned-url` - Generate S3 presigned URL for uploads
-- `GET /provider-status` - Check status of all configured providers (runs `calibrate status` CLI). Returns 200 with all provider statuses if all pass, 503 with failed provider details if any fail.
+- `GET` or `HEAD /provider-status` - Check status of all configured providers (runs `calibrate status` CLI, non-blocking via `asyncio.create_subprocess_exec`). Returns `{"success": true}` if all pass, 503 with failed provider details if any fail. HEAD supported for uptime monitors.
 
 ---
 

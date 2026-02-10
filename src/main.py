@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import asyncio
 import subprocess
 import logging
 from typing import Literal, Optional, List, Dict
@@ -179,18 +180,7 @@ async def get_presigned_url(request: PresignedURLRequest):
     )
 
 
-class ProviderStatus(BaseModel):
-    status: str
-    types: List[str]
-    error: Optional[str] = None
-    latency_ms: int
-
-
-class ProviderStatusResponse(BaseModel):
-    providers: Dict[str, ProviderStatus]
-
-
-@app.get("/provider-status", response_model=ProviderStatusResponse)
+@app.api_route("/provider-status", methods=["GET", "HEAD"])
 async def get_provider_status():
     """
     Check the status of all configured providers by running `calibrate status`.
@@ -198,31 +188,42 @@ async def get_provider_status():
     Returns the status of each provider. Raises 500 if any provider has failed.
     """
     try:
-        result = subprocess.run(
-            ["uv", "run", "calibrate", "status"],
-            capture_output=True,
-            text=True,
-            timeout=120,
+        process = await asyncio.create_subprocess_exec(
+            "uv",
+            "run",
+            "calibrate",
+            "status",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(
-            status_code=504,
-            detail="Provider status check timed out",
-        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(), timeout=120
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise HTTPException(
+                status_code=504,
+                detail="Provider status check timed out",
+            )
     except FileNotFoundError:
         raise HTTPException(
             status_code=500,
             detail="calibrate CLI not found",
         )
 
-    if result.returncode != 0:
+    stdout = stdout_bytes.decode()
+    stderr = stderr_bytes.decode()
+
+    if process.returncode != 0:
         raise HTTPException(
             status_code=500,
-            detail=f"calibrate status failed: {result.stderr.strip()}",
+            detail=f"calibrate status failed: {stderr.strip()}",
         )
 
     try:
-        providers = json.loads(result.stdout)
+        providers = json.loads(stdout)
     except json.JSONDecodeError:
         raise HTTPException(
             status_code=500,
@@ -231,9 +232,7 @@ async def get_provider_status():
 
     # Check if any provider failed
     failed_providers = {
-        name: info
-        for name, info in providers.items()
-        if info.get("status") != "pass"
+        name: info for name, info in providers.items() if info.get("status") != "pass"
     }
 
     if failed_providers:
@@ -251,7 +250,7 @@ async def get_provider_status():
             },
         )
 
-    return ProviderStatusResponse(providers=providers)
+    return {"success": True}
 
 
 @app.get("/sentry-debug")
