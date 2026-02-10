@@ -462,6 +462,7 @@ Both text simulations (`calibrate llm simulations run`) and voice simulations (`
     - Completed simulations (have `evaluation_results.csv`) include `audio_urls` and `conversation_wav_url` presigned URLs stored in DB
   - **When job status becomes done**: Presigned URLs are stripped from the stored results; only S3 paths (`audios_s3_path`, `conversation_wav_s3_key`) remain
   - **When fetching done status**: Presigned URLs are generated on-the-fly from S3 paths using `_get_audio_urls_from_s3_key()` and `generate_presigned_download_url()`, but NOT saved back to DB
+  - **Audio URL ordering**: `_get_audio_urls_from_s3_key()` accepts the simulation's transcript and sorts audio files in conversation order. Files are named `N_bot.wav`/`N_user.wav` and grouped by exchange number N. For each exchange, the transcript's spoken turns (those with `content`, skipping tool_calls-only messages) determine whether bot or user audio comes first. Falls back to bot-first if no transcript is available.
   - This ensures audio is only accessible after evaluation completes and prevents stale URLs from accumulating
 
 This allows clients to display progress and per-simulation results (including partial transcripts for in-progress simulations) without waiting for all simulations to complete.

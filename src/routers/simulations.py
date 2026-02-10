@@ -150,16 +150,26 @@ def _should_regenerate_presigned_urls(
         return True
 
 
-def _get_audio_urls_from_s3_key(s3_key_prefix: str, s3_bucket: str) -> List[str]:
+def _get_audio_urls_from_s3_key(
+    s3_key_prefix: str,
+    s3_bucket: str,
+    transcript: Optional[List[Dict[str, Any]]] = None,
+) -> List[str]:
     """
     List all audio files in an S3 key prefix and generate presigned URLs for them.
+
+    Audio files are sorted in conversation order: for each exchange number N,
+    the transcript is consulted to determine whether bot or user spoke first.
+    Files are returned as [1_bot, 1_user, 2_bot, 2_user, ...] or
+    [1_user, 1_bot, ...] depending on the transcript.
 
     Args:
         s3_key_prefix: S3 key prefix (e.g., "simulations/runs/task_id/simulation_persona_1_scenario_1/audios")
         s3_bucket: S3 bucket name
+        transcript: Optional transcript to determine bot/user ordering per exchange
 
     Returns:
-        List of presigned URLs for audio files, sorted by filename
+        List of presigned URLs for audio files, sorted in conversation order
     """
     try:
         s3 = get_s3_client()
@@ -185,25 +195,62 @@ def _get_audio_urls_from_s3_key(s3_key_prefix: str, s3_bucket: str) -> List[str]
                     if file_ext in audio_extensions:
                         audio_files.append(key)
 
-        # Sort audio files by filename (natural sort for numbered files)
-        # Files are typically named like: 0_user.wav, 1_bot.wav, 1_user.wav, 2_bot.wav
-        def natural_sort_key(key: str) -> tuple:
-            """Extract numeric parts for natural sorting"""
-            filename = Path(key).name
-            # Extract leading number if present
-            parts = filename.split("_", 1)
-            if len(parts) > 1 and parts[0].isdigit():
-                # Has numeric prefix: sort by number first, then by rest of filename
-                return (int(parts[0]), parts[1])
-            else:
-                # No numeric prefix: sort alphabetically
-                return (float("inf"), filename)
+        # Group audio files by exchange number
+        # Files are named like: 1_bot.wav, 1_user.wav, 2_bot.wav, 2_user.wav
+        from collections import defaultdict
 
-        audio_files.sort(key=natural_sort_key)
+        exchanges: Dict[int, Dict[str, str]] = defaultdict(dict)
+        ungrouped = []
+
+        for key in audio_files:
+            filename = Path(key).stem  # e.g., "1_bot"
+            parts = filename.split("_", 1)
+            if parts[0].isdigit():
+                num = int(parts[0])
+                role = parts[1]  # "bot" or "user"
+                exchanges[num][role] = key
+            else:
+                ungrouped.append(key)
+
+        # Determine speaker order from transcript (spoken turns only)
+        # Spoken turns are those with "content" and role "assistant" or "user"
+        # (tool_calls-only messages have no audio)
+        spoken_order: List[str] = []  # ["bot", "user", "bot", "user", ...]
+        if transcript:
+            for turn in transcript:
+                role = turn.get("role", "")
+                if role in ("assistant", "user") and turn.get("content"):
+                    spoken_order.append("bot" if role == "assistant" else "user")
+
+        # Build sorted list: for each exchange, use transcript to determine order
+        sorted_files = []
+        for num in sorted(exchanges.keys()):
+            group = exchanges[num]
+            # Exchange N maps to spoken turns at indices (N-1)*2 and (N-1)*2+1
+            exchange_idx = (num - 1) * 2
+            if (
+                exchange_idx < len(spoken_order)
+                and spoken_order[exchange_idx] == "user"
+            ):
+                # User speaks first in this exchange
+                order = ["user", "bot"]
+            else:
+                # Bot speaks first (default)
+                order = ["bot", "user"]
+
+            for role in order:
+                if role in group:
+                    sorted_files.append(group[role])
+
+        # Append any ungrouped files at the end
+        ungrouped.sort()
+        sorted_files.extend(ungrouped)
+
+        print(sorted_files)
 
         # Generate presigned URLs
         presigned_urls = []
-        for audio_key in audio_files:
+        for audio_key in sorted_files:
             presigned_url = generate_presigned_download_url(audio_key, bucket=s3_bucket)
             if presigned_url:
                 presigned_urls.append(presigned_url)
@@ -331,7 +378,9 @@ class SimulationCaseResult(BaseModel):
     conversation_wav_url: Optional[str] = (
         None  # Presigned URL for the combined conversation.wav file (for voice simulations)
     )
-    aborted: Optional[bool] = None  # True if this simulation was aborted before completion
+    aborted: Optional[bool] = (
+        None  # True if this simulation was aborted before completion
+    )
 
 
 class SimulationRunStatusResponse(BaseModel):
@@ -524,10 +573,13 @@ async def get_simulation_run_status(
 
                 for sim_result in simulation_results:
                     # Generate audio URLs from S3 path
+                    print("yolhooo")
                     audios_s3_key_prefix = sim_result.get("audios_s3_path")
                     if audios_s3_key_prefix:
                         audio_urls = _get_audio_urls_from_s3_key(
-                            audios_s3_key_prefix, s3_bucket
+                            audios_s3_key_prefix,
+                            s3_bucket,
+                            transcript=sim_result.get("transcript"),
                         )
                         sim_result["audio_urls"] = audio_urls
                         logger.info(
