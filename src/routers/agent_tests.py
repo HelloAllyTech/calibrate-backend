@@ -196,7 +196,7 @@ class TestRunStatusResponse(BaseModel):
     failed: Optional[int] = None
     results: Optional[List[TestCaseResult]] = None
     results_s3_prefix: Optional[str] = None
-    error: Optional[str] = None
+    error: bool = False
 
 
 class AgentTestRunListItem(BaseModel):
@@ -215,7 +215,7 @@ class AgentTestRunListItem(BaseModel):
     leaderboard_summary: Optional[List[Dict[str, Any]]] = None
     # Common fields
     results_s3_prefix: Optional[str] = None
-    error: Optional[str] = None
+    error: bool = False
 
 
 class AgentTestRunsResponse(BaseModel):
@@ -326,7 +326,7 @@ async def get_agent_test_runs(agent_uuid: str):
             leaderboard_summary=job_results.get("leaderboard_summary"),
             # Common fields
             results_s3_prefix=job_results.get("results_s3_prefix"),
-            error=job_results.get("error"),
+            error=bool(job_results.get("error")),
         )
         runs.append(run_item)
 
@@ -815,12 +815,18 @@ def run_llm_test_task(
             except subprocess.CalledProcessError as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
+                # Preserve any existing results from the job
+                existing_job = get_agent_test_job(task_id)
+                existing_results = (
+                    (existing_job.get("results") or {}) if existing_job else {}
+                )
+                existing_results["error"] = (
+                    f"LLM test failed: {e.stderr if hasattr(e, 'stderr') else str(e)}"
+                )
                 update_agent_test_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
-                    results={
-                        "error": f"LLM test failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
-                    },
+                    results=existing_results,
                 )
             except Exception as e:
                 traceback.print_exc()
@@ -977,7 +983,7 @@ async def get_agent_test_run_status(task_id: str):
         failed=results.get("failed"),
         results=results.get("test_results"),
         results_s3_prefix=results.get("results_s3_prefix"),
-        error=results.get("error"),
+        error=bool(results.get("error")),
     )
 
 
@@ -1005,7 +1011,7 @@ class BenchmarkStatusResponse(BaseModel):
     model_results: Optional[List[ModelResult]] = None
     leaderboard_summary: Optional[List[Dict[str, Any]]] = None
     results_s3_prefix: Optional[str] = None
-    error: Optional[str] = None
+    error: bool = False
 
 
 def _update_benchmark_intermediate_results(
@@ -1548,7 +1554,7 @@ async def get_benchmark_status(task_id: str):
         model_results=results.get("model_results"),
         leaderboard_summary=results.get("leaderboard_summary"),
         results_s3_prefix=results.get("results_s3_prefix"),
-        error=results.get("error"),
+        error=bool(results.get("error")),
     )
 
 

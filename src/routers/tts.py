@@ -98,6 +98,63 @@ def _normalize_metrics(metrics):
     return metrics
 
 
+def _collect_tts_intermediate_results(
+    output_dir: Path, providers: list, task_id: str, s3_bucket: str
+) -> list:
+    """Read whatever intermediate results are available from disk for each provider.
+
+    Uploads audio files to S3 and replaces local paths with S3 keys.
+    Returns a list of ProviderResult objects preserving any partial results.
+    """
+    s3 = get_s3_client()
+    provider_results = []
+    for provider in providers:
+        provider_output_dir = _find_tts_provider_output_dir(output_dir, provider)
+        results_data = _read_tts_results_csv(provider_output_dir)
+        metrics_data = _read_tts_metrics_json(provider_output_dir)
+        if results_data and provider_output_dir:
+            # Upload audio files to S3 and map local paths to S3 keys
+            results_prefix = f"tts/evals/{task_id}/outputs/{provider}"
+            audio_path_to_s3_key = {}
+
+            for root, dirs, files in os.walk(provider_output_dir):
+                for file in files:
+                    local_file_path = Path(root) / file
+                    relative_path = local_file_path.relative_to(provider_output_dir)
+                    s3_key = f"{results_prefix}/{relative_path}"
+                    try:
+                        s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                        if file.endswith((".wav", ".mp3", ".ogg")):
+                            audio_path_to_s3_key[str(local_file_path)] = s3_key
+                    except Exception:
+                        pass
+
+            # Replace local audio paths with S3 keys in results
+            for result_row in results_data:
+                if "audio_path" in result_row and result_row["audio_path"]:
+                    local_audio_path = result_row["audio_path"]
+                    audio_s3_key = audio_path_to_s3_key.get(local_audio_path)
+                    if audio_s3_key:
+                        result_row["audio_path"] = audio_s3_key
+
+            provider_results.append(
+                ProviderResult(
+                    provider=provider,
+                    success=True,
+                    metrics=metrics_data,
+                    results=results_data,
+                )
+            )
+        else:
+            provider_results.append(
+                ProviderResult(
+                    provider=provider,
+                    success=False,
+                )
+            )
+    return provider_results
+
+
 class TTSEvaluationRequest(BaseModel):
     texts: List[str]  # List of texts to synthesize
     providers: List[
@@ -440,22 +497,48 @@ def run_tts_evaluation_task(
             except subprocess.CalledProcessError as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
+                error_results = {
+                    "error": f"TTS evaluation failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
+                }
+                # Preserve any intermediate results already written to disk
+                try:
+                    if output_dir.exists():
+                        intermediate = _collect_tts_intermediate_results(
+                            output_dir, request.providers, task_id, s3_bucket
+                        )
+                        if intermediate:
+                            error_results["provider_results"] = [
+                                r.model_dump() for r in intermediate
+                            ]
+                except Exception:
+                    pass
                 update_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
-                    results={
-                        "error": f"TTS evaluation failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
-                    },
+                    results=error_results,
                 )
             except Exception as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
+                error_results = {
+                    "error": f"Unexpected error during TTS evaluation: {str(e)}",
+                }
+                # Preserve any intermediate results already written to disk
+                try:
+                    if output_dir.exists():
+                        intermediate = _collect_tts_intermediate_results(
+                            output_dir, request.providers, task_id, s3_bucket
+                        )
+                        if intermediate:
+                            error_results["provider_results"] = [
+                                r.model_dump() for r in intermediate
+                            ]
+                except Exception:
+                    pass
                 update_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
-                    results={
-                        "error": f"Unexpected error during TTS evaluation: {str(e)}",
-                    },
+                    results=error_results,
                 )
 
     except Exception as e:
@@ -662,8 +745,8 @@ async def get_tts_evaluation_status(
         if provider_result.get("metrics"):
             provider_result["metrics"] = _normalize_metrics(provider_result["metrics"])
 
-    # Generate presigned URLs on the fly for completed jobs
-    if status == TaskStatus.DONE.value:
+    # Generate presigned URLs on the fly for completed or failed jobs
+    if status in (TaskStatus.DONE.value, TaskStatus.FAILED.value):
         for provider_result in provider_results:
             if provider_result.get("results"):
                 for result_row in provider_result["results"]:
