@@ -20,17 +20,17 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 
 ## Technology Stack
 
-| Component            | Technology         | Purpose                                                      |
-| -------------------- | ------------------ | ------------------------------------------------------------ |
-| **Framework**        | FastAPI            | Async REST API framework                                     |
-| **Database**         | SQLite             | Persistent data storage                                      |
-| **Storage**          | AWS S3             | File/result storage                                          |
-| **Authentication**   | Google OAuth + JWT | User authentication via Google ID tokens, API access via JWT |
-| **Monitoring**       | Sentry             | Error tracking and performance monitoring                    |
+| Component            | Technology          | Purpose                                                      |
+| -------------------- | ------------------- | ------------------------------------------------------------ |
+| **Framework**        | FastAPI             | Async REST API framework                                     |
+| **Database**         | SQLite              | Persistent data storage                                      |
+| **Storage**          | AWS S3              | File/result storage                                          |
+| **Authentication**   | Google OAuth + JWT  | User authentication via Google ID tokens, API access via JWT |
+| **Monitoring**       | Sentry              | Error tracking and performance monitoring                    |
 | **Tracing**          | Langfuse (via OTEL) | LLM observability and tracing                                |
-| **Package Manager**  | uv                 | Python dependency management                                 |
-| **Containerization** | Docker             | Deployment                                                   |
-| **CLI Tool**         | calibrate          | Core evaluation/simulation engine                            |
+| **Package Manager**  | uv                  | Python dependency management                                 |
+| **Containerization** | Docker              | Deployment                                                   |
+| **CLI Tool**         | calibrate           | Core evaluation/simulation engine                            |
 
 ---
 
@@ -372,7 +372,7 @@ STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command 
 - **Job completion**: After the command completes, the backend reads per-provider results and the leaderboard, then uploads to S3
 - **Leaderboard reading**: The backend finds any `.xlsx` file in the leaderboard directory (dynamic discovery) and reads the `summary` sheet
 
-**Intermediate updates via on-demand disk reads**: The background task stores the `output_dir` path in job details. When the status API is called for an `in_progress` job, it reads each provider's `results.csv` (and `metrics.json` if available) directly from disk. This provides per-file progress as the CLI writes rows to `results.csv` incrementally. Unlike simulations which poll and update the DB, STT/TTS reads are on-demand from the status API — no polling loop in the background task.
+**Intermediate updates via on-demand disk reads**: The background task stores the `output_dir` path in job details. When the status API is called for an `in_progress` job, it reads each provider's `results.csv` (and `metrics.json` if available) directly from disk. This provides per-file progress as the CLI writes rows to `results.csv` incrementally. Unlike simulations which poll and update the DB, STT/TTS reads are on-demand from the status API — no polling loop in the background task. **Important**: Because intermediate results are only read from disk (never persisted to DB during `in_progress`), error and timeout handlers must explicitly read from disk via `_collect_intermediate_results()` before saving the failure to DB — otherwise all intermediate provider results would be lost.
 
 **Response Model (`TaskStatusResponse`):**
 
@@ -387,22 +387,25 @@ STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command 
 
 **Response Model (`ProviderResult`):**
 
-| Field      | Type                           | When Present                                                                                        |
-| ---------- | ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `provider` | `str`                          | Always                                                                                              |
-| `success`  | `Optional[bool]`               | `None` while job is running, `True`/`False` when complete                                           |
-| `message`  | `str`                          | `"Queued..."` → `"Running... (N files/texts processed)"` → `"Completed"` or error message when done |
-| `metrics`  | `Optional[Dict \| List[Dict]]` | Available when provider's `metrics.json` exists (during or after execution)                         |
-| `results`  | `Optional[List[Dict]]`         | Partial rows from `results.csv` while running, complete when done                                   |
+| Field      | Type                           | When Present                                                                                                                                                                                                                  |
+| ---------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | `str`                          | Always                                                                                                                                                                                                                        |
+| `success`  | `Optional[bool]`               | `None` while provider is still running/queued, `True` when provider finishes all files with metrics ready (even if overall job is still `in_progress`), `True`/`False` when job completes                                     |
+| `message`  | `Optional[str]`                | `"Queued..."` → `"Running... (N files/texts processed)"` → `"Done (N files/texts processed)"` (when provider finishes during in_progress) → `"Completed"` or error message (when job finishes). Present for both STT and TTS. |
+| `metrics`  | `Optional[Dict \| List[Dict]]` | Available when provider's `metrics.json` exists (during or after execution)                                                                                                                                                   |
+| `results`  | `Optional[List[Dict]]`         | Partial rows from `results.csv` while running, complete when done                                                                                                                                                             |
 
 **TTS success determination**: A TTS provider is marked `success: true` only if at least one text was successfully synthesized (has an `audio_path` in results). If the calibrate CLI completes but no audio files were generated (e.g., voice not found, API errors), `success: false` is returned with an error message. This prevents false positives where the process exits normally but all synthesis attempts failed.
 
-**Provider status while running**: While the job is `in_progress`, the status API reads intermediate results from disk:
+**Provider status while running**: While the job is `in_progress`, the status API reads intermediate results from disk and determines per-provider completion by comparing the number of result rows against the expected total (from `len(audio_paths)` for STT, `len(texts)` for TTS):
 
-- **Provider with partial results**: `success: null`, `message: "Running... (N files processed)"` (STT) or `"Running... (N texts processed)"` (TTS), `results` populated from `results.csv`, `metrics` from `metrics.json` if available
-- **Provider with no output yet**: `success: null`, `message: "Queued..."`, `metrics`/`results` as `null`
+- **Provider fully processed** (result count >= expected total AND `metrics.json` exists): `success: true`, `message: "Done (N files processed)"`, full `results` and `metrics`. This allows individual providers to show as done while the overall job is still `in_progress` (other providers may still be running).
+- **Provider with partial results** (some rows but not all, or no metrics yet): `success: null`, `message: "Running... (N files processed)"`, `results` populated from `results.csv`, `metrics` from `metrics.json` if available.
+- **Provider with no output yet**: `success: null`, `message: "Queued..."`, `metrics`/`results` as `null`.
 - **TTS audio paths during in-progress**: Local audio files are uploaded to S3 on-the-fly (using the same key convention as the final upload: `tts/evals/{task_id}/outputs/{provider}/...`) and presigned download URLs are returned. Falls back to `null` if the file doesn't exist or upload fails. The uploads are idempotent — the final background task upload overwrites the same keys.
-- **Fallback**: If `output_dir` is not in job details (e.g., process hasn't started yet), all providers shown as `"Queued..."`
+- **Fallback**: If `output_dir` is not in job details (e.g., process hasn't started yet), all providers shown with `success: null` and `metrics`/`results` as `null`
+
+**Preserving results on failure (STT)**: When an STT job fails (subprocess error, timeout, or unexpected exception), the error handlers use `_collect_intermediate_results()` to read whatever partial results exist on disk before saving to DB. This ensures that providers that completed successfully retain their `metrics` and `results` even when other providers caused the failure. The helper reads each provider's `results.csv` and `metrics.json`, marking providers with data as `success: true` and those without as `success: false`.
 
 **Metrics normalization**: The status API normalizes old list-of-dicts metrics format to the new dict format before returning. The `_normalize_metrics()` helper handles two old formats:
 

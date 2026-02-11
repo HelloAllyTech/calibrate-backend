@@ -98,6 +98,35 @@ def _normalize_metrics(metrics):
     return metrics
 
 
+def _collect_intermediate_results(output_dir: Path, providers: list) -> list:
+    """Read whatever intermediate results are available from disk for each provider.
+
+    Returns a list of ProviderResult objects preserving any partial results.
+    """
+    provider_results = []
+    for provider in providers:
+        provider_output_dir = _find_provider_output_dir(output_dir, provider)
+        results_data = _read_results_csv(provider_output_dir)
+        metrics_data = _read_metrics_json(provider_output_dir)
+        if results_data:
+            provider_results.append(
+                ProviderResult(
+                    provider=provider,
+                    success=True,
+                    metrics=metrics_data,
+                    results=results_data,
+                )
+            )
+        else:
+            provider_results.append(
+                ProviderResult(
+                    provider=provider,
+                    success=False,
+                )
+            )
+    return provider_results
+
+
 class STTEvaluationRequest(BaseModel):
     audio_paths: List[str]  # S3 paths to audio files
     texts: List[str]  # Ground truth text for each audio file
@@ -361,7 +390,6 @@ def run_evaluation_task(
                             ProviderResult(
                                 provider=provider,
                                 success=True,
-                                message=f"STT evaluation completed successfully for {provider}",
                                 metrics=metrics_data,
                                 results=results_data,
                             )
@@ -371,7 +399,6 @@ def run_evaluation_task(
                             ProviderResult(
                                 provider=provider,
                                 success=False,
-                                message=f"No output found for provider {provider}",
                             )
                         )
 
@@ -439,22 +466,48 @@ def run_evaluation_task(
             except subprocess.CalledProcessError as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
+                error_results = {
+                    "error": f"STT evaluation failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
+                }
+                # Preserve any intermediate results already written to disk
+                try:
+                    if output_dir.exists():
+                        intermediate = _collect_intermediate_results(
+                            output_dir, request.providers
+                        )
+                        if intermediate:
+                            error_results["provider_results"] = [
+                                r.model_dump() for r in intermediate
+                            ]
+                except Exception:
+                    pass
                 update_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
-                    results={
-                        "error": f"STT evaluation failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
-                    },
+                    results=error_results,
                 )
             except Exception as e:
                 traceback.print_exc()
                 capture_exception_to_sentry(e)
+                error_results = {
+                    "error": f"Unexpected error during STT evaluation: {str(e)}",
+                }
+                # Preserve any intermediate results already written to disk
+                try:
+                    if output_dir.exists():
+                        intermediate = _collect_intermediate_results(
+                            output_dir, request.providers
+                        )
+                        if intermediate:
+                            error_results["provider_results"] = [
+                                r.model_dump() for r in intermediate
+                            ]
+                except Exception:
+                    pass
                 update_job(
                     task_id,
                     status=TaskStatus.FAILED.value,
-                    results={
-                        "error": f"Unexpected error during STT evaluation: {str(e)}",
-                    },
+                    results=error_results,
                 )
 
     except Exception as e:
@@ -562,6 +615,24 @@ async def get_evaluation_status(
             if pid:
                 kill_process_group(pid, task_id)
 
+            # Preserve intermediate results from disk before marking as failed
+            requested_providers = details.get("providers", [])
+            output_dir_str = details.get("output_dir")
+            if output_dir_str:
+                try:
+                    output_dir = Path(output_dir_str)
+                    if output_dir.exists():
+                        intermediate = _collect_intermediate_results(
+                            output_dir, requested_providers
+                        )
+                        results["provider_results"] = [
+                            r.model_dump() for r in intermediate
+                        ]
+                except Exception as exc:
+                    logger.warning(
+                        f"Failed to collect intermediate results on timeout: {exc}"
+                    )
+
             # Mark job as failed
             results["error"] = "Job timed out after 5 minutes of inactivity"
             update_job(
@@ -582,6 +653,7 @@ async def get_evaluation_status(
     if provider_results is None and status == TaskStatus.IN_PROGRESS.value:
         # Job is in progress - try to read intermediate results from disk
         output_dir_str = details.get("output_dir")
+        expected_total = len(details.get("audio_paths", []))
         if output_dir_str:
             output_dir = Path(output_dir_str)
             provider_results = []
@@ -590,11 +662,19 @@ async def get_evaluation_status(
                 results_data = _read_results_csv(provider_output_dir)
                 metrics_data = _read_metrics_json(provider_output_dir)
                 if results_data:
+                    # If all files are processed and metrics are ready, mark as done
+                    provider_done = (
+                        len(results_data) >= expected_total and metrics_data is not None
+                    )
                     provider_results.append(
                         {
                             "provider": provider,
-                            "success": None,
-                            "message": f"Running... ({len(results_data)} files processed)",
+                            "success": True if provider_done else None,
+                            "message": (
+                                f"Done ({len(results_data)} files processed)"
+                                if provider_done
+                                else f"Running... ({len(results_data)} files processed)"
+                            ),
                             "metrics": metrics_data,
                             "results": results_data,
                         }

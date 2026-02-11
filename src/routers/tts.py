@@ -582,6 +582,7 @@ async def get_tts_evaluation_status(
     if provider_results is None and status == TaskStatus.IN_PROGRESS.value:
         # Job is in progress - try to read intermediate results from disk
         output_dir_str = details.get("output_dir")
+        expected_total = len(details.get("texts", []))
         if output_dir_str:
             output_dir = Path(output_dir_str)
             s3 = get_s3_client()
@@ -605,25 +606,29 @@ async def get_tts_evaluation_status(
                                     relative_path = local_path.relative_to(
                                         provider_output_dir
                                     )
-                                    s3_key = (
-                                        f"{results_prefix}/{relative_path}"
-                                    )
-                                    s3.upload_file(
-                                        str(local_path), s3_bucket, s3_key
-                                    )
-                                    presigned_url = (
-                                        generate_presigned_download_url(s3_key)
+                                    s3_key = f"{results_prefix}/{relative_path}"
+                                    s3.upload_file(str(local_path), s3_bucket, s3_key)
+                                    presigned_url = generate_presigned_download_url(
+                                        s3_key
                                     )
                                     row["audio_path"] = presigned_url
                                 except Exception:
                                     row["audio_path"] = None
                             else:
                                 row["audio_path"] = None
+                    # If all texts are processed and metrics are ready, mark as done
+                    provider_done = (
+                        len(results_data) >= expected_total and metrics_data is not None
+                    )
                     provider_results.append(
                         {
                             "provider": provider,
-                            "success": None,
-                            "message": f"Running... ({len(results_data)} texts processed)",
+                            "success": True if provider_done else None,
+                            "message": (
+                                f"Done ({len(results_data)} texts processed)"
+                                if provider_done
+                                else f"Running... ({len(results_data)} texts processed)"
+                            ),
                             "metrics": metrics_data,
                             "results": results_data,
                         }

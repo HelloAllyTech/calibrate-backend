@@ -90,7 +90,6 @@ class TaskStatus(str, Enum):
 class ProviderResult(BaseModel):
     provider: str
     success: Optional[bool] = None  # None while in progress, True/False when done
-    message: str
     metrics: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = (
         None  # dict (new format) or list (backward compat)
     )
@@ -135,7 +134,9 @@ def kill_process_group(pid: int, job_id: str) -> bool:
             logger.info(f"Job {job_id}: Sent SIGKILL to process group {pid}")
         except (ProcessLookupError, PermissionError):
             # Process already terminated after SIGTERM
-            logger.info(f"Job {job_id}: Process group {pid} already terminated after SIGTERM")
+            logger.info(
+                f"Job {job_id}: Process group {pid} already terminated after SIGTERM"
+            )
 
         return True
     except ProcessLookupError:
