@@ -69,7 +69,7 @@ def build_tool_configs(agent_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
 
 # Timeout threshold for marking jobs as failed (5 minutes)
-JOB_TIMEOUT_MINUTES = 5
+JOB_TIMEOUT_SECONDS = 3600
 # Presigned URL caching constants
 PRESIGNED_URL_EXPIRY_SECONDS = 3600  # 1 hour
 PRESIGNED_URL_REFRESH_BUFFER_SECONDS = 300  # Refresh 5 minutes before expiry
@@ -192,7 +192,7 @@ def kill_processes_from_dict(pids_dict: dict, job_id: str) -> None:
 
 
 def is_job_timed_out(
-    updated_at: str, timeout_minutes: int = JOB_TIMEOUT_MINUTES
+    updated_at: str, timeout_seconds: int = JOB_TIMEOUT_SECONDS
 ) -> bool:
     """Check if a job has timed out based on its updated_at timestamp.
 
@@ -200,13 +200,13 @@ def is_job_timed_out(
         updated_at: ISO format timestamp string (from SQLite, stored in UTC)
 
     Returns:
-        True if the job hasn't been updated in more than JOB_TIMEOUT_MINUTES
+        True if the job hasn't been updated in more than JOB_TIMEOUT_SECONDS
     """
     try:
         # Parse the timestamp (SQLite format: "YYYY-MM-DD HH:MM:SS", stored in UTC)
         last_update = datetime.fromisoformat(updated_at.replace(" ", "T"))
         # Use UTC for comparison since SQLite CURRENT_TIMESTAMP is in UTC
-        timeout_threshold = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+        timeout_threshold = datetime.utcnow() - timedelta(seconds=timeout_seconds)
         return last_update < timeout_threshold
     except Exception as e:
         logger.warning(f"Error parsing timestamp {updated_at}: {e}")

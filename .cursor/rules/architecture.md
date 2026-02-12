@@ -372,7 +372,9 @@ STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command 
 - **Job completion**: After the command completes, the backend reads per-provider results and the leaderboard, then uploads to S3
 - **Leaderboard reading**: The backend finds any `.xlsx` file in the leaderboard directory (dynamic discovery) and reads the `summary` sheet
 
-**Intermediate updates via on-demand disk reads**: The background task stores the `output_dir` path in job details. When the status API is called for an `in_progress` job, it reads each provider's `results.csv` (and `metrics.json` if available) directly from disk. This provides per-file progress as the CLI writes rows to `results.csv` incrementally. Unlike simulations which poll and update the DB, STT/TTS reads are on-demand from the status API — no polling loop in the background task. **Important**: Because intermediate results are only read from disk (never persisted to DB during `in_progress`), error and timeout handlers must explicitly read from disk via `_collect_intermediate_results()` before saving the failure to DB — otherwise all intermediate provider results would be lost.
+**Intermediate updates via on-demand disk reads**: The background task stores the `output_dir` path in job details. When the status API is called for an `in_progress` job, it reads each provider's `results.csv` (and `metrics.json` if available) directly from disk. This provides per-file progress as the CLI writes rows to `results.csv` incrementally. Unlike simulations which poll and update the DB with results, STT/TTS reads are on-demand from the status API. **Important**: Because intermediate results are only read from disk (never persisted to DB during `in_progress`), error and timeout handlers must explicitly read from disk via `_collect_intermediate_results()` before saving the failure to DB — otherwise all intermediate provider results would be lost.
+
+**Heartbeat to prevent false timeouts**: The background task uses a polling loop with a 60-second heartbeat interval. While waiting for the CLI process to complete, it calls `update_job(task_id)` every 60 seconds to refresh the `updated_at` timestamp. This prevents the job from being falsely marked as timed out when the CLI takes longer than the 5-minute timeout threshold. Without this heartbeat, a job running for 6+ minutes would be killed by the status API's timeout detection even though it's still actively processing.
 
 **Response Model (`TaskStatusResponse`):**
 
@@ -406,6 +408,13 @@ STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command 
 - **Fallback**: If `output_dir` is not in job details (e.g., process hasn't started yet), all providers shown with `success: null` and `metrics`/`results` as `null`
 
 **Preserving results on failure (STT & TTS)**: When an STT or TTS job fails (subprocess error, timeout, or unexpected exception), the error handlers use `_collect_intermediate_results()` (STT) or `_collect_tts_intermediate_results()` (TTS) to read whatever partial results exist on disk before saving to DB. This ensures that providers that completed successfully retain their `metrics` and `results` even when other providers caused the failure. Each helper reads each provider's `results.csv` and `metrics.json`, marking providers with data as `success: true` and those without as `success: false`. The TTS helper additionally uploads audio files to S3 and replaces local paths with S3 keys (matching the success path pattern), so that presigned URLs can be generated when the status is fetched.
+
+**Critical: Merging results on timeout** (STT & TTS): When the status API detects a timeout, it must **merge** intermediate results from disk with any existing successful results already stored in the database — NOT replace them. This is critical because:
+1. The temp directory may already be cleaned up (background thread exited), making disk reads return empty results
+2. Some providers may have already been marked `success: true` in the database before the timeout
+3. Unconditionally overwriting `provider_results` would lose these successful results
+
+The timeout handler builds a map of existing successful providers (`success: true`) from the database, then merges with disk results: existing successes are preserved, disk results fill in the rest, and missing providers are marked as failed.
 
 **Presigned URLs for failed jobs (TTS)**: Presigned URL generation for audio files runs for both `done` and `failed` jobs. This ensures that providers which completed successfully within a failed job still serve accessible audio URLs, not raw S3 keys.
 

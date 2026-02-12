@@ -3,6 +3,7 @@ import csv
 import json
 import subprocess
 import tempfile
+import time
 import traceback
 import threading
 import logging
@@ -343,8 +344,14 @@ def run_tts_evaluation_task(
                         },
                     )
 
-                    # Wait for process to complete
-                    process.wait()
+                    # Poll for process completion with heartbeat to keep updated_at fresh
+                    # This prevents the job from being marked as timed out during long runs
+                    HEARTBEAT_INTERVAL = 60  # seconds
+                    while process.poll() is None:
+                        time.sleep(HEARTBEAT_INTERVAL)
+                        if process.poll() is None:
+                            # Process still running, send heartbeat to refresh updated_at
+                            update_job(task_id)
 
                 # Read stdout/stderr
                 with open(stdout_path, "r") as f:
@@ -644,6 +651,57 @@ async def get_tts_evaluation_status(
             pid = details.get("pid") or details.get("pgid")
             if pid:
                 kill_process_group(pid, task_id)
+
+            # Preserve intermediate results from disk before marking as failed
+            # IMPORTANT: Merge with existing results, don't overwrite successful ones
+            requested_providers = details.get("providers", [])
+            output_dir_str = details.get("output_dir")
+            s3_bucket = details.get("s3_bucket", "")
+            existing_provider_results = results.get("provider_results", [])
+
+            # Build a map of existing successful results (don't overwrite these)
+            existing_success_map = {}
+            for pr in existing_provider_results:
+                if pr.get("success") is True:
+                    existing_success_map[pr.get("provider")] = pr
+
+            if output_dir_str:
+                try:
+                    output_dir = Path(output_dir_str)
+                    if output_dir.exists():
+                        intermediate = _collect_tts_intermediate_results(
+                            output_dir, requested_providers, task_id, s3_bucket
+                        )
+                        # Merge: keep existing successful results, add new ones from disk
+                        merged_results = []
+                        intermediate_map = {
+                            r.provider: r.model_dump() for r in intermediate
+                        }
+                        for provider in requested_providers:
+                            if provider in existing_success_map:
+                                # Keep the existing successful result
+                                merged_results.append(existing_success_map[provider])
+                            elif provider in intermediate_map:
+                                # Use intermediate result from disk
+                                merged_results.append(intermediate_map[provider])
+                            else:
+                                # Provider not found anywhere, mark as failed
+                                merged_results.append(
+                                    {
+                                        "provider": provider,
+                                        "success": False,
+                                        "metrics": None,
+                                        "results": None,
+                                    }
+                                )
+                        results["provider_results"] = merged_results
+                except Exception as exc:
+                    logger.warning(
+                        f"Failed to collect intermediate results on timeout: {exc}"
+                    )
+                    # Even on exception, preserve any existing successful results
+                    if existing_provider_results:
+                        results["provider_results"] = existing_provider_results
 
             # Mark job as failed
             results["error"] = "Job timed out after 5 minutes of inactivity"
