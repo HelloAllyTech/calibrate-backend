@@ -346,7 +346,7 @@ def run_tts_evaluation_task(
 
                     # Poll for process completion with heartbeat to keep updated_at fresh
                     # This prevents the job from being marked as timed out during long runs
-                    HEARTBEAT_INTERVAL = 60  # seconds
+                    HEARTBEAT_INTERVAL = 2  # seconds
                     while process.poll() is None:
                         time.sleep(HEARTBEAT_INTERVAL)
                         if process.poll() is None:
@@ -590,7 +590,7 @@ async def evaluate_tts(
         raise HTTPException(status_code=500, detail=str(e))
 
     # Check if we can start immediately or need to queue
-    can_start = can_start_job(EVAL_JOB_TYPES)
+    can_start = can_start_job(EVAL_JOB_TYPES, user_id)
     initial_status = (
         TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
     )

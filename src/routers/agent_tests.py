@@ -905,8 +905,11 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Get user_id from agent for per-user limit check
+    user_id = agent.get("user_id")
+
     # Check if we can start immediately or need to queue
-    can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)
+    can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES, user_id)
     initial_status = (
         TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
     )
@@ -1477,8 +1480,11 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Get user_id from agent for per-user limit check
+    user_id = agent.get("user_id")
+
     # Check if we can start immediately or need to queue
-    can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)
+    can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES, user_id)
     initial_status = (
         TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
     )

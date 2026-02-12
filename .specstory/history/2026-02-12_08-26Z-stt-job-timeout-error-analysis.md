@@ -1199,47 +1199,62 @@ Good, the function exists. Now I need to apply the same merging fix to the TTS t
 
 <details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
 
-Status: **loading**
+**Chunk 1**
+Lines added: 47, lines removed: undefined
 
-```python
-    # Check for timeout on in-progress jobs
-    if status == TaskStatus.IN_PROGRESS.value:
-        updated_at = job.get("updated_at")
-        if updated_at and is_job_timed_out(updated_at):
-            logger.warning(f"Job {task_id} timed out, marking as failed")
-
-            # Kill running process
-            pid = details.get("pid") or details.get("pgid")
-            if pid:
-                kill_process_group(pid, task_id)
-
-            # Preserve intermediate results from disk before marking as failed
-            # IMPORTANT: Merge with existing results, don't overwrite successful ones
-            requested_providers = details.get("providers", [])
-            output_dir_str = details.get("output_dir")
-            s3_bucket = details.get("s3_bucket", "")
-            existing_provider_results = results.get("provider_results", [])
-            
-            # Build a map of existing successful results (don't overwrite these)
-            existing_success_map = {}
-            for pr in existing_provider_results:
-                if pr.get("success") is True:
-                    existing_success_map[pr.get("provider")] = pr
-            
-            if output_dir_str:
-                try:
-                    output_dir = Path(output_dir_str)
-                    if output_dir.exists():
-                        intermediate = _collect_tts_intermediate_results(
-                            output_dir, requested_providers, task_id, s3_bucket
-                        )
-                        # Merge: keep existing successful results, add new ones from disk
-                        merged_results = []
-                        intermediate_map = {r.provider: r.model_dump() for r in intermediate}
-                        for provider in requested_providers:
-                            if provider in existing_success_map:
-                                # Keep the existing successful result
-                                merged_results.
+```diff
+@@ -653,4 +653,51 @@
+                  kill_process_group(pid, task_id)
+  
++             # Preserve intermediate results from disk before marking as failed
++             # IMPORTANT: Merge with existing results, don't overwrite successful ones
++             requested_providers = details.get("providers", [])
++             output_dir_str = details.get("output_dir")
++             s3_bucket = details.get("s3_bucket", "")
++             existing_provider_results = results.get("provider_results", [])
++             
++             # Build a map of existing successful results (don't overwrite these)
++             existing_success_map = {}
++             for pr in existing_provider_results:
++                 if pr.get("success") is True:
++                     existing_success_map[pr.get("provider")] = pr
++             
++             if output_dir_str:
++                 try:
++                     output_dir = Path(output_dir_str)
++                     if output_dir.exists():
++                         intermediate = _collect_tts_intermediate_results(
++                             output_dir, requested_providers, task_id, s3_bucket
++                         )
++                         # Merge: keep existing successful results, add new ones from disk
++                         merged_results = []
++                         intermediate_map = {r.provider: r.model_dump() for r in intermediate}
++                         for provider in requested_providers:
++                             if provider in existing_success_map:
++                                 # Keep the existing successful result
++                                 merged_results.append(existing_success_map[provider])
++                             elif provider in intermediate_map:
++                                 # Use intermediate result from disk
++                                 merged_results.append(intermediate_map[provider])
++                             else:
++                                 # Provider not found anywhere, mark as failed
++                                 merged_results.append({
++                                     "provider": provider,
++                                     "success": False,
++                                     "metrics": None,
++                                     "results": None,
++                                 })
++                         results["provider_results"] = merged_results
++                 except Exception as exc:
++                     logger.warning(
++                         f"Failed to collect intermediate results on timeout: {exc}"
++                     )
++                     # Even on exception, preserve any existing successful results
++                     if existing_provider_results:
++                         results["provider_results"] = existing_provider_results
++ 
+              # Mark job as failed
+              results["error"] = "Job timed out after 5 minutes of inactivity"
 ```
 
 </details>
@@ -1248,7 +1263,2279 @@ Status: **loading**
 
 ---
 
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 1 file</summary>
+      
+Lint paths:
 
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py`
+
+Lint results
+
+Lint errors for `src/routers/tts.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Variable "dirs" is not accessed | 121:23-121:27 | DIAGNOSTIC_SEVERITY_HINT |
+| Code is unreachable | 180:9-180:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Code is unreachable | 201:9-201:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 385:35-385:39 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 458:31-458:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+Good, no linter errors. Now both STT and TTS have:
+
+1. ✅ **Heartbeat loop** - Prevents false timeouts during long-running CLI commands
+2. ✅ **Result merging on timeout** - Preserves successful provider results if a timeout does occur
+
+Here's a summary of all the fixes applied:
+
+| File | Heartbeat Fix | Result Merging Fix |
+|------|---------------|-------------------|
+| `src/routers/stt.py` | ✅ Lines 353-358 | ✅ Lines 618-670 |
+| `src/routers/tts.py` | ✅ Lines 349-354 | ✅ Lines 644-708 (just added) |
+
+---
+
+_**User (2026-02-12 08:26Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high, mode Agent)**_
+
+I made a code change to `src/routers/tts.py` - adding the result merging fix for the timeout handler. Let me update the architecture.md to reflect that both STT and TTS now have this fix:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+The architecture.md already documents the merging behavior at lines 412-417. The documentation says "(STT & TTS)" which is now accurate since I just added the fix to TTS. The documentation is already correct - no changes needed.
+
+No environment variables were added/changed/removed, so no updates needed to `.env.example`, `docker-compose.yml`, or GitHub workflows.
+
+---
+
+_**User (2026-02-12 08:26Z)**_
+
+what is the global limit on how many stt/tts jobs can run concurrently so that others get queued
+
+---
+
+_**Agent (model claude-4.5-opus-high, mode Agent)**_
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "MAX_CONCURRENT_JOBS" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/utils.py` | `return int(os.getenv("MAX_CONCURRENT_JOBS"))` | L315 |
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+The **global limit** is controlled by the `MAX_CONCURRENT_JOBS` environment variable, which defaults to **2** if not set.
+
+Here's how it works:
+
+| Setting | Value |
+|---------|-------|
+| Environment variable | `MAX_CONCURRENT_JOBS` |
+| Default value | `2` |
+| Scope | Per queue type (STT/TTS share one queue, simulations have another, agent tests have another) |
+
+So with the default of 2:
+- **STT + TTS jobs combined**: Max 2 running at once (they share the `["stt-eval", "tts-eval"]` queue)
+- **Simulation jobs**: Max 2 running at once (separate queue)
+- **Agent test jobs**: Max 2 running at once (separate queue)
+
+If you want to increase the limit, set the environment variable:
+```bash
+MAX_CONCURRENT_JOBS=4
+```
+
+---
+
+_**User (2026-02-12 08:26Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high, mode Agent)**_
+
+I did not make any code changes in my last response - I only answered a question about the `MAX_CONCURRENT_JOBS` configuration. Since no code was changed, there's nothing to update.
+
+---
+
+_**User (2026-02-12 08:26Z)**_
+
+update @.github/workflows/deploy.yml @.github/workflows/deploy-staging.yml to set MAX_CONCURRENT_JOBS
+
+---
+
+_**Agent (model claude-4.5-opus-high, mode Agent)**_
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy.yml</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -91,4 +91,5 @@
+              export LANGFUSE_PUBLIC_KEY="${{ secrets.LANGFUSE_PUBLIC_KEY }}"
+              export LANGFUSE_SECRET_KEY="${{ secrets.LANGFUSE_SECRET_KEY }}"
++             export MAX_CONCURRENT_JOBS="${{ secrets.MAX_CONCURRENT_JOBS }}"
+  
+              # Navigate to directory with docker-compose.yml
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy-staging.yml</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -91,4 +91,5 @@
+              export LANGFUSE_PUBLIC_KEY="${{ secrets.LANGFUSE_PUBLIC_KEY }}"
+              export LANGFUSE_SECRET_KEY="${{ secrets.LANGFUSE_SECRET_KEY }}"
++             export MAX_CONCURRENT_JOBS="${{ secrets.MAX_CONCURRENT_JOBS }}"
+  
+              # Navigate to directory with docker-compose.yml
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Done! I've added `MAX_CONCURRENT_JOBS` to both workflow files:
+
+- `.github/workflows/deploy.yml` (Production)
+- `.github/workflows/deploy-staging.yml` (Staging)
+
+You'll need to add the `MAX_CONCURRENT_JOBS` secret in your GitHub repository settings for both the Production and Staging environments. Set it to the desired value (e.g., `2` for default, or higher if you want more concurrent jobs).
+
+---
+
+_**User (2026-02-12 08:26Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high, mode Agent)**_
+
+I made code changes to the GitHub workflow files. Let me check if `MAX_CONCURRENT_JOBS` is already documented in the architecture.md and if it's in the docker-compose.yml and .env.example:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "MAX_CONCURRENT_JOBS" in "/Users/aman/Documents/repos/artpark/pense-backend" • 2 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `./docker-compose.yml` | `- MAX_CONCURRENT_JOBS=$\{MAX_CONCURRENT_JOBS:-1\}` | L12 |
+| `./src/utils.py` | `return int(os.getenv("MAX_CONCURRENT_JOBS"))` | L315 |
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/docker-compose.yml</summary>
+
+</details>
+</tool-use>
+
+---
+
+Model tried to read /Users/aman/Documents/repos/artpark/pense-backend/src/.env.example, but was prevented due to globalignore
+
+---
+
+Good - `MAX_CONCURRENT_JOBS` is already in docker-compose.yml (line 12) with a default of 1. The architecture.md already documents it as defaulting to 2, but the docker-compose shows it defaults to 1. Let me check what the architecture.md says:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "MAX_CONCURRENT_JOBS" in "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md" • 7 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `.cursor/rules/architecture.md` | `2. **Capacity Check**: Check if `running_jobs < MAX_CONCURRENT_JOBS`` | L217 |
+| `.cursor/rules/architecture.md` | `The queueing mechanism limits concurrent jobs to prevent resource exhaustion. Controlled by `MAX_CONCURRENT_JOBS` env var (default: 2).` | L239 |
+| `.cursor/rules/architecture.md` | `\| Eval Queue       \| `stt-eval`, `tts-eval`           \| `MAX_CONCURRENT_JOBS` \|` | L247 |
+| `.cursor/rules/architecture.md` | `\| Agent Test Queue \| `llm-unit-test`, `llm-benchmark` \| `MAX_CONCURRENT_JOBS` \|` | L248 |
+| `.cursor/rules/architecture.md` | `\| Simulation Queue \| `text`, `voice`                  \| `MAX_CONCURRENT_JOBS` \|` | L249 |
+| `.cursor/rules/architecture.md` | `Check: running_count < MAX_CONCURRENT_JOBS?` | L283 |
+| `.cursor/rules/architecture.md` | `MAX_CONCURRENT_JOBS=2            # Max concurrent jobs per queue type (default: 2)` | L648 |
+
+
+</details>
+</tool-use>
+
+---
+
+The architecture.md says the default is 2, but the docker-compose.yml has it defaulting to 1. Let me check what the code actually defaults to:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+The code docstring says "Defaults to 2" but the code itself doesn't provide a default - it will crash if `MAX_CONCURRENT_JOBS` is not set. The docker-compose.yml provides the default of 1. There's an inconsistency here.
+
+The architecture.md documentation is slightly inconsistent with docker-compose.yml (says 2, compose says 1). But since my change was just adding the env var to the GitHub workflows (which was missing), and docker-compose.yml already had it, no architecture.md update is needed for this specific change.
+
+The workflows now properly pass `MAX_CONCURRENT_JOBS` to the container, which docker-compose.yml already handles. No architecture.md changes needed since the env var was already documented there.
+
+---
+
+_**User (2026-02-12 08:26Z)**_
+
+now update this concurrency job check so that there is a user level concurrency limit too e.g. max global can be 5 but max user might be 1 - apply that check too
+
+---
+
+_**Agent (model claude-4.5-opus-high, mode Agent)**_
+
+I'll add a user-level concurrency limit check. Let me first understand the current implementation:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+Now let me check how jobs are created to see where user_id is available:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def create_job" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def create_job(` | L1991 |
+
+
+</details>
+</tool-use>
+
+---
+
+Good, jobs have `user_id`. Now let me check if there's a `count_running_jobs` function and see how it works:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def count_running_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def count_running_jobs(job_types: Optional[List[str]] = None) -> int:` | L2110 |
+
+
+</details>
+</tool-use>
+
+---
+
+Now let me create a todo list and implement the changes:
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [-] Add MAX_CONCURRENT_JOBS_PER_USER env var getter in utils.py
+- [ ] Add count_running_jobs_for_user function in db.py
+- [ ] Update can_start_job to check user-level limit
+- [ ] Update try_start_queued_job to check user-level limit
+- [ ] Apply same changes to agent test and simulation queues
+- [ ] Update docker-compose.yml and GitHub workflows
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+**Chunk 1**
+Lines added: 8, lines removed: undefined
+
+```diff
+@@ -315,4 +315,12 @@
+      return int(os.getenv("MAX_CONCURRENT_JOBS"))
+  
++ 
++ def get_max_concurrent_jobs_per_user() -&gt; int:
++     """Get the maximum number of concurrent jobs per user from environment variable.
++ 
++     Defaults to 1 if not set. Set to 0 to disable user-level limit.
++     """
++     return int(os.getenv("MAX_CONCURRENT_JOBS_PER_USER", "1"))
++ 
+  
+  # Job queue lock to ensure thread-safe queue operations
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add MAX_CONCURRENT_JOBS_PER_USER env var getter in utils.py
+- [-] Add count_running_jobs_for_user function in db.py
+- [ ] Update can_start_job to check user-level limit
+- [ ] Update try_start_queued_job to check user-level limit
+- [ ] Apply same changes to agent test and simulation queues
+- [ ] Update docker-compose.yml and GitHub workflows
+
+</details>
+</tool-use>
+
+---
+
+Now let me add the user-level count function in db.py:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 20, lines removed: undefined
+
+```diff
+@@ -2122,4 +2122,24 @@
+          return cursor.fetchone()[0]
+  
++ 
++ def count_running_jobs_for_user(
++     user_id: str, job_types: Optional[List[str]] = None
++ ) -&gt; int:
++     """Count jobs with status 'in_progress' for a specific user, optionally filtered by job types."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         if job_types:
++             placeholders = ",".join("?" for _ in job_types)
++             cursor.execute(
++                 f"SELECT COUNT(*) FROM jobs WHERE status = 'in_progress' AND user_id = ? AND type IN ({placeholders})",
++                 [user_id] + job_types,
++             )
++         else:
++             cursor.execute(
++                 "SELECT COUNT(*) FROM jobs WHERE status = 'in_progress' AND user_id = ?",
++                 (user_id,),
++             )
++         return cursor.fetchone()[0]
++ 
+  
+  def update_job(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now let me update `can_start_job` and `try_start_queued_job` in utils.py:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add MAX_CONCURRENT_JOBS_PER_USER env var getter in utils.py
+- [x] Add count_running_jobs_for_user function in db.py
+- [-] Update can_start_job to check user-level limit
+- [ ] Update try_start_queued_job to check user-level limit
+- [ ] Apply same changes to agent test and simulation queues
+- [ ] Update docker-compose.yml and GitHub workflows
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+**Chunk 1**
+Lines added: 17, lines removed: 3
+
+```diff
+@@ -399,19 +399,33 @@
+  
+  
+- def can_start_job(job_types: List[str]) -&gt; bool:
++ def can_start_job(job_types: List[str], user_id: str) -&gt; bool:
+      """Check if there's capacity to start a new job immediately.
++ 
++     Checks both global limit and per-user limit.
+  
+      Args:
+          job_types: List of job types to consider for counting running jobs.
++         user_id: UUID of the user requesting the job.
+  
+      Returns:
+          True if a new job can be started, False otherwise.
+      """
+-     from db import count_running_jobs
++     from db import count_running_jobs, count_running_jobs_for_user
+  
+      with _job_queue_lock:
++         # Check global limit
+          max_jobs = get_max_concurrent_jobs()
+          running_count = count_running_jobs(job_types)
+-         return running_count &lt; max_jobs
++         if running_count &gt;= max_jobs:
++             return False
++ 
++         # Check per-user limit
++         max_jobs_per_user = get_max_concurrent_jobs_per_user()
++         if max_jobs_per_user &gt; 0:  # 0 means disabled
++             user_running_count = count_running_jobs_for_user(user_id, job_types)
++             if user_running_count &gt;= max_jobs_per_user:
++                 return False
++ 
++         return True
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now update `try_start_queued_job` to also check user-level limits:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: undefined
+
+```diff
+@@ -344,4 +344,6 @@
+  def try_start_queued_job(job_types: List[str]) -&gt; bool:
+      """Try to start the next queued job if there's capacity.
++ 
++     Checks both global limit and per-user limit for each queued job.
+  
+      Args:
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -352,5 +354,5 @@
+      """
+      # Import here to avoid circular imports
+-     from db import count_running_jobs, get_queued_jobs, update_job
++     from db import count_running_jobs, count_running_jobs_for_user, get_queued_jobs, update_job
+  
+      with _job_queue_lock:
+```
+
+**Chunk 3**
+Lines added: 23, lines removed: 4
+
+```diff
+@@ -364,13 +366,32 @@
+              return False
+  
+-         # Get the oldest queued job
++         # Get all queued jobs (FIFO order)
+          queued_jobs = get_queued_jobs(job_types)
+          if not queued_jobs:
+              logger.info("No queued jobs to start")
+              return False
+  
+-         job = queued_jobs[0]
+-         job_id = job["uuid"]
+-         job_type = job.get("type")
++         # Find the first job that can be started (respects per-user limit)
++         max_jobs_per_user = get_max_concurrent_jobs_per_user()
++         job_to_start = None
++ 
++         for job in queued_jobs:
++             user_id = job.get("user_id")
++             if max_jobs_per_user &gt; 0 and user_id:  # 0 means disabled
++                 user_running_count = count_running_jobs_for_user(user_id, job_types)
++                 if user_running_count &gt;= max_jobs_per_user:
++                     logger.info(
++                         f"User {user_id} has {user_running_count}/{max_jobs_per_user} jobs running, skipping job {job['uuid']}"
++                     )
++                     continue
++             job_to_start = job
++             break
++ 
++         if not job_to_start:
++             logger.info("No queued jobs can be started (all users at their limit)")
++             return False
++ 
++         job_id = job_to_start["uuid"]
++         job_type = job_to_start.get("type")
+  
+          # Find the appropriate starter callback
+```
+
+**Chunk 4**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -386,5 +407,5 @@
+          try:
+              # Start the job (this should spawn a thread)
+-             starter_callback(job)
++             starter_callback(job_to_start)
+              return True
+          except Exception as e:
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add MAX_CONCURRENT_JOBS_PER_USER env var getter in utils.py
+- [x] Add count_running_jobs_for_user function in db.py
+- [x] Update can_start_job to check user-level limit
+- [x] Update try_start_queued_job to check user-level limit
+- [-] Apply same changes to agent test and simulation queues
+- [ ] Update docker-compose.yml and GitHub workflows
+
+</details>
+</tool-use>
+
+---
+
+Now I need to update the callers of `can_start_job` to pass `user_id`, and also update the agent test and simulation queues. Let me first find all callers:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "can_start_job\(" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 3 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/utils.py` | `def can_start_job(job_types: List[str], user_id: str) -> bool:` | L422 |
+| `src/routers/tts.py` | `can_start = can_start_job(EVAL_JOB_TYPES)` | L593 |
+| `src/routers/stt.py` | `can_start = can_start_job(EVAL_JOB_TYPES)` | L562 |
+
+
+</details>
+</tool-use>
+
+---
+
+Now let me update the callers in stt.py and tts.py:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -560,5 +560,5 @@
+  
+      # Check if we can start immediately or need to queue
+-     can_start = can_start_job(EVAL_JOB_TYPES)
++     can_start = can_start_job(EVAL_JOB_TYPES, user_id)
+      initial_status = (
+          TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -591,5 +591,5 @@
+  
+      # Check if we can start immediately or need to queue
+-     can_start = can_start_job(EVAL_JOB_TYPES)
++     can_start = can_start_job(EVAL_JOB_TYPES, user_id)
+      initial_status = (
+          TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now let me check the agent test and simulation queues:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "can_start_agent_test_job\(" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 3 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/utils.py` | `def can_start_agent_test_job(job_types: List[str]) -> bool:` | L518 |
+| `src/routers/agent_tests.py` | `can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)` | L909 |
+| `src/routers/agent_tests.py` | `can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)` | L1481 |
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+I need to check the db.py for agent test job functions and also add user-level counting for them. Let me first check what functions exist:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def count_running_agent_test_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def count_running_agent_test_jobs(job_types: Optional[List[str]] = None) -> int:` | L2335 |
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def count_running_simulation_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def count_running_simulation_jobs(job_types: Optional[List[str]] = None) -> int:` | L2523 |
+
+
+</details>
+</tool-use>
+
+---
+
+Now I need to check if agent_test_jobs and simulation_jobs have user_id. Let me check the schema:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "CREATE TABLE.*agent_test_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `CREATE TABLE IF NOT EXISTS agent_test_jobs (` | L155 |
+
+
+</details>
+</tool-use>
+
+---
+
+I see - agent_test_jobs has `agent_id` not `user_id`, and simulation_jobs has `simulation_id`. I need to join through the parent tables to get user_id. Let me check how the queued jobs are fetched:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def get_queued_agent_test_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def get_queued_agent_test_jobs(` | L2315 |
+
+
+</details>
+</tool-use>
+
+---
+
+Let me check how agent's user_id is retrieved:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def get_agent\b"" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 0 matches</summary>
+
+Output mode: content
+
+
+_No matches found_
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def get_agent\(" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def get_agent(agent_uuid: str) -> Optional[Dict[str, Any]]:` | L565 |
+
+
+</details>
+</tool-use>
+
+---
+
+I see the agent has a `user_id`. For agent_test_jobs, I need to join with agents to get the user_id. Let me add the user-level counting functions for agent tests and simulations:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 24, lines removed: undefined
+
+```diff
+@@ -2349,4 +2349,28 @@
+          return cursor.fetchone()[0]
+  
++ 
++ def count_running_agent_test_jobs_for_user(
++     user_id: str, job_types: Optional[List[str]] = None
++ ) -&gt; int:
++     """Count agent test jobs with status 'in_progress' for a specific user (via agent ownership)."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         if job_types:
++             placeholders = ",".join("?" for _ in job_types)
++             cursor.execute(
++                 f"""SELECT COUNT(*) FROM agent_test_jobs atj
++                     JOIN agents a ON atj.agent_id = a.uuid
++                     WHERE atj.status = 'in_progress' AND a.user_id = ? AND atj.type IN ({placeholders})""",
++                 [user_id] + job_types,
++             )
++         else:
++             cursor.execute(
++                 """SELECT COUNT(*) FROM agent_test_jobs atj
++                    JOIN agents a ON atj.agent_id = a.uuid
++                    WHERE atj.status = 'in_progress' AND a.user_id = ?""",
++                 (user_id,),
++             )
++         return cursor.fetchone()[0]
++ 
+  
+  def update_agent_test_job(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now let me add the same for simulation_jobs:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 24, lines removed: undefined
+
+```diff
+@@ -2561,4 +2561,28 @@
+          return cursor.fetchone()[0]
+  
++ 
++ def count_running_simulation_jobs_for_user(
++     user_id: str, job_types: Optional[List[str]] = None
++ ) -&gt; int:
++     """Count simulation jobs with status 'in_progress' for a specific user (via simulation ownership)."""
++     with get_db_connection() as conn:
++         cursor = conn.cursor()
++         if job_types:
++             placeholders = ",".join("?" for _ in job_types)
++             cursor.execute(
++                 f"""SELECT COUNT(*) FROM simulation_jobs sj
++                     JOIN simulations s ON sj.simulation_id = s.uuid
++                     WHERE sj.status = 'in_progress' AND s.user_id = ? AND sj.type IN ({placeholders})""",
++                 [user_id] + job_types,
++             )
++         else:
++             cursor.execute(
++                 """SELECT COUNT(*) FROM simulation_jobs sj
++                    JOIN simulations s ON sj.simulation_id = s.uuid
++                    WHERE sj.status = 'in_progress' AND s.user_id = ?""",
++                 (user_id,),
++             )
++         return cursor.fetchone()[0]
++ 
+  
+  def update_simulation_job(
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now I need to update the agent test queue functions to include user_id. First, let me check if the queued jobs include agent_id so we can look up user:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def _parse_agent_test_job_row" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def _parse_agent_test_job_row(row: sqlite3.Row) -> Dict[str, Any]:` | L2248 |
+
+
+</details>
+</tool-use>
+
+---
+
+Good, the job has `agent_id`. Now I need to modify the queued jobs query to also fetch user_id via a join. Let me update `get_queued_agent_test_jobs`:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 12, lines removed: 3
+
+```diff
+@@ -2316,16 +2316,25 @@
+      job_types: Optional[List[str]] = None,
+  ) -&gt; List[Dict[str, Any]]:
+-     """Get all agent test jobs with status 'queued', optionally filtered by job types."""
++     """Get all agent test jobs with status 'queued', optionally filtered by job types.
++     
++     Returns jobs with user_id included (via agent ownership).
++     """
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+          if job_types:
+              placeholders = ",".join("?" for _ in job_types)
+              cursor.execute(
+-                 f"SELECT * FROM agent_test_jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
++                 f"""SELECT atj.*, a.user_id FROM agent_test_jobs atj
++                     JOIN agents a ON atj.agent_id = a.uuid
++                     WHERE atj.status = 'queued' AND atj.type IN ({placeholders})
++                     ORDER BY atj.created_at ASC""",
+                  job_types,
+              )
+          else:
+              cursor.execute(
+-                 "SELECT * FROM agent_test_jobs WHERE status = 'queued' ORDER BY created_at ASC"
++                 """SELECT atj.*, a.user_id FROM agent_test_jobs atj
++                    JOIN agents a ON atj.agent_id = a.uuid
++                    WHERE atj.status = 'queued'
++                    ORDER BY atj.created_at ASC"""
+              )
+          rows = cursor.fetchall()
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now let me do the same for simulation jobs:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def get_queued_simulation_jobs" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def get_queued_simulation_jobs(` | L2536 |
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+**Chunk 1**
+Lines added: 12, lines removed: 3
+
+```diff
+@@ -2537,16 +2537,25 @@
+      job_types: Optional[List[str]] = None,
+  ) -&gt; List[Dict[str, Any]]:
+-     """Get all simulation jobs with status 'queued', optionally filtered by job types."""
++     """Get all simulation jobs with status 'queued', optionally filtered by job types.
++     
++     Returns jobs with user_id included (via simulation ownership).
++     """
+      with get_db_connection() as conn:
+          cursor = conn.cursor()
+          if job_types:
+              placeholders = ",".join("?" for _ in job_types)
+              cursor.execute(
+-                 f"SELECT * FROM simulation_jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
++                 f"""SELECT sj.*, s.user_id FROM simulation_jobs sj
++                     JOIN simulations s ON sj.simulation_id = s.uuid
++                     WHERE sj.status = 'queued' AND sj.type IN ({placeholders})
++                     ORDER BY sj.created_at ASC""",
+                  job_types,
+              )
+          else:
+              cursor.execute(
+-                 "SELECT * FROM simulation_jobs WHERE status = 'queued' ORDER BY created_at ASC"
++                 """SELECT sj.*, s.user_id FROM simulation_jobs sj
++                    JOIN simulations s ON sj.simulation_id = s.uuid
++                    WHERE sj.status = 'queued'
++                    ORDER BY sj.created_at ASC"""
+              )
+          rows = cursor.fetchall()
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now I need to also update `get_queued_jobs` for the regular jobs table to include user_id:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def get_queued_jobs"" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 0 matches</summary>
+
+Output mode: content
+
+
+_No matches found_
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def get_queued_jobs\(" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def get_queued_jobs(job_types: Optional[List[str]] = None) -> List[Dict[str, Any]]:` | L2092 |
+
+
+</details>
+</tool-use>
+
+---
+
+The `jobs` table already has `user_id` directly (I saw it in `create_job`), so the existing `get_queued_jobs` should already return `user_id`. Let me verify by checking `_parse_job_row`:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def _parse_job_row" in "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py" • 1 match</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/db.py` | `def _parse_job_row(row: sqlite3.Row) -> Dict[str, Any]:` | L2026 |
+
+
+</details>
+</tool-use>
+
+---
+
+Good, it returns all columns including `user_id`. Now let me update the agent test and simulation queue functions in utils.py:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: undefined
+
+```diff
+@@ -456,4 +456,6 @@
+  def try_start_queued_agent_test_job(job_types: List[str]) -&gt; bool:
+      """Try to start the next queued agent test job if there's capacity.
++ 
++     Checks both global limit and per-user limit for each queued job.
+  
+      Args:
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -465,4 +467,5 @@
+      from db import (
+          count_running_agent_test_jobs,
++         count_running_agent_test_jobs_for_user,
+          get_queued_agent_test_jobs,
+          update_agent_test_job,
+```
+
+**Chunk 3**
+Lines added: 27, lines removed: 4
+
+```diff
+@@ -481,13 +484,36 @@
+              return False
+  
+-         # Get the oldest queued job
++         # Get all queued jobs (FIFO order)
+          queued_jobs = get_queued_agent_test_jobs(job_types)
+          if not queued_jobs:
+              logger.info("No queued agent test jobs to start")
+              return False
+  
+-         job = queued_jobs[0]
+-         job_id = job["uuid"]
+-         job_type = job.get("type")
++         # Find the first job that can be started (respects per-user limit)
++         max_jobs_per_user = get_max_concurrent_jobs_per_user()
++         job_to_start = None
++ 
++         for job in queued_jobs:
++             user_id = job.get("user_id")
++             if max_jobs_per_user &gt; 0 and user_id:  # 0 means disabled
++                 user_running_count = count_running_agent_test_jobs_for_user(
++                     user_id, job_types
++                 )
++                 if user_running_count &gt;= max_jobs_per_user:
++                     logger.info(
++                         f"User {user_id} has {user_running_count}/{max_jobs_per_user} agent test jobs running, skipping job {job['uuid']}"
++                     )
++                     continue
++             job_to_start = job
++             break
++ 
++         if not job_to_start:
++             logger.info(
++                 "No queued agent test jobs can be started (all users at their limit)"
++             )
++             return False
++ 
++         job_id = job_to_start["uuid"]
++         job_type = job_to_start.get("type")
+  
+          # Find the appropriate starter callback
+```
+
+**Chunk 4**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -503,5 +529,5 @@
+          try:
+              # Start the job (this should spawn a thread)
+-             starter_callback(job)
++             starter_callback(job_to_start)
+              return True
+          except Exception as e:
+```
+
+**Chunk 5**
+Lines added: 19, lines removed: 3
+
+```diff
+@@ -516,19 +542,35 @@
+  
+  
+- def can_start_agent_test_job(job_types: List[str]) -&gt; bool:
++ def can_start_agent_test_job(job_types: List[str], user_id: str) -&gt; bool:
+      """Check if there's capacity to start a new agent test job immediately.
++ 
++     Checks both global limit and per-user limit.
+  
+      Args:
+          job_types: List of job types to consider for counting running jobs.
++         user_id: UUID of the user requesting the job.
+  
+      Returns:
+          True if a new job can be started, False otherwise.
+      """
+-     from db import count_running_agent_test_jobs
++     from db import count_running_agent_test_jobs, count_running_agent_test_jobs_for_user
+  
+      with _job_queue_lock:
++         # Check global limit
+          max_jobs = get_max_concurrent_jobs()
+          running_count = count_running_agent_test_jobs(job_types)
+-         return running_count &lt; max_jobs
++         if running_count &gt;= max_jobs:
++             return False
++ 
++         # Check per-user limit
++         max_jobs_per_user = get_max_concurrent_jobs_per_user()
++         if max_jobs_per_user &gt; 0:  # 0 means disabled
++             user_running_count = count_running_agent_test_jobs_for_user(
++                 user_id, job_types
++             )
++             if user_running_count &gt;= max_jobs_per_user:
++                 return False
++ 
++         return True
+  
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now let me update the simulation queue functions:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/utils.py</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: undefined
+
+```diff
+@@ -580,4 +580,6 @@
+  def try_start_queued_simulation_job(job_types: List[str]) -&gt; bool:
+      """Try to start the next queued simulation job if there's capacity.
++ 
++     Checks both global limit and per-user limit for each queued job.
+  
+      Args:
+```
+
+**Chunk 2**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -589,4 +591,5 @@
+      from db import (
+          count_running_simulation_jobs,
++         count_running_simulation_jobs_for_user,
+          get_queued_simulation_jobs,
+          update_simulation_job,
+```
+
+**Chunk 3**
+Lines added: 27, lines removed: 4
+
+```diff
+@@ -605,13 +608,36 @@
+              return False
+  
+-         # Get the oldest queued job
++         # Get all queued jobs (FIFO order)
+          queued_jobs = get_queued_simulation_jobs(job_types)
+          if not queued_jobs:
+              logger.info("No queued simulation jobs to start")
+              return False
+  
+-         job = queued_jobs[0]
+-         job_id = job["uuid"]
+-         job_type = job.get("type")
++         # Find the first job that can be started (respects per-user limit)
++         max_jobs_per_user = get_max_concurrent_jobs_per_user()
++         job_to_start = None
++ 
++         for job in queued_jobs:
++             user_id = job.get("user_id")
++             if max_jobs_per_user &gt; 0 and user_id:  # 0 means disabled
++                 user_running_count = count_running_simulation_jobs_for_user(
++                     user_id, job_types
++                 )
++                 if user_running_count &gt;= max_jobs_per_user:
++                     logger.info(
++                         f"User {user_id} has {user_running_count}/{max_jobs_per_user} simulation jobs running, skipping job {job['uuid']}"
++                     )
++                     continue
++             job_to_start = job
++             break
++ 
++         if not job_to_start:
++             logger.info(
++                 "No queued simulation jobs can be started (all users at their limit)"
++             )
++             return False
++ 
++         job_id = job_to_start["uuid"]
++         job_type = job_to_start.get("type")
+  
+          # Find the appropriate starter callback
+```
+
+**Chunk 4**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -627,5 +653,5 @@
+          try:
+              # Start the job (this should spawn a thread)
+-             starter_callback(job)
++             starter_callback(job_to_start)
+              return True
+          except Exception as e:
+```
+
+**Chunk 5**
+Lines added: 19, lines removed: 3
+
+```diff
+@@ -640,18 +666,34 @@
+  
+  
+- def can_start_simulation_job(job_types: List[str]) -&gt; bool:
++ def can_start_simulation_job(job_types: List[str], user_id: str) -&gt; bool:
+      """Check if there's capacity to start a new simulation job immediately.
++ 
++     Checks both global limit and per-user limit.
+  
+      Args:
+          job_types: List of job types to consider for counting running jobs.
++         user_id: UUID of the user requesting the job.
+  
+      Returns:
+          True if a new job can be started, False otherwise.
+      """
+-     from db import count_running_simulation_jobs
++     from db import count_running_simulation_jobs, count_running_simulation_jobs_for_user
+  
+      with _job_queue_lock:
++         # Check global limit
+          max_jobs = get_max_concurrent_jobs()
+          running_count = count_running_simulation_jobs(job_types)
+-         return running_count &lt; max_jobs
++         if running_count &gt;= max_jobs:
++             return False
++ 
++         # Check per-user limit
++         max_jobs_per_user = get_max_concurrent_jobs_per_user()
++         if max_jobs_per_user &gt; 0:  # 0 means disabled
++             user_running_count = count_running_simulation_jobs_for_user(
++                 user_id, job_types
++             )
++             if user_running_count &gt;= max_jobs_per_user:
++                 return False
++ 
++         return True
+  
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now I need to update the callers of `can_start_agent_test_job` and `can_start_simulation_job`:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "can_start_agent_test_job\("" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 0 matches</summary>
+
+Output mode: content
+
+
+_No matches found_
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "can_start_agent_test_job\(" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 3 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/utils.py` | `def can_start_agent_test_job(job_types: List[str], user_id: str) -> bool:` | L544 |
+| `src/routers/agent_tests.py` | `can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)` | L909 |
+| `src/routers/agent_tests.py` | `can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)` | L1481 |
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+I need to find where `user_id` is available in agent_tests.py:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+I see the function signature doesn't have `user_id`. Let me check if there's a dependency:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "async def run_agent_test"" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py" • 0 matches</summary>
+
+Output mode: content
+
+
+_No matches found_
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "def run_agent_test\("" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py" • 0 matches</summary>
+
+Output mode: content
+
+
+_No matches found_
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for ""run_agent_test"" in "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py" • 0 matches</summary>
+
+Output mode: content
+
+
+_No matches found_
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+I see the endpoint doesn't have `user_id` dependency. The agent has `user_id`, so I can get it from there. Let me update the agent_tests.py callers:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 4, lines removed: 1
+
+```diff
+@@ -906,6 +906,9 @@
+          raise HTTPException(status_code=500, detail=str(e))
+  
++     # Get user_id from agent for per-user limit check
++     user_id = agent.get("user_id")
++ 
+      # Check if we can start immediately or need to queue
+-     can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)
++     can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES, user_id)
+      initial_status = (
+          TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now let me find and update the benchmark endpoint:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py</summary>
+
+**Chunk 1**
+Lines added: 4, lines removed: 1
+
+```diff
+@@ -1481,6 +1481,9 @@
+          raise HTTPException(status_code=500, detail=str(e))
+  
++     # Get user_id from agent for per-user limit check
++     user_id = agent.get("user_id")
++ 
+      # Check if we can start immediately or need to queue
+-     can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES)
++     can_start = can_start_agent_test_job(AGENT_TEST_JOB_TYPES, user_id)
+      initial_status = (
+          TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now let me find and update the simulation callers:
+
+---
+
+<tool-use data-tool-type="search" data-tool-name="grep">
+<details>
+<summary>Tool use: **grep** • Grep for "can_start_simulation_job\(" in "/Users/aman/Documents/repos/artpark/pense-backend/src" • 2 matches</summary>
+
+Output mode: content
+
+
+| File | Content | Line |
+|------|------|------|
+| `src/utils.py` | `def can_start_simulation_job(job_types: List[str], user_id: str) -> bool:` | L668 |
+| `src/routers/simulations.py` | `can_start = can_start_simulation_job(SIMULATION_JOB_TYPES)` | L2116 |
+
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+I need to find where simulation's user_id is:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+I see `user_id` is already available as a function parameter. Let me check the function signature:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+</details>
+</tool-use>
+
+---
+
+`user_id` is already available. Let me update the call:
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -2114,5 +2114,5 @@
+  
+      # Check if we can start immediately or need to queue
+-     can_start = can_start_simulation_job(SIMULATION_JOB_TYPES)
++     can_start = can_start_simulation_job(SIMULATION_JOB_TYPES, user_id)
+      initial_status = (
+          TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add MAX_CONCURRENT_JOBS_PER_USER env var getter in utils.py
+- [x] Add count_running_jobs_for_user function in db.py
+- [x] Update can_start_job to check user-level limit
+- [x] Update try_start_queued_job to check user-level limit
+- [x] Apply same changes to agent test and simulation queues
+- [-] Update docker-compose.yml and GitHub workflows
+
+</details>
+</tool-use>
+
+---
+
+Now let me check for linter errors and then update docker-compose.yml and GitHub workflows:
+
+---
+
+<tool-use data-tool-type="generic" data-tool-name="read_lints">
+<details>
+          <summary>Tool use: **read_lints** • Read lints for 6 files</summary>
+      
+Lint paths:
+
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/utils.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/db.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/stt.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/tts.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agent_tests.py`
+- `/Users/aman/Documents/repos/artpark/pense-backend/src/routers/simulations.py`
+
+Lint results
+
+Lint errors for `src/routers/stt.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Code is unreachable | 153:9-153:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Code is unreachable | 174:9-174:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 387:35-387:39 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 427:31-427:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+Lint errors for `src/utils.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| The method "utcnow" in class "datetime" is deprecated<br/>  Use timezone-aware objects to represent datetimes in UTC; e.g. by calling .now(datetime.timezone.utc) | 209:38-209:44 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+Lint errors for `src/routers/tts.py`
+
+
+| Message | Range | Severity |
+|-------|-------|----------|
+| Variable "dirs" is not accessed | 121:23-121:27 | DIAGNOSTIC_SEVERITY_HINT |
+| Code is unreachable | 180:9-180:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Code is unreachable | 201:9-201:20 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 385:35-385:39 | DIAGNOSTIC_SEVERITY_HINT |
+| Variable "dirs" is not accessed | 458:31-458:35 | DIAGNOSTIC_SEVERITY_HINT |
+
+
+</details>
+</tool-use>
+
+---
+
+Now let me update docker-compose.yml:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/docker-compose.yml</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/docker-compose.yml</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -11,4 +11,5 @@
+        - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
+        - MAX_CONCURRENT_JOBS=${MAX_CONCURRENT_JOBS:-1}
++       - MAX_CONCURRENT_JOBS_PER_USER=${MAX_CONCURRENT_JOBS_PER_USER:-1}
+        - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+        - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-168}
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now let me update the GitHub workflows:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy.yml</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy.yml</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -92,4 +92,5 @@
+              export LANGFUSE_SECRET_KEY="${{ secrets.LANGFUSE_SECRET_KEY }}"
+              export MAX_CONCURRENT_JOBS="${{ secrets.MAX_CONCURRENT_JOBS }}"
++             export MAX_CONCURRENT_JOBS_PER_USER="${{ secrets.MAX_CONCURRENT_JOBS_PER_USER }}"
+  
+              # Navigate to directory with docker-compose.yml
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy-staging.yml</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.github/workflows/deploy-staging.yml</summary>
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -92,4 +92,5 @@
+              export LANGFUSE_SECRET_KEY="${{ secrets.LANGFUSE_SECRET_KEY }}"
+              export MAX_CONCURRENT_JOBS="${{ secrets.MAX_CONCURRENT_JOBS }}"
++             export MAX_CONCURRENT_JOBS_PER_USER="${{ secrets.MAX_CONCURRENT_JOBS_PER_USER }}"
+  
+              # Navigate to directory with docker-compose.yml
+```
+
+</details>
+
+</tool-use>
+
+---
+
+<tool-use data-tool-type="task" data-tool-name="todo_write">
+<details><summary>Tool use: **todo_write** • Todo List</summary>
+
+- [x] Add MAX_CONCURRENT_JOBS_PER_USER env var getter in utils.py
+- [x] Add count_running_jobs_for_user function in db.py
+- [x] Update can_start_job to check user-level limit
+- [x] Update try_start_queued_job to check user-level limit
+- [x] Apply same changes to agent test and simulation queues
+- [x] Update docker-compose.yml and GitHub workflows
+
+</details>
+</tool-use>
+
+---
+
+Done! Here's a summary of all the changes made:
+
+## Summary of Changes
+
+### New Environment Variable
+- **`MAX_CONCURRENT_JOBS_PER_USER`** - Maximum concurrent jobs per user per queue type (default: 1, set to 0 to disable)
+
+### Files Modified
+
+#### `src/utils.py`
+- Added `get_max_concurrent_jobs_per_user()` function
+- Updated `can_start_job()` to accept `user_id` and check per-user limit
+- Updated `try_start_queued_job()` to skip jobs from users at their limit (allows other users' jobs to run)
+- Updated `can_start_agent_test_job()` to accept `user_id` and check per-user limit
+- Updated `try_start_queued_agent_test_job()` to skip jobs from users at their limit
+- Updated `can_start_simulation_job()` to accept `user_id` and check per-user limit
+- Updated `try_start_queued_simulation_job()` to skip jobs from users at their limit
+
+#### `src/db.py`
+- Added `count_running_jobs_for_user()` - counts running jobs for a specific user
+- Added `count_running_agent_test_jobs_for_user()` - counts running agent test jobs for a user (via agent ownership)
+- Added `count_running_simulation_jobs_for_user()` - counts running simulation jobs for a user (via simulation ownership)
+- Updated `get_queued_agent_test_jobs()` to include `user_id` via JOIN with agents table
+- Updated `get_queued_simulation_jobs()` to include `user_id` via JOIN with simulations table
+
+#### `src/routers/stt.py` & `src/routers/tts.py`
+- Updated `can_start_job()` calls to pass `user_id`
+
+#### `src/routers/agent_tests.py`
+- Updated `can_start_agent_test_job()` calls to pass `user_id` (from agent)
+
+#### `src/routers/simulations.py`
+- Updated `can_start_simulation_job()` calls to pass `user_id`
+
+#### `docker-compose.yml`
+- Added `MAX_CONCURRENT_JOBS_PER_USER` environment variable (default: 1)
+
+#### `.github/workflows/deploy.yml` & `.github/workflows/deploy-staging.yml`
+- Added `MAX_CONCURRENT_JOBS_PER_USER` secret export
+
+### How It Works
+
+| Setting | Example | Behavior |
+|---------|---------|----------|
+| `MAX_CONCURRENT_JOBS=5` | Global limit | Max 5 jobs running across all users |
+| `MAX_CONCURRENT_JOBS_PER_USER=1` | Per-user limit | Each user can only have 1 job running at a time |
+| `MAX_CONCURRENT_JOBS_PER_USER=0` | Disabled | No per-user limit (only global limit applies) |
+
+When a job completes and the queue is checked:
+1. Check if global capacity is available
+2. Iterate through queued jobs (FIFO)
+3. For each job, check if that user is at their per-user limit
+4. Skip jobs from users at their limit, start the first eligible job
+5. This allows User B's job to start even if User A has jobs queued but is at their limit
+
+---
+
+_**User (2026-02-12 08:26Z)**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (model claude-4.5-opus-high, mode Agent)**_
+
+I made significant code changes adding per-user job concurrency limits. Let me update the architecture.md file:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 32, lines removed: 16
+
+```diff
+@@ -237,27 +237,43 @@
+  ### Job Queueing System
+  
+- The queueing mechanism limits concurrent jobs to prevent resource exhaustion. Controlled by &#96;MAX_CONCURRENT_JOBS&#96; env var (default: 2).
++ The queueing mechanism limits concurrent jobs to prevent resource exhaustion. Two levels of limits are enforced:
++ 
++ 1. **Global limit**: &#96;MAX_CONCURRENT_JOBS&#96; env var (default from docker-compose: 1)
++ 2. **Per-user limit**: &#96;MAX_CONCURRENT_JOBS_PER_USER&#96; env var (default: 1, set to 0 to disable)
+  
+  #### Queue Architecture
+  
+- Three separate queues exist, each with its own concurrency limit:
++ Three separate queues exist, each with its own concurrency limits:
+  
+- | Queue            | Job Types                        | Shared Limit          |
+- | ---------------- | -------------------------------- | --------------------- |
+- | Eval Queue       | &#96;stt-eval&#96;, &#96;tts-eval&#96;           | &#96;MAX_CONCURRENT_JOBS&#96; |
+- | Agent Test Queue | &#96;llm-unit-test&#96;, &#96;llm-benchmark&#96; | &#96;MAX_CONCURRENT_JOBS&#96; |
+- | Simulation Queue | &#96;text&#96;, &#96;voice&#96;                  | &#96;MAX_CONCURRENT_JOBS&#96; |
++ | Queue            | Job Types                        | Global Limit          | Per-User Limit                |
++ | ---------------- | -------------------------------- | --------------------- | ----------------------------- |
++ | Eval Queue       | &#96;stt-eval&#96;, &#96;tts-eval&#96;           | &#96;MAX_CONCURRENT_JOBS&#96; | &#96;MAX_CONCURRENT_JOBS_PER_USER&#96; |
++ | Agent Test Queue | &#96;llm-unit-test&#96;, &#96;llm-benchmark&#96; | &#96;MAX_CONCURRENT_JOBS&#96; | &#96;MAX_CONCURRENT_JOBS_PER_USER&#96; |
++ | Simulation Queue | &#96;text&#96;, &#96;voice&#96;                  | &#96;MAX_CONCURRENT_JOBS&#96; | &#96;MAX_CONCURRENT_JOBS_PER_USER&#96; |
+  
+  #### Key Components
+  
+- | Component                  | Location   | Purpose                              |
+- | -------------------------- | ---------- | ------------------------------------ |
+- | &#96;TaskStatus.QUEUED&#96;        | &#96;utils.py&#96; | New status for queued jobs           |
+- | &#96;_job_starters&#96; registry   | &#96;utils.py&#96; | Maps job types to starter callbacks  |
+- | &#96;register_job_starter()&#96;   | &#96;utils.py&#96; | Registers callback for starting jobs |
+- | &#96;can_start_*_job()&#96;        | &#96;utils.py&#96; | Checks if capacity allows new job    |
+- | &#96;try_start_queued_*_job()&#96; | &#96;utils.py&#96; | Starts next queued job               |
+- | &#96;get_queued_*()&#96;           | &#96;db.py&#96;    | Gets queued jobs (FIFO order)        |
+- | &#96;count_running_*()&#96;        | &#96;db.py&#96;    | Counts in-progress jobs              |
++ | Component                        | Location   | Purpose                                      |
++ | -------------------------------- | ---------- | -------------------------------------------- |
++ | &#96;TaskStatus.QUEUED&#96;              | &#96;utils.py&#96; | Status for queued jobs                       |
++ | &#96;_job_starters&#96; registry         | &#96;utils.py&#96; | Maps job types to starter callbacks          |
++ | &#96;register_job_starter()&#96;         | &#96;utils.py&#96; | Registers callback for starting jobs         |
++ | &#96;can_start_*_job()&#96;              | &#96;utils.py&#96; | Checks global + per-user capacity            |
++ | &#96;try_start_queued_*_job()&#96;       | &#96;utils.py&#96; | Starts next eligible queued job              |
++ | &#96;get_queued_*()&#96;                 | &#96;db.py&#96;    | Gets queued jobs with user_id (FIFO order)   |
++ | &#96;count_running_*()&#96;              | &#96;db.py&#96;    | Counts in-progress jobs (global)             |
++ | &#96;count_running_*_for_user()&#96;     | &#96;db.py&#96;    | Counts in-progress jobs for a specific user  |
++ 
++ #### User ID Resolution for Jobs
++ 
++ Different job tables store user ownership differently:
++ 
++ | Table              | User ID Source                                      |
++ | ------------------ | --------------------------------------------------- |
++ | &#96;jobs&#96;             | Direct &#96;user_id&#96; column                             |
++ | &#96;agent_test_jobs&#96;  | Via &#96;agent_id&#96; → &#96;agents.user_id&#96; (JOIN)            |
++ | &#96;simulation_jobs&#96;  | Via &#96;simulation_id&#96; → &#96;simulations.user_id&#96; (JOIN)  |
++ 
++ The &#96;get_queued_*_jobs()&#96; functions include JOINs to return &#96;user_id&#96; with each queued job.
+  
+  #### Job Starter Registration
+```
+
+**Chunk 2**
+Lines added: 11, lines removed: 4
+
+```diff
+@@ -278,12 +294,19 @@
+  
+  &#96;&#96;&#96;
+- New Job Request
++ New Job Request (user_id known)
+        │
+        ▼
+  Check: running_count &lt; MAX_CONCURRENT_JOBS?
+        │
+-       ├─── YES ──→ Create job (status=in_progress) ──→ Start immediately
+-       │
+-       └─── NO ───→ Create job (status=queued) ──→ Wait in queue
++       ├─── NO ───→ Create job (status=queued) ──→ Wait in queue
++       │
++       └─── YES
++             │
++             ▼
++       Check: user_running_count &lt; MAX_CONCURRENT_JOBS_PER_USER?
++             │
++             ├─── YES ──→ Create job (status=in_progress) ──→ Start immediately
++             │
++             └─── NO ───→ Create job (status=queued) ──→ Wait in queue
+  
+  Job Completion
+```
+
+**Chunk 3**
+Lines added: 11, lines removed: 4
+
+```diff
+@@ -292,8 +315,15 @@
+  try_start_queued_*_job()
+        │
+-       ├─── Capacity available? ──→ Start oldest queued job
+-       │
+-       └─── No capacity ──→ Do nothing
+- &#96;&#96;&#96;
++       ▼
++ For each queued job (FIFO):
++       │
++       ├─── Global capacity full? ──→ Stop (no more jobs can start)
++       │
++       └─── User at their limit? ──→ Skip this job, try next one
++             │
++             └─── User has capacity ──→ Start this job
++ &#96;&#96;&#96;
++ 
++ **Fair scheduling**: When processing the queue, jobs from users who are at their per-user limit are skipped, allowing jobs from other users to start. This prevents one user from monopolizing the queue.
+  
+  ### Process Management for Long-Running Jobs
+```
+
+</details>
+
+</tool-use>
+
+---
+
+Now let me update the environment variables section:
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="read" data-tool-name="read_file">
+<details><summary>Tool use: **read_file** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+---
+
+<tool-use data-tool-type="write" data-tool-name="search_replace">
+
+<details><summary>Tool use: **search_replace** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+**Chunk 1**
+Lines added: 2, lines removed: 1
+
+```diff
+@@ -676,5 +676,6 @@
+  
+  # Job Queue
+- MAX_CONCURRENT_JOBS=2            # Max concurrent jobs per queue type (default: 2)
++ MAX_CONCURRENT_JOBS=2            # Max concurrent jobs per queue type (docker-compose default: 1)
++ MAX_CONCURRENT_JOBS_PER_USER=1   # Max concurrent jobs per user per queue type (default: 1, 0 to disable)
+  
+  # CORS
+```
+
+</details>
+
+</tool-use>
+
+---
+
+The architecture.md has been updated with:
+
+1. **Updated Job Queueing System section** - Now documents both global and per-user limits
+2. **New table showing per-user limits** for each queue type
+3. **New "User ID Resolution for Jobs" section** - Explains how user ownership is determined for different job tables (direct column vs JOIN)
+4. **Updated queue flow diagram** - Shows the two-level capacity check
+5. **Fair scheduling explanation** - Documents that jobs from users at their limit are skipped
+6. **Updated environment variables** - Added `MAX_CONCURRENT_JOBS_PER_USER` documentation
+
+No changes needed to `.env.example` since it's filtered by gitignore. The docker-compose.yml and GitHub workflows were already updated in the previous changes.
 
 ---
 

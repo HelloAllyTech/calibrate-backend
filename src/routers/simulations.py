@@ -2113,7 +2113,7 @@ async def run_simulation_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
     # Check if we can start immediately or need to queue
-    can_start = can_start_simulation_job(SIMULATION_JOB_TYPES)
+    can_start = can_start_simulation_job(SIMULATION_JOB_TYPES, user_id)
     initial_status = (
         TaskStatus.IN_PROGRESS.value if can_start else TaskStatus.QUEUED.value
     )

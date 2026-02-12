@@ -315,6 +315,14 @@ def get_max_concurrent_jobs() -> int:
     return int(os.getenv("MAX_CONCURRENT_JOBS"))
 
 
+def get_max_concurrent_jobs_per_user() -> int:
+    """Get the maximum number of concurrent jobs per user from environment variable.
+
+    Defaults to 1 if not set. Set to 0 to disable user-level limit.
+    """
+    return int(os.getenv("MAX_CONCURRENT_JOBS_PER_USER", "1"))
+
+
 # Job queue lock to ensure thread-safe queue operations
 _job_queue_lock = threading.Lock()
 
@@ -336,6 +344,8 @@ def register_job_starter(job_type: str, starter_callback: callable) -> None:
 def try_start_queued_job(job_types: List[str]) -> bool:
     """Try to start the next queued job if there's capacity.
 
+    Checks both global limit and per-user limit for each queued job.
+
     Args:
         job_types: List of job types to consider (e.g., ["stt-eval", "tts-eval"])
 
@@ -343,7 +353,12 @@ def try_start_queued_job(job_types: List[str]) -> bool:
         True if a job was started, False otherwise.
     """
     # Import here to avoid circular imports
-    from db import count_running_jobs, get_queued_jobs, update_job
+    from db import (
+        count_running_jobs,
+        count_running_jobs_for_user,
+        get_queued_jobs,
+        update_job,
+    )
 
     with _job_queue_lock:
         max_jobs = get_max_concurrent_jobs()
@@ -355,15 +370,34 @@ def try_start_queued_job(job_types: List[str]) -> bool:
             logger.info("Max concurrent jobs reached, not starting new job")
             return False
 
-        # Get the oldest queued job
+        # Get all queued jobs (FIFO order)
         queued_jobs = get_queued_jobs(job_types)
         if not queued_jobs:
             logger.info("No queued jobs to start")
             return False
 
-        job = queued_jobs[0]
-        job_id = job["uuid"]
-        job_type = job.get("type")
+        # Find the first job that can be started (respects per-user limit)
+        max_jobs_per_user = get_max_concurrent_jobs_per_user()
+        job_to_start = None
+
+        for job in queued_jobs:
+            user_id = job.get("user_id")
+            if max_jobs_per_user > 0 and user_id:  # 0 means disabled
+                user_running_count = count_running_jobs_for_user(user_id, job_types)
+                if user_running_count >= max_jobs_per_user:
+                    logger.info(
+                        f"User {user_id} has {user_running_count}/{max_jobs_per_user} jobs running, skipping job {job['uuid']}"
+                    )
+                    continue
+            job_to_start = job
+            break
+
+        if not job_to_start:
+            logger.info("No queued jobs can be started (all users at their limit)")
+            return False
+
+        job_id = job_to_start["uuid"]
+        job_type = job_to_start.get("type")
 
         # Find the appropriate starter callback
         starter_callback = _job_starters.get(job_type)
@@ -377,7 +411,7 @@ def try_start_queued_job(job_types: List[str]) -> bool:
 
         try:
             # Start the job (this should spawn a thread)
-            starter_callback(job)
+            starter_callback(job_to_start)
             return True
         except Exception as e:
             # If starting fails, mark as done with error
@@ -390,21 +424,35 @@ def try_start_queued_job(job_types: List[str]) -> bool:
             return False
 
 
-def can_start_job(job_types: List[str]) -> bool:
+def can_start_job(job_types: List[str], user_id: str) -> bool:
     """Check if there's capacity to start a new job immediately.
+
+    Checks both global limit and per-user limit.
 
     Args:
         job_types: List of job types to consider for counting running jobs.
+        user_id: UUID of the user requesting the job.
 
     Returns:
         True if a new job can be started, False otherwise.
     """
-    from db import count_running_jobs
+    from db import count_running_jobs, count_running_jobs_for_user
 
     with _job_queue_lock:
+        # Check global limit
         max_jobs = get_max_concurrent_jobs()
         running_count = count_running_jobs(job_types)
-        return running_count < max_jobs
+        if running_count >= max_jobs:
+            return False
+
+        # Check per-user limit
+        max_jobs_per_user = get_max_concurrent_jobs_per_user()
+        if max_jobs_per_user > 0:  # 0 means disabled
+            user_running_count = count_running_jobs_for_user(user_id, job_types)
+            if user_running_count >= max_jobs_per_user:
+                return False
+
+        return True
 
 
 # ============ Agent Test Job Queue Functions ============
@@ -412,6 +460,8 @@ def can_start_job(job_types: List[str]) -> bool:
 
 def try_start_queued_agent_test_job(job_types: List[str]) -> bool:
     """Try to start the next queued agent test job if there's capacity.
+
+    Checks both global limit and per-user limit for each queued job.
 
     Args:
         job_types: List of job types to consider (e.g., ["llm-unit-test", "llm-benchmark"])
@@ -421,6 +471,7 @@ def try_start_queued_agent_test_job(job_types: List[str]) -> bool:
     """
     from db import (
         count_running_agent_test_jobs,
+        count_running_agent_test_jobs_for_user,
         get_queued_agent_test_jobs,
         update_agent_test_job,
     )
@@ -437,15 +488,38 @@ def try_start_queued_agent_test_job(job_types: List[str]) -> bool:
             logger.info("Max concurrent jobs reached, not starting new agent test job")
             return False
 
-        # Get the oldest queued job
+        # Get all queued jobs (FIFO order)
         queued_jobs = get_queued_agent_test_jobs(job_types)
         if not queued_jobs:
             logger.info("No queued agent test jobs to start")
             return False
 
-        job = queued_jobs[0]
-        job_id = job["uuid"]
-        job_type = job.get("type")
+        # Find the first job that can be started (respects per-user limit)
+        max_jobs_per_user = get_max_concurrent_jobs_per_user()
+        job_to_start = None
+
+        for job in queued_jobs:
+            user_id = job.get("user_id")
+            if max_jobs_per_user > 0 and user_id:  # 0 means disabled
+                user_running_count = count_running_agent_test_jobs_for_user(
+                    user_id, job_types
+                )
+                if user_running_count >= max_jobs_per_user:
+                    logger.info(
+                        f"User {user_id} has {user_running_count}/{max_jobs_per_user} agent test jobs running, skipping job {job['uuid']}"
+                    )
+                    continue
+            job_to_start = job
+            break
+
+        if not job_to_start:
+            logger.info(
+                "No queued agent test jobs can be started (all users at their limit)"
+            )
+            return False
+
+        job_id = job_to_start["uuid"]
+        job_type = job_to_start.get("type")
 
         # Find the appropriate starter callback
         starter_callback = _job_starters.get(job_type)
@@ -459,7 +533,7 @@ def try_start_queued_agent_test_job(job_types: List[str]) -> bool:
 
         try:
             # Start the job (this should spawn a thread)
-            starter_callback(job)
+            starter_callback(job_to_start)
             return True
         except Exception as e:
             # If starting fails, mark as done with error
@@ -472,21 +546,37 @@ def try_start_queued_agent_test_job(job_types: List[str]) -> bool:
             return False
 
 
-def can_start_agent_test_job(job_types: List[str]) -> bool:
+def can_start_agent_test_job(job_types: List[str], user_id: str) -> bool:
     """Check if there's capacity to start a new agent test job immediately.
+
+    Checks both global limit and per-user limit.
 
     Args:
         job_types: List of job types to consider for counting running jobs.
+        user_id: UUID of the user requesting the job.
 
     Returns:
         True if a new job can be started, False otherwise.
     """
-    from db import count_running_agent_test_jobs
+    from db import count_running_agent_test_jobs, count_running_agent_test_jobs_for_user
 
     with _job_queue_lock:
+        # Check global limit
         max_jobs = get_max_concurrent_jobs()
         running_count = count_running_agent_test_jobs(job_types)
-        return running_count < max_jobs
+        if running_count >= max_jobs:
+            return False
+
+        # Check per-user limit
+        max_jobs_per_user = get_max_concurrent_jobs_per_user()
+        if max_jobs_per_user > 0:  # 0 means disabled
+            user_running_count = count_running_agent_test_jobs_for_user(
+                user_id, job_types
+            )
+            if user_running_count >= max_jobs_per_user:
+                return False
+
+        return True
 
 
 # ============ Simulation Job Queue Functions ============
@@ -494,6 +584,8 @@ def can_start_agent_test_job(job_types: List[str]) -> bool:
 
 def try_start_queued_simulation_job(job_types: List[str]) -> bool:
     """Try to start the next queued simulation job if there's capacity.
+
+    Checks both global limit and per-user limit for each queued job.
 
     Args:
         job_types: List of job types to consider (e.g., ["text", "voice"])
@@ -503,6 +595,7 @@ def try_start_queued_simulation_job(job_types: List[str]) -> bool:
     """
     from db import (
         count_running_simulation_jobs,
+        count_running_simulation_jobs_for_user,
         get_queued_simulation_jobs,
         update_simulation_job,
     )
@@ -519,15 +612,38 @@ def try_start_queued_simulation_job(job_types: List[str]) -> bool:
             logger.info("Max concurrent jobs reached, not starting new simulation job")
             return False
 
-        # Get the oldest queued job
+        # Get all queued jobs (FIFO order)
         queued_jobs = get_queued_simulation_jobs(job_types)
         if not queued_jobs:
             logger.info("No queued simulation jobs to start")
             return False
 
-        job = queued_jobs[0]
-        job_id = job["uuid"]
-        job_type = job.get("type")
+        # Find the first job that can be started (respects per-user limit)
+        max_jobs_per_user = get_max_concurrent_jobs_per_user()
+        job_to_start = None
+
+        for job in queued_jobs:
+            user_id = job.get("user_id")
+            if max_jobs_per_user > 0 and user_id:  # 0 means disabled
+                user_running_count = count_running_simulation_jobs_for_user(
+                    user_id, job_types
+                )
+                if user_running_count >= max_jobs_per_user:
+                    logger.info(
+                        f"User {user_id} has {user_running_count}/{max_jobs_per_user} simulation jobs running, skipping job {job['uuid']}"
+                    )
+                    continue
+            job_to_start = job
+            break
+
+        if not job_to_start:
+            logger.info(
+                "No queued simulation jobs can be started (all users at their limit)"
+            )
+            return False
+
+        job_id = job_to_start["uuid"]
+        job_type = job_to_start.get("type")
 
         # Find the appropriate starter callback
         starter_callback = _job_starters.get(job_type)
@@ -541,7 +657,7 @@ def try_start_queued_simulation_job(job_types: List[str]) -> bool:
 
         try:
             # Start the job (this should spawn a thread)
-            starter_callback(job)
+            starter_callback(job_to_start)
             return True
         except Exception as e:
             # If starting fails, mark as done with error
@@ -554,18 +670,34 @@ def try_start_queued_simulation_job(job_types: List[str]) -> bool:
             return False
 
 
-def can_start_simulation_job(job_types: List[str]) -> bool:
+def can_start_simulation_job(job_types: List[str], user_id: str) -> bool:
     """Check if there's capacity to start a new simulation job immediately.
+
+    Checks both global limit and per-user limit.
 
     Args:
         job_types: List of job types to consider for counting running jobs.
+        user_id: UUID of the user requesting the job.
 
     Returns:
         True if a new job can be started, False otherwise.
     """
-    from db import count_running_simulation_jobs
+    from db import count_running_simulation_jobs, count_running_simulation_jobs_for_user
 
     with _job_queue_lock:
+        # Check global limit
         max_jobs = get_max_concurrent_jobs()
         running_count = count_running_simulation_jobs(job_types)
-        return running_count < max_jobs
+        if running_count >= max_jobs:
+            return False
+
+        # Check per-user limit
+        max_jobs_per_user = get_max_concurrent_jobs_per_user()
+        if max_jobs_per_user > 0:  # 0 means disabled
+            user_running_count = count_running_simulation_jobs_for_user(
+                user_id, job_types
+            )
+            if user_running_count >= max_jobs_per_user:
+                return False
+
+        return True

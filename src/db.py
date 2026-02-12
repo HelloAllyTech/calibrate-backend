@@ -2122,6 +2122,26 @@ def count_running_jobs(job_types: Optional[List[str]] = None) -> int:
         return cursor.fetchone()[0]
 
 
+def count_running_jobs_for_user(
+    user_id: str, job_types: Optional[List[str]] = None
+) -> int:
+    """Count jobs with status 'in_progress' for a specific user, optionally filtered by job types."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"SELECT COUNT(*) FROM jobs WHERE status = 'in_progress' AND user_id = ? AND type IN ({placeholders})",
+                [user_id] + job_types,
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status = 'in_progress' AND user_id = ?",
+                (user_id,),
+            )
+        return cursor.fetchone()[0]
+
+
 def update_job(
     job_uuid: str,
     status: Optional[str] = None,
@@ -2295,18 +2315,27 @@ def get_pending_agent_test_jobs() -> List[Dict[str, Any]]:
 def get_queued_agent_test_jobs(
     job_types: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Get all agent test jobs with status 'queued', optionally filtered by job types."""
+    """Get all agent test jobs with status 'queued', optionally filtered by job types.
+    
+    Returns jobs with user_id included (via agent ownership).
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if job_types:
             placeholders = ",".join("?" for _ in job_types)
             cursor.execute(
-                f"SELECT * FROM agent_test_jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
+                f"""SELECT atj.*, a.user_id FROM agent_test_jobs atj
+                    JOIN agents a ON atj.agent_id = a.uuid
+                    WHERE atj.status = 'queued' AND atj.type IN ({placeholders})
+                    ORDER BY atj.created_at ASC""",
                 job_types,
             )
         else:
             cursor.execute(
-                "SELECT * FROM agent_test_jobs WHERE status = 'queued' ORDER BY created_at ASC"
+                """SELECT atj.*, a.user_id FROM agent_test_jobs atj
+                   JOIN agents a ON atj.agent_id = a.uuid
+                   WHERE atj.status = 'queued'
+                   ORDER BY atj.created_at ASC"""
             )
         rows = cursor.fetchall()
         return [_parse_agent_test_job_row(row) for row in rows]
@@ -2325,6 +2354,30 @@ def count_running_agent_test_jobs(job_types: Optional[List[str]] = None) -> int:
         else:
             cursor.execute(
                 "SELECT COUNT(*) FROM agent_test_jobs WHERE status = 'in_progress'"
+            )
+        return cursor.fetchone()[0]
+
+
+def count_running_agent_test_jobs_for_user(
+    user_id: str, job_types: Optional[List[str]] = None
+) -> int:
+    """Count agent test jobs with status 'in_progress' for a specific user (via agent ownership)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"""SELECT COUNT(*) FROM agent_test_jobs atj
+                    JOIN agents a ON atj.agent_id = a.uuid
+                    WHERE atj.status = 'in_progress' AND a.user_id = ? AND atj.type IN ({placeholders})""",
+                [user_id] + job_types,
+            )
+        else:
+            cursor.execute(
+                """SELECT COUNT(*) FROM agent_test_jobs atj
+                   JOIN agents a ON atj.agent_id = a.uuid
+                   WHERE atj.status = 'in_progress' AND a.user_id = ?""",
+                (user_id,),
             )
         return cursor.fetchone()[0]
 
@@ -2483,18 +2536,27 @@ def get_pending_simulation_jobs() -> List[Dict[str, Any]]:
 def get_queued_simulation_jobs(
     job_types: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Get all simulation jobs with status 'queued', optionally filtered by job types."""
+    """Get all simulation jobs with status 'queued', optionally filtered by job types.
+    
+    Returns jobs with user_id included (via simulation ownership).
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if job_types:
             placeholders = ",".join("?" for _ in job_types)
             cursor.execute(
-                f"SELECT * FROM simulation_jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY created_at ASC",
+                f"""SELECT sj.*, s.user_id FROM simulation_jobs sj
+                    JOIN simulations s ON sj.simulation_id = s.uuid
+                    WHERE sj.status = 'queued' AND sj.type IN ({placeholders})
+                    ORDER BY sj.created_at ASC""",
                 job_types,
             )
         else:
             cursor.execute(
-                "SELECT * FROM simulation_jobs WHERE status = 'queued' ORDER BY created_at ASC"
+                """SELECT sj.*, s.user_id FROM simulation_jobs sj
+                   JOIN simulations s ON sj.simulation_id = s.uuid
+                   WHERE sj.status = 'queued'
+                   ORDER BY sj.created_at ASC"""
             )
         rows = cursor.fetchall()
         return [_parse_simulation_job_row(row) for row in rows]
@@ -2513,6 +2575,30 @@ def count_running_simulation_jobs(job_types: Optional[List[str]] = None) -> int:
         else:
             cursor.execute(
                 "SELECT COUNT(*) FROM simulation_jobs WHERE status = 'in_progress'"
+            )
+        return cursor.fetchone()[0]
+
+
+def count_running_simulation_jobs_for_user(
+    user_id: str, job_types: Optional[List[str]] = None
+) -> int:
+    """Count simulation jobs with status 'in_progress' for a specific user (via simulation ownership)."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_types:
+            placeholders = ",".join("?" for _ in job_types)
+            cursor.execute(
+                f"""SELECT COUNT(*) FROM simulation_jobs sj
+                    JOIN simulations s ON sj.simulation_id = s.uuid
+                    WHERE sj.status = 'in_progress' AND s.user_id = ? AND sj.type IN ({placeholders})""",
+                [user_id] + job_types,
+            )
+        else:
+            cursor.execute(
+                """SELECT COUNT(*) FROM simulation_jobs sj
+                   JOIN simulations s ON sj.simulation_id = s.uuid
+                   WHERE sj.status = 'in_progress' AND s.user_id = ?""",
+                (user_id,),
             )
         return cursor.fetchone()[0]
 

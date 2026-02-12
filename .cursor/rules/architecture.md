@@ -236,29 +236,45 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 ### Job Queueing System
 
-The queueing mechanism limits concurrent jobs to prevent resource exhaustion. Controlled by `MAX_CONCURRENT_JOBS` env var (default: 2).
+The queueing mechanism limits concurrent jobs to prevent resource exhaustion. Two levels of limits are enforced:
+
+1. **Global limit**: `MAX_CONCURRENT_JOBS` env var (default from docker-compose: 1)
+2. **Per-user limit**: `MAX_CONCURRENT_JOBS_PER_USER` env var (default: 1, set to 0 to disable)
 
 #### Queue Architecture
 
-Three separate queues exist, each with its own concurrency limit:
+Three separate queues exist, each with its own concurrency limits:
 
-| Queue            | Job Types                        | Shared Limit          |
-| ---------------- | -------------------------------- | --------------------- |
-| Eval Queue       | `stt-eval`, `tts-eval`           | `MAX_CONCURRENT_JOBS` |
-| Agent Test Queue | `llm-unit-test`, `llm-benchmark` | `MAX_CONCURRENT_JOBS` |
-| Simulation Queue | `text`, `voice`                  | `MAX_CONCURRENT_JOBS` |
+| Queue            | Job Types                        | Global Limit          | Per-User Limit                |
+| ---------------- | -------------------------------- | --------------------- | ----------------------------- |
+| Eval Queue       | `stt-eval`, `tts-eval`           | `MAX_CONCURRENT_JOBS` | `MAX_CONCURRENT_JOBS_PER_USER` |
+| Agent Test Queue | `llm-unit-test`, `llm-benchmark` | `MAX_CONCURRENT_JOBS` | `MAX_CONCURRENT_JOBS_PER_USER` |
+| Simulation Queue | `text`, `voice`                  | `MAX_CONCURRENT_JOBS` | `MAX_CONCURRENT_JOBS_PER_USER` |
 
 #### Key Components
 
-| Component                  | Location   | Purpose                              |
-| -------------------------- | ---------- | ------------------------------------ |
-| `TaskStatus.QUEUED`        | `utils.py` | New status for queued jobs           |
-| `_job_starters` registry   | `utils.py` | Maps job types to starter callbacks  |
-| `register_job_starter()`   | `utils.py` | Registers callback for starting jobs |
-| `can_start_*_job()`        | `utils.py` | Checks if capacity allows new job    |
-| `try_start_queued_*_job()` | `utils.py` | Starts next queued job               |
-| `get_queued_*()`           | `db.py`    | Gets queued jobs (FIFO order)        |
-| `count_running_*()`        | `db.py`    | Counts in-progress jobs              |
+| Component                        | Location   | Purpose                                      |
+| -------------------------------- | ---------- | -------------------------------------------- |
+| `TaskStatus.QUEUED`              | `utils.py` | Status for queued jobs                       |
+| `_job_starters` registry         | `utils.py` | Maps job types to starter callbacks          |
+| `register_job_starter()`         | `utils.py` | Registers callback for starting jobs         |
+| `can_start_*_job()`              | `utils.py` | Checks global + per-user capacity            |
+| `try_start_queued_*_job()`       | `utils.py` | Starts next eligible queued job              |
+| `get_queued_*()`                 | `db.py`    | Gets queued jobs with user_id (FIFO order)   |
+| `count_running_*()`              | `db.py`    | Counts in-progress jobs (global)             |
+| `count_running_*_for_user()`     | `db.py`    | Counts in-progress jobs for a specific user  |
+
+#### User ID Resolution for Jobs
+
+Different job tables store user ownership differently:
+
+| Table              | User ID Source                                      |
+| ------------------ | --------------------------------------------------- |
+| `jobs`             | Direct `user_id` column                             |
+| `agent_test_jobs`  | Via `agent_id` → `agents.user_id` (JOIN)            |
+| `simulation_jobs`  | Via `simulation_id` → `simulations.user_id` (JOIN)  |
+
+The `get_queued_*_jobs()` functions include JOINs to return `user_id` with each queued job.
 
 #### Job Starter Registration
 
@@ -277,24 +293,38 @@ register_job_starter("stt-eval", _start_stt_job_from_queue)
 #### Queue Flow
 
 ```
-New Job Request
+New Job Request (user_id known)
       │
       ▼
 Check: running_count < MAX_CONCURRENT_JOBS?
       │
-      ├─── YES ──→ Create job (status=in_progress) ──→ Start immediately
+      ├─── NO ───→ Create job (status=queued) ──→ Wait in queue
       │
-      └─── NO ───→ Create job (status=queued) ──→ Wait in queue
+      └─── YES
+            │
+            ▼
+      Check: user_running_count < MAX_CONCURRENT_JOBS_PER_USER?
+            │
+            ├─── YES ──→ Create job (status=in_progress) ──→ Start immediately
+            │
+            └─── NO ───→ Create job (status=queued) ──→ Wait in queue
 
 Job Completion
       │
       ▼
 try_start_queued_*_job()
       │
-      ├─── Capacity available? ──→ Start oldest queued job
+      ▼
+For each queued job (FIFO):
       │
-      └─── No capacity ──→ Do nothing
+      ├─── Global capacity full? ──→ Stop (no more jobs can start)
+      │
+      └─── User at their limit? ──→ Skip this job, try next one
+            │
+            └─── User has capacity ──→ Start this job
 ```
+
+**Fair scheduling**: When processing the queue, jobs from users who are at their per-user limit are skipped, allowing jobs from other users to start. This prevents one user from monopolizing the queue.
 
 ### Process Management for Long-Running Jobs
 
@@ -645,7 +675,8 @@ Required environment variables:
 DB_ROOT_DIR=/appdata/db          # Directory containing calibrate.db
 
 # Job Queue
-MAX_CONCURRENT_JOBS=2            # Max concurrent jobs per queue type (default: 2)
+MAX_CONCURRENT_JOBS=2            # Max concurrent jobs per queue type (docker-compose default: 1)
+MAX_CONCURRENT_JOBS_PER_USER=1   # Max concurrent jobs per user per queue type (default: 1, 0 to disable)
 
 # CORS
 CORS_ALLOWED_ORIGINS=*           # Comma-separated origins (e.g., "http://localhost:3000,https://app.example.com")
