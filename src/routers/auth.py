@@ -1,10 +1,16 @@
 import os
 import logging
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import httpx
+import bcrypt
 
-from db import get_or_create_user
+from db import (
+    get_or_create_user,
+    get_user_by_email,
+    create_user_with_password,
+    get_user,
+)
 from auth_utils import create_access_token
 
 logger = logging.getLogger(__name__)
@@ -116,6 +122,95 @@ async def google_login(request: GoogleLoginRequest):
     access_token = create_access_token(user["uuid"], user["email"])
 
     logger.info(f"User logged in: {email} (UUID: {user['uuid']})")
+
+    return LoginResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user=UserResponse(
+            uuid=user["uuid"],
+            first_name=user["first_name"],
+            last_name=user["last_name"],
+            email=user["email"],
+            created_at=user["created_at"],
+            updated_at=user["updated_at"],
+        ),
+        message="Login successful",
+    )
+
+
+class SignupRequest(BaseModel):
+    first_name: str = Field(..., min_length=1)
+    last_name: str = Field(..., min_length=1)
+    email: str = Field(..., min_length=3)
+    password: str = Field(..., min_length=6)
+
+
+class CredentialLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/signup", response_model=LoginResponse)
+async def signup(request: SignupRequest):
+    """
+    Register a new user with email and password.
+
+    Returns a JWT access token and user info on success.
+    """
+    existing = get_user_by_email(request.email)
+    if existing:
+        raise HTTPException(status_code=409, detail="Email already taken")
+
+    password_hash = bcrypt.hashpw(
+        request.password.encode("utf-8"), bcrypt.gensalt()
+    ).decode("utf-8")
+
+    user_uuid = create_user_with_password(
+        first_name=request.first_name,
+        last_name=request.last_name,
+        email=request.email,
+        password_hash=password_hash,
+    )
+
+    user = get_user(user_uuid)
+
+    access_token = create_access_token(user["uuid"], user["email"])
+    logger.info(f"User signed up: {request.email} (UUID: {user['uuid']})")
+
+    return LoginResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user=UserResponse(
+            uuid=user["uuid"],
+            first_name=user["first_name"],
+            last_name=user["last_name"],
+            email=user["email"],
+            created_at=user["created_at"],
+            updated_at=user["updated_at"],
+        ),
+        message="Signup successful",
+    )
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login(request: CredentialLoginRequest):
+    """
+    Authenticate a user with email and password.
+
+    Returns a JWT access token and user info on success.
+    """
+    user = get_user_by_email(request.email)
+    if not user or not user.get("password_hash"):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not bcrypt.checkpw(
+        request.password.encode("utf-8"),
+        user["password_hash"].encode("utf-8"),
+    ):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    access_token = create_access_token(user["uuid"], user["email"])
+    logger.info(f"User logged in: {request.email} (UUID: {user['uuid']})")
 
     return LoginResponse(
         access_token=access_token,

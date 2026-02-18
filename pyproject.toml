@@ -15,4 +15,5 @@ dependencies = [
     "httpx>=0.27.0",
     "sentry-sdk[fastapi]>=2.0.0",
     "calibrate-agent",
+    "bcrypt>=4.0.0",
 ]

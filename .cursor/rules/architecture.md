@@ -25,7 +25,7 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 | **Framework**        | FastAPI             | Async REST API framework                                     |
 | **Database**         | SQLite              | Persistent data storage                                      |
 | **Storage**          | AWS S3              | File/result storage                                          |
-| **Authentication**   | Google OAuth + JWT  | User authentication via Google ID tokens, API access via JWT |
+| **Authentication**   | Google OAuth + Email/Password + JWT | User authentication via Google ID tokens or email/password credentials, API access via JWT |
 | **Monitoring**       | Sentry              | Error tracking and performance monitoring                    |
 | **Tracing**          | Langfuse (via OTEL) | LLM observability and tracing                                |
 | **Package Manager**  | uv                  | Python dependency management                                 |
@@ -40,11 +40,11 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 calibrate-backend/
 ├── src/
 │   ├── main.py              # FastAPI app entry point, lifespan management
-│   ├── db.py                # SQLite database layer (~2300 lines)
+│   ├── db.py                # SQLite database layer (~2700 lines)
 │   ├── utils.py             # Shared utilities (S3 client, tool config building)
 │   ├── job_recovery.py      # Restart in-progress jobs on app startup
 │   └── routers/
-│       ├── auth.py          # Google OAuth authentication
+│       ├── auth.py          # Authentication (Google OAuth, username/password signup & login)
 │       ├── users.py         # User management endpoints
 │       ├── agents.py        # Agent CRUD operations
 │       ├── tools.py         # Tool CRUD operations
@@ -99,7 +99,7 @@ simulations
 
 | Table             | Purpose                                                                |
 | ----------------- | ---------------------------------------------------------------------- |
-| `users`           | User accounts (Google OAuth)                                           |
+| `users`           | User accounts (Google OAuth or email/password credentials)             |
 | `agents`          | AI agent configurations (system prompt, LLM config, STT/TTS settings)  |
 | `tools`           | Tool/function definitions for agents                                   |
 | `tests`           | Test cases with evaluation criteria                                    |
@@ -110,6 +110,23 @@ simulations
 | `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                  |
 | `agent_test_jobs` | LLM unit test and benchmark jobs                                       |
 | `simulation_jobs` | Chat/voice simulation jobs                                             |
+
+### Users Table Schema
+
+The `users` table supports two authentication methods. Columns:
+
+| Column          | Type      | Notes                                                                 |
+| --------------- | --------- | --------------------------------------------------------------------- |
+| `id`            | INTEGER   | Auto-increment primary key                                            |
+| `uuid`          | TEXT      | Unique user identifier used across the app                            |
+| `first_name`    | TEXT      | NOT NULL                                                              |
+| `last_name`     | TEXT      | NOT NULL                                                              |
+| `email`         | TEXT      | NOT NULL UNIQUE. Used as the user identifier for both auth methods    |
+| `password_hash` | TEXT      | Nullable. bcrypt hash. Only set for email/password users              |
+| `created_at`    | TIMESTAMP | Default CURRENT_TIMESTAMP                                             |
+| `updated_at`    | TIMESTAMP | Default CURRENT_TIMESTAMP                                             |
+
+**Two auth paths for the same table**: The `email` column is the shared identifier. Google OAuth users have `password_hash` as NULL (authenticated via Google tokens). Email/password users have `password_hash` set (authenticated via bcrypt). Both use the same `email` column — there is no separate `username` column.
 
 ### Design Patterns
 
@@ -135,8 +152,12 @@ Each router follows a consistent pattern:
 #### Authentication
 
 - `POST /auth/google` - Google OAuth login (returns JWT access token)
+- `POST /auth/signup` - Register with first name, last name, email, and password (returns JWT access token)
+- `POST /auth/login` - Login with email and password (returns JWT access token)
 
-**JWT Token Usage**: After login, all API requests must include the JWT token in the Authorization header:
+All three auth endpoints return the same `LoginResponse` format (`access_token`, `token_type`, `user`, `message`).
+
+**JWT Token Usage**: After login/signup, all API requests must include the JWT token in the Authorization header:
 
 ```
 Authorization: Bearer <jwt_token>
@@ -927,6 +948,7 @@ Key Python packages:
 - `openpyxl>=3.1.5` - Excel file parsing for leaderboards
 - `httpx>=0.27.0` - Async HTTP client for Google OAuth
 - `python-jose[cryptography]>=3.3.0` - JWT token encoding/decoding
+- `bcrypt>=4.0.0` - Password hashing for username/password authentication
 - `sentry-sdk[fastapi]>=2.0.0` - Error tracking and performance monitoring
 
 External:

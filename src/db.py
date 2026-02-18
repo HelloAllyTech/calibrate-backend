@@ -329,6 +329,14 @@ def init_db():
             # Column already exists
             pass
 
+        # Add password_hash column to users table (migration)
+        try:
+            cursor.execute(
+                "ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT NULL"
+            )
+        except sqlite3.OperationalError:
+            pass
+
         # Add user_id column to all relevant tables if not present (migration)
         tables_with_user_id = [
             "agents",
@@ -514,6 +522,28 @@ def get_or_create_user(
     # Create new user
     user_uuid = create_user(first_name=first_name, last_name=last_name, email=email)
     return get_user(user_uuid)
+
+
+def create_user_with_password(
+    first_name: str,
+    last_name: str,
+    email: str,
+    password_hash: str,
+) -> str:
+    """Create a new user with email/password and return its UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        user_uuid = str(uuid.uuid4())
+        cursor.execute(
+            """
+            INSERT INTO users (uuid, first_name, last_name, email, password_hash)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_uuid, first_name, last_name, email, password_hash),
+        )
+        conn.commit()
+        logger.info(f"Created user (email/password auth) with UUID: {user_uuid}")
+        return user_uuid
 
 
 # ============ Agents Functions ============
@@ -2316,7 +2346,7 @@ def get_queued_agent_test_jobs(
     job_types: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Get all agent test jobs with status 'queued', optionally filtered by job types.
-    
+
     Returns jobs with user_id included (via agent ownership).
     """
     with get_db_connection() as conn:
@@ -2537,7 +2567,7 @@ def get_queued_simulation_jobs(
     job_types: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Get all simulation jobs with status 'queued', optionally filtered by job types.
-    
+
     Returns jobs with user_id included (via simulation ownership).
     """
     with get_db_connection() as conn:
