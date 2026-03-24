@@ -529,7 +529,7 @@ async def get_simulation_run_status(
     # Check for timeout on in-progress jobs
     if status == TaskStatus.IN_PROGRESS.value:
         updated_at = job.get("updated_at")
-        if updated_at and is_job_timed_out(updated_at, timeout_minutes=15):
+        if updated_at and is_job_timed_out(updated_at, timeout_seconds=15 * 60):
             logger.warning(f"Simulation job {task_id} timed out, marking as failed")
 
             # Kill running process
