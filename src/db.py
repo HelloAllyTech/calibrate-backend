@@ -296,6 +296,38 @@ def init_db():
         """
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS datasets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                user_id TEXT DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
+            )
+        """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dataset_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                dataset_id TEXT NOT NULL,
+                audio_path TEXT DEFAULT NULL,
+                text TEXT NOT NULL,
+                order_index INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL,
+                FOREIGN KEY (dataset_id) REFERENCES datasets(uuid)
+            )
+        """
+        )
+
         # Add details column to jobs table if not present (migration)
         try:
             cursor.execute("ALTER TABLE jobs ADD COLUMN details TEXT")
@@ -2697,4 +2729,186 @@ def delete_simulation_job(job_uuid: str) -> bool:
         deleted = cursor.rowcount > 0
         if deleted:
             logger.info(f"Deleted simulation job with UUID: {job_uuid}")
+        return deleted
+
+
+# ============ Dataset Functions ============
+
+
+def create_dataset(name: str, dataset_type: str, user_id: str) -> str:
+    """Create a new dataset and return its UUID."""
+    if dataset_type not in ("stt", "tts"):
+        raise ValueError("Dataset type must be 'stt' or 'tts'")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        dataset_uuid = str(uuid.uuid4())
+        cursor.execute(
+            """
+            INSERT INTO datasets (uuid, name, type, user_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (dataset_uuid, name, dataset_type, user_id),
+        )
+        conn.commit()
+        logger.info(f"Created dataset with UUID: {dataset_uuid}")
+        return dataset_uuid
+
+
+def get_dataset(dataset_uuid: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """Get a dataset by UUID, scoped to the authenticated user."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM datasets WHERE uuid = ? AND user_id = ? AND deleted_at IS NULL",
+            (dataset_uuid, user_id),
+        )
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+
+def get_all_datasets(user_id: str, dataset_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all datasets for a user, optionally filtered by type."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if dataset_type:
+            cursor.execute(
+                "SELECT * FROM datasets WHERE user_id = ? AND type = ? AND deleted_at IS NULL ORDER BY created_at DESC",
+                (user_id, dataset_type),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM datasets WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
+                (user_id,),
+            )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_dataset_item_counts(dataset_uuids: List[str]) -> Dict[str, int]:
+    """Return a {dataset_uuid: active_item_count} map in a single query."""
+    if not dataset_uuids:
+        return {}
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in dataset_uuids)
+        cursor.execute(
+            f"SELECT dataset_id, COUNT(*) FROM dataset_items WHERE dataset_id IN ({placeholders}) AND deleted_at IS NULL GROUP BY dataset_id",
+            dataset_uuids,
+        )
+        counts = {row[0]: row[1] for row in cursor.fetchall()}
+        for uid in dataset_uuids:
+            counts.setdefault(uid, 0)
+        return counts
+
+
+def update_dataset_name(dataset_uuid: str, user_id: str, name: str) -> bool:
+    """Rename a dataset. Returns True if found and updated."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE datasets SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE uuid = ? AND user_id = ? AND deleted_at IS NULL",
+            (name, dataset_uuid, user_id),
+        )
+        conn.commit()
+        updated = cursor.rowcount > 0
+        if updated:
+            logger.info(f"Renamed dataset {dataset_uuid}")
+        return updated
+
+
+def delete_dataset(dataset_uuid: str, user_id: str) -> bool:
+    """Soft delete a dataset and all its items. Returns True if found and deleted."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE datasets SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE uuid = ? AND user_id = ? AND deleted_at IS NULL",
+            (dataset_uuid, user_id),
+        )
+        if cursor.rowcount == 0:
+            return False
+        # Soft delete all items belonging to this dataset
+        cursor.execute(
+            "UPDATE dataset_items SET deleted_at = CURRENT_TIMESTAMP WHERE dataset_id = ? AND deleted_at IS NULL",
+            (dataset_uuid,),
+        )
+        conn.commit()
+        logger.info(f"Soft deleted dataset {dataset_uuid} and its items")
+        return True
+
+
+def add_dataset_items(
+    dataset_id: str,
+    items: List[Dict[str, Any]],
+) -> List[str]:
+    """Add items to a dataset. Returns list of new item UUIDs.
+
+    Each item dict must have 'text' and optionally 'audio_path'.
+    order_index is assigned sequentially after the current max, preserving
+    existing order even across multiple bulk inserts.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # Find the current max order_index for this dataset (including soft-deleted
+        # rows so that restored items never collide with new ones)
+        cursor.execute(
+            "SELECT COALESCE(MAX(order_index), -1) FROM dataset_items WHERE dataset_id = ?",
+            (dataset_id,),
+        )
+        max_index = cursor.fetchone()[0]
+
+        item_uuids = []
+        for offset, item in enumerate(items):
+            item_uuid = str(uuid.uuid4())
+            order_index = max_index + 1 + offset
+            cursor.execute(
+                """
+                INSERT INTO dataset_items (uuid, dataset_id, audio_path, text, order_index)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    item_uuid,
+                    dataset_id,
+                    item.get("audio_path"),
+                    item["text"],
+                    order_index,
+                ),
+            )
+            item_uuids.append(item_uuid)
+
+        conn.commit()
+        logger.info(f"Added {len(item_uuids)} items to dataset {dataset_id}")
+        return item_uuids
+
+
+def get_dataset_items(dataset_id: str) -> List[Dict[str, Any]]:
+    """Get all active items for a dataset, ordered by order_index."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM dataset_items WHERE dataset_id = ? AND deleted_at IS NULL ORDER BY order_index ASC",
+            (dataset_id,),
+        )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+def delete_dataset_item(item_uuid: str, dataset_id: str) -> bool:
+    """Soft delete a single dataset item. Returns True if found and deleted.
+
+    order_index values of remaining items are intentionally not renumbered —
+    ORDER BY order_index on the filtered (deleted_at IS NULL) set still
+    produces the correct relative order with gaps.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE dataset_items SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND dataset_id = ? AND deleted_at IS NULL",
+            (item_uuid, dataset_id),
+        )
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"Soft deleted dataset item {item_uuid}")
         return deleted

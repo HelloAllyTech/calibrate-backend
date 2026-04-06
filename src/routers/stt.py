@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import openpyxl
 
 from db import create_job, get_job, update_job
+from dataset_utils import resolve_dataset_inputs, inject_dataset_item_ids
 from auth_utils import get_current_user_id
 from utils import (
     TaskStatus,
@@ -129,8 +130,13 @@ def _collect_intermediate_results(output_dir: Path, providers: list) -> list:
 
 
 class STTEvaluationRequest(BaseModel):
-    audio_paths: List[str]  # S3 paths to audio files
-    texts: List[str]  # Ground truth text for each audio file
+    # Option 1: reuse an existing dataset
+    dataset_id: Optional[str] = None
+    # Option 2: inline upload (legacy / new files)
+    audio_paths: Optional[List[str]] = None  # S3 paths to audio files
+    texts: Optional[List[str]] = None  # Ground truth text for each audio file
+    # When providing inline data, name for the new dataset to save (ignored when dataset_id is set)
+    dataset_name: Optional[str] = None
     providers: List[
         str
     ]  # List of STT providers (e.g., ["deepgram", "openai", "sarvam"])
@@ -539,18 +545,27 @@ async def evaluate_stt(
 
     Returns a task ID that can be used to poll for status and results.
     """
-    # Validate input
-    if len(request.audio_paths) != len(request.texts):
-        raise HTTPException(
-            status_code=400,
-            detail="Number of audio paths must match number of ground truth texts",
-        )
-
     if not request.providers:
         raise HTTPException(
             status_code=400,
             detail="At least one provider must be specified",
         )
+
+    resolved = resolve_dataset_inputs(
+        dataset_id=request.dataset_id,
+        user_id=user_id,
+        expected_type="stt",
+        texts=request.texts,
+        audio_paths=request.audio_paths,
+        dataset_name=request.dataset_name,
+    )
+    audio_paths = resolved.audio_paths
+    texts = resolved.texts
+    resolved_dataset_id = resolved.dataset_id
+    dataset_item_ids = resolved.item_ids
+
+    request.audio_paths = audio_paths
+    request.texts = texts
 
     # Get S3 configuration from environment
     try:
@@ -570,11 +585,13 @@ async def evaluate_stt(
         user_id=user_id,
         status=initial_status,
         details={
-            "audio_paths": request.audio_paths,
-            "texts": request.texts,
+            "audio_paths": audio_paths,
+            "texts": texts,
             "providers": request.providers,
             "language": request.language,
             "s3_bucket": s3_bucket,
+            "dataset_id": resolved_dataset_id,
+            "dataset_item_ids": dataset_item_ids,
         },
         results=None,
     )
@@ -746,6 +763,10 @@ async def get_evaluation_status(
     for provider_result in provider_results:
         if provider_result.get("metrics"):
             provider_result["metrics"] = _normalize_metrics(provider_result["metrics"])
+
+    dataset_item_ids = details.get("dataset_item_ids")
+    if dataset_item_ids:
+        inject_dataset_item_ids(provider_results, dataset_item_ids, "stt")
 
     return TaskStatusResponse(
         task_id=task_id,

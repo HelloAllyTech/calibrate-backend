@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import openpyxl
 
 from db import create_job, get_job, update_job
+from dataset_utils import resolve_dataset_inputs, inject_dataset_item_ids
 from auth_utils import get_current_user_id
 from utils import (
     TaskStatus,
@@ -157,7 +158,12 @@ def _collect_tts_intermediate_results(
 
 
 class TTSEvaluationRequest(BaseModel):
-    texts: List[str]  # List of texts to synthesize
+    # Option 1: reuse an existing dataset
+    dataset_id: Optional[str] = None
+    # Option 2: inline texts (legacy / new inputs)
+    texts: Optional[List[str]] = None  # List of texts to synthesize
+    # When providing inline data, name for the new dataset to save (ignored when dataset_id is set)
+    dataset_name: Optional[str] = None
     providers: List[
         str
     ]  # List of TTS providers (e.g., ["smallest", "cartesia", "openai"])
@@ -570,18 +576,24 @@ async def evaluate_tts(
 
     Returns a task ID that can be used to poll for status and results.
     """
-    # Validate input
-    if not request.texts:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one text must be provided",
-        )
-
     if not request.providers:
         raise HTTPException(
             status_code=400,
             detail="At least one provider must be specified",
         )
+
+    resolved = resolve_dataset_inputs(
+        dataset_id=request.dataset_id,
+        user_id=user_id,
+        expected_type="tts",
+        texts=request.texts,
+        dataset_name=request.dataset_name,
+    )
+    texts = resolved.texts
+    resolved_dataset_id = resolved.dataset_id
+    dataset_item_ids = resolved.item_ids
+
+    request.texts = texts
 
     # Get S3 configuration from environment
     try:
@@ -601,10 +613,12 @@ async def evaluate_tts(
         user_id=user_id,
         status=initial_status,
         details={
-            "texts": request.texts,
+            "texts": texts,
             "providers": request.providers,
             "language": request.language,
             "s3_bucket": s3_bucket,
+            "dataset_id": resolved_dataset_id,
+            "dataset_item_ids": dataset_item_ids,
         },
         results=None,
     )
@@ -818,6 +832,10 @@ async def get_tts_evaluation_status(
                         presigned_url = generate_presigned_download_url(audio_s3_key)
                         if presigned_url:
                             result_row["audio_path"] = presigned_url
+
+    dataset_item_ids = details.get("dataset_item_ids")
+    if dataset_item_ids:
+        inject_dataset_item_ids(provider_results, dataset_item_ids, "tts")
 
     return TaskStatusResponse(
         task_id=task_id,
