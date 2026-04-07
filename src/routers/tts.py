@@ -13,7 +13,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
-from db import create_job, get_job, update_job, get_active_dataset_ids
+from db import create_job, get_job, update_job
 from dataset_utils import resolve_dataset_inputs, inject_dataset_item_ids
 from auth_utils import get_current_user_id
 from utils import (
@@ -764,16 +764,12 @@ async def get_tts_evaluation_status(
     if dataset_item_ids:
         inject_dataset_item_ids(provider_results, dataset_item_ids, "tts")
 
-    dataset_id = details.get("dataset_id")
-    active = get_active_dataset_ids([dataset_id]) if dataset_id else set()
-    dataset_active = dataset_id in active if dataset_id else False
-
     return TaskStatusResponse(
         task_id=task_id,
         status=status,
         language=details.get("language"),
-        dataset_id=dataset_id if dataset_active else None,
-        dataset_name=details.get("dataset_name") if dataset_active else None,
+        dataset_id=details.get("dataset_id"),
+        dataset_name=details.get("dataset_name"),
         provider_results=provider_results,
         leaderboard_summary=results.get("leaderboard_summary"),
         error=results.get("error"),

@@ -16,8 +16,8 @@ DB_PATH = Path(join(os.getenv("DB_ROOT_DIR"), "pense.db"))
 
 # Default user configuration — set via environment variables for local dev
 DEFAULT_USER_EMAIL = os.getenv("DEFAULT_USER_EMAIL", "")
-DEFAULT_USER_FIRST_NAME = os.getenv("DEFAULT_USER_FIRST_NAME", "Admin")
-DEFAULT_USER_LAST_NAME = os.getenv("DEFAULT_USER_LAST_NAME", "User")
+DEFAULT_USER_FIRST_NAME = os.getenv("DEFAULT_USER_FIRST_NAME", "")
+DEFAULT_USER_LAST_NAME = os.getenv("DEFAULT_USER_LAST_NAME", "")
 
 
 @contextmanager
@@ -328,13 +328,6 @@ def init_db():
             )
         """
         )
-
-        # Add details column to jobs table if not present (migration)
-        try:
-            cursor.execute("ALTER TABLE jobs ADD COLUMN details TEXT")
-        except sqlite3.OperationalError:
-            # Column already exists
-            pass
 
         # Add deleted_at column to existing tables if not present (migration)
         tables_to_migrate = [
@@ -2776,7 +2769,9 @@ def get_dataset(dataset_uuid: str, user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_datasets(user_id: str, dataset_type: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_all_datasets(
+    user_id: str, dataset_type: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """Get all datasets for a user, optionally filtered by type."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -2950,6 +2945,20 @@ def get_dataset_items(dataset_id: str) -> List[Dict[str, Any]]:
         )
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+def get_dataset_items_by_uuids(item_uuids: List[str]) -> List[Dict[str, Any]]:
+    """Fetch specific dataset items by UUID, ordered by order_index."""
+    if not item_uuids:
+        return []
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in item_uuids)
+        cursor.execute(
+            f"SELECT * FROM dataset_items WHERE uuid IN ({placeholders}) AND deleted_at IS NULL ORDER BY order_index ASC",
+            item_uuids,
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def update_dataset_item(

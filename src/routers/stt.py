@@ -13,7 +13,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
-from db import create_job, get_job, update_job, get_active_dataset_ids
+from db import create_job, get_job, update_job
 from dataset_utils import resolve_dataset_inputs, inject_dataset_item_ids
 from auth_utils import get_current_user_id
 from utils import (
@@ -71,7 +71,6 @@ register_job_starter("stt-eval", _start_stt_job_from_queue)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stt", tags=["stt"])
-
 
 
 def _collect_intermediate_results(output_dir: Path, providers: list) -> list:
@@ -163,7 +162,6 @@ def _read_metrics_json(provider_output_dir: Path) -> Optional[dict]:
         return None
 
 
-
 def run_evaluation_task(
     task_id: str,
     request: STTEvaluationRequest,
@@ -199,7 +197,9 @@ def run_evaluation_task(
                         zip(request.audio_paths, request.texts)
                     ):
                         if not audio_path:
-                            raise ValueError(f"STT item at index {idx} has no audio_path")
+                            raise ValueError(
+                                f"STT item at index {idx} has no audio_path"
+                            )
                         # Parse S3 path (format: s3://bucket/key or bucket/key)
                         if audio_path.startswith("s3://"):
                             parts = audio_path[5:].split("/", 1)
@@ -697,16 +697,12 @@ async def get_evaluation_status(
     if dataset_item_ids:
         inject_dataset_item_ids(provider_results, dataset_item_ids, "stt")
 
-    dataset_id = details.get("dataset_id")
-    active = get_active_dataset_ids([dataset_id]) if dataset_id else set()
-    dataset_active = dataset_id in active if dataset_id else False
-
     return TaskStatusResponse(
         task_id=task_id,
         status=status,
         language=details.get("language"),
-        dataset_id=dataset_id if dataset_active else None,
-        dataset_name=details.get("dataset_name") if dataset_active else None,
+        dataset_id=details.get("dataset_id"),
+        dataset_name=details.get("dataset_name"),
         provider_results=provider_results,
         leaderboard_summary=results.get("leaderboard_summary"),
         error=results.get("error"),

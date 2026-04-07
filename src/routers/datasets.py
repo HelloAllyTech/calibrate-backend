@@ -17,6 +17,7 @@ from db import (
     add_dataset_items,
     get_dataset_item,
     get_dataset_items,
+    get_dataset_items_by_uuids,
     update_dataset_item,
     delete_dataset_item,
 )
@@ -243,9 +244,7 @@ async def add_items(
     item_dicts = [{"audio_path": i.audio_path, "text": i.text} for i in items]
     new_uuids = add_dataset_items(dataset_id, item_dicts)
 
-    all_items = get_dataset_items(dataset_id)
-    new_uuid_set = set(new_uuids)
-    return [_item_row_to_response(i) for i in all_items if i["uuid"] in new_uuid_set]
+    return [_item_row_to_response(i) for i in get_dataset_items_by_uuids(new_uuids)]
 
 
 @router.patch("/{dataset_id}/items/{item_uuid}", response_model=DatasetItemResponse)
