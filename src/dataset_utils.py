@@ -84,7 +84,9 @@ def resolve_dataset_inputs(
     resolved_item_ids: Optional[List[str]] = None
     if dataset_name:
         resolved_dataset_id = create_dataset(
-            name=dataset_name, dataset_type=expected_type, user_id=user_id,
+            name=dataset_name,
+            dataset_type=expected_type,
+            user_id=user_id,
         )
         item_dicts: List[Dict] = []
         if expected_type == "stt" and resolved_audio:
@@ -103,33 +105,3 @@ def resolve_dataset_inputs(
         dataset_name=dataset_name,
         item_ids=resolved_item_ids,
     )
-
-
-def inject_dataset_item_ids(
-    provider_results: List[dict],
-    dataset_item_ids: List[str],
-    eval_type: str,
-) -> None:
-    """Add ``dataset_item_id`` to each result row in *provider_results* in-place.
-
-    Matches rows via the ``id`` column written to the CLI input CSV:
-      - STT: ``audio_N`` (1-indexed) → item index N-1
-      - TTS: ``N`` (0-indexed) → item index N
-    """
-    for pr in provider_results:
-        rows = pr.get("results")
-        if not rows:
-            continue
-        for row in rows:
-            row_id = row.get("id")
-            if row_id is None:
-                continue
-            try:
-                if eval_type == "stt":
-                    idx = int(row_id.split("_")[1]) - 1
-                else:
-                    idx = int(row_id)
-                if 0 <= idx < len(dataset_item_ids):
-                    row["dataset_item_id"] = dataset_item_ids[idx]
-            except (ValueError, IndexError):
-                continue

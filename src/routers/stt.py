@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from db import create_job, get_job, update_job
-from dataset_utils import resolve_dataset_inputs, inject_dataset_item_ids
+from dataset_utils import resolve_dataset_inputs
 from auth_utils import get_current_user_id
 from utils import (
     TaskStatus,
@@ -692,10 +692,6 @@ async def get_evaluation_status(
     for provider_result in provider_results:
         if provider_result.get("metrics"):
             provider_result["metrics"] = normalize_metrics(provider_result["metrics"])
-
-    dataset_item_ids = details.get("dataset_item_ids")
-    if dataset_item_ids:
-        inject_dataset_item_ids(provider_results, dataset_item_ids, "stt")
 
     return TaskStatusResponse(
         task_id=task_id,

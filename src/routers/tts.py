@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from db import create_job, get_job, update_job
-from dataset_utils import resolve_dataset_inputs, inject_dataset_item_ids
+from dataset_utils import resolve_dataset_inputs
 from auth_utils import get_current_user_id
 from utils import (
     TaskStatus,
@@ -71,7 +71,6 @@ register_job_starter("tts-eval", _start_tts_job_from_queue)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tts", tags=["tts"])
-
 
 
 def _collect_tts_intermediate_results(
@@ -188,7 +187,6 @@ def _read_tts_metrics_json(provider_output_dir: Path) -> Optional[dict]:
             return data
     except Exception:
         return None
-
 
 
 def run_tts_evaluation_task(
@@ -759,10 +757,6 @@ async def get_tts_evaluation_status(
                         presigned_url = generate_presigned_download_url(audio_s3_key)
                         if presigned_url:
                             result_row["audio_path"] = presigned_url
-
-    dataset_item_ids = details.get("dataset_item_ids")
-    if dataset_item_ids:
-        inject_dataset_item_ids(provider_results, dataset_item_ids, "tts")
 
     return TaskStatusResponse(
         task_id=task_id,
