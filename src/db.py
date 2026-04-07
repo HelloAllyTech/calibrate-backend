@@ -383,13 +383,6 @@ def init_db():
                 # Column already exists
                 pass
 
-        try:
-            cursor.execute(
-                "ALTER TABLE dataset_items ADD COLUMN updated_at TIMESTAMP DEFAULT NULL"
-            )
-        except sqlite3.OperationalError:
-            pass
-
         conn.commit()
 
         # Create default user if not exists and update existing rows with NULL user_id

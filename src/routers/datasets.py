@@ -115,7 +115,9 @@ def _item_row_to_response(row: dict) -> DatasetItemResponse:
     )
 
 
-def _dataset_row_to_response(row: dict, item_count: int, eval_count: int = 0) -> DatasetResponse:
+def _dataset_row_to_response(
+    row: dict, item_count: int, eval_count: int = 0
+) -> DatasetResponse:
     return DatasetResponse(
         uuid=row["uuid"],
         name=row["name"],
@@ -136,7 +138,9 @@ async def create_new_dataset(
     user_id: str = Depends(get_current_user_id),
 ):
     """Create a new empty dataset."""
-    dataset_uuid = create_dataset(name=request.name, dataset_type=request.dataset_type, user_id=user_id)
+    dataset_uuid = create_dataset(
+        name=request.name, dataset_type=request.dataset_type, user_id=user_id
+    )
     row = get_dataset(dataset_uuid, user_id=user_id)
     return _dataset_row_to_response(row, item_count=0, eval_count=0)
 
@@ -148,7 +152,9 @@ async def list_datasets(
 ):
     """List all datasets for the current user, optionally filtered by type."""
     if dataset_type and dataset_type not in ("stt", "tts"):
-        raise HTTPException(status_code=400, detail="dataset_type must be 'stt' or 'tts'")
+        raise HTTPException(
+            status_code=400, detail="dataset_type must be 'stt' or 'tts'"
+        )
 
     rows = get_all_datasets(user_id=user_id, dataset_type=dataset_type)
     uuids = [row["uuid"] for row in rows]
@@ -223,7 +229,9 @@ async def remove_dataset(
     delete_dataset(dataset_id, user_id=user_id)
 
 
-@router.post("/{dataset_id}/items", response_model=List[DatasetItemResponse], status_code=201)
+@router.post(
+    "/{dataset_id}/items", response_model=List[DatasetItemResponse], status_code=201
+)
 async def add_items(
     dataset_id: str,
     items: List[DatasetItemIn],
@@ -233,7 +241,9 @@ async def add_items(
     if not items:
         raise HTTPException(status_code=400, detail="items list cannot be empty")
     if len(items) > 1000:
-        raise HTTPException(status_code=400, detail="Cannot add more than 1000 items per request")
+        raise HTTPException(
+            status_code=400, detail="Cannot add more than 1000 items per request"
+        )
 
     row = get_dataset(dataset_id, user_id=user_id)
     if not row:
@@ -262,7 +272,6 @@ async def update_item(
     if not {"text", "audio_path"} & request.model_fields_set:
         raise HTTPException(status_code=400, detail="Nothing to update")
 
-    # Bug 1: validate the update against the dataset's type
     if "audio_path" in request.model_fields_set:
         if row["type"] == "stt" and not request.audio_path:
             raise HTTPException(
@@ -275,12 +284,13 @@ async def update_item(
                 detail="TTS dataset items must not include audio_path",
             )
 
-    # Bug 2: use model_fields_set so explicit null clears the field
     updated = update_dataset_item(
         item_uuid,
         dataset_id,
         text=request.text if "text" in request.model_fields_set else None,
-        audio_path=request.audio_path if "audio_path" in request.model_fields_set else ...,
+        audio_path=(
+            request.audio_path if "audio_path" in request.model_fields_set else ...
+        ),
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Item not found")
