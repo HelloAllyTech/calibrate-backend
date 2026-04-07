@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from db import (
     update_dataset_name,
     delete_dataset,
     add_dataset_items,
+    get_dataset_item,
     get_dataset_items,
     update_dataset_item,
     delete_dataset_item,
@@ -30,7 +31,7 @@ router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 class DatasetCreateRequest(BaseModel):
     name: str
-    dataset_type: str  # 'stt' | 'tts'
+    dataset_type: Literal["stt", "tts"]
 
 
 class DatasetRenameRequest(BaseModel):
@@ -134,9 +135,6 @@ async def create_new_dataset(
     user_id: str = Depends(get_current_user_id),
 ):
     """Create a new empty dataset."""
-    if request.dataset_type not in ("stt", "tts"):
-        raise HTTPException(status_code=400, detail="dataset_type must be 'stt' or 'tts'")
-
     dataset_uuid = create_dataset(name=request.name, dataset_type=request.dataset_type, user_id=user_id)
     row = get_dataset(dataset_uuid, user_id=user_id)
     return _dataset_row_to_response(row, item_count=0, eval_count=0)
@@ -233,6 +231,8 @@ async def add_items(
     """Add one or more items to a dataset."""
     if not items:
         raise HTTPException(status_code=400, detail="items list cannot be empty")
+    if len(items) > 1000:
+        raise HTTPException(status_code=400, detail="Cannot add more than 1000 items per request")
 
     row = get_dataset(dataset_id, user_id=user_id)
     if not row:
@@ -260,24 +260,36 @@ async def update_item(
     if not row:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    if request.text is None and request.audio_path is None:
+    if not {"text", "audio_path"} & request.model_fields_set:
         raise HTTPException(status_code=400, detail="Nothing to update")
 
+    # Bug 1: validate the update against the dataset's type
+    if "audio_path" in request.model_fields_set:
+        if row["type"] == "stt" and not request.audio_path:
+            raise HTTPException(
+                status_code=400,
+                detail="STT dataset items must include audio_path",
+            )
+        if row["type"] == "tts" and request.audio_path:
+            raise HTTPException(
+                status_code=400,
+                detail="TTS dataset items must not include audio_path",
+            )
+
+    # Bug 2: use model_fields_set so explicit null clears the field
     updated = update_dataset_item(
         item_uuid,
         dataset_id,
-        text=request.text,
-        audio_path=request.audio_path if request.audio_path is not None else ...,
+        text=request.text if "text" in request.model_fields_set else None,
+        audio_path=request.audio_path if "audio_path" in request.model_fields_set else ...,
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    items = get_dataset_items(dataset_id)
-    for item in items:
-        if item["uuid"] == item_uuid:
-            return _item_row_to_response(item)
-
-    raise HTTPException(status_code=404, detail="Item not found")
+    item = get_dataset_item(item_uuid, dataset_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return _item_row_to_response(item)
 
 
 @router.delete("/{dataset_id}/items/{item_uuid}", status_code=204)

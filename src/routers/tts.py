@@ -12,7 +12,6 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-import openpyxl
 
 from db import create_job, get_job, update_job, get_active_dataset_ids
 from dataset_utils import resolve_dataset_inputs, inject_dataset_item_ids
@@ -31,6 +30,8 @@ from utils import (
     is_job_timed_out,
     kill_process_group,
     capture_exception_to_sentry,
+    normalize_metrics,
+    read_leaderboard_xlsx,
 )
 
 # Job types that share the same queue
@@ -71,33 +72,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tts", tags=["tts"])
 
-
-def _normalize_metrics(metrics):
-    """Convert old list-of-dicts metrics format to new dict format.
-
-    Old format: [{"wer": 2.4}, {"string_similarity": 0.15}, {"metric_name": "ttfb", "mean": 0.1, ...}, ...]
-    New format: {"wer": 2.4, "string_similarity": 0.15, "ttfb": {"mean": 0.1, ...}, ...}
-    """
-    if metrics is None:
-        return None
-    if isinstance(metrics, dict):
-        return metrics
-    if isinstance(metrics, list):
-        # Convert list of dicts to single dict
-        result = {}
-        for item in metrics:
-            if isinstance(item, dict):
-                # Check if it's a latency metric with metric_name field
-                if "metric_name" in item:
-                    metric_name = item["metric_name"]
-                    # Create a copy without metric_name for the value
-                    value = {k: v for k, v in item.items() if k != "metric_name"}
-                    result[metric_name] = value
-                else:
-                    # Simple metric: {"wer": 2.4} - merge directly
-                    result.update(item)
-        return result if result else metrics  # Return original if conversion fails
-    return metrics
 
 
 def _collect_tts_intermediate_results(
@@ -215,60 +189,6 @@ def _read_tts_metrics_json(provider_output_dir: Path) -> Optional[dict]:
     except Exception:
         return None
 
-
-def _read_leaderboard_xlsx(leaderboard_dir: Path) -> Optional[List[dict]]:
-    """Read the leaderboard summary from the xlsx file in leaderboard directory.
-
-    Looks for any .xlsx file in the directory (commonly tts_leaderboard.xlsx).
-    """
-    if not leaderboard_dir.exists():
-        logger.warning(f"Leaderboard directory does not exist: {leaderboard_dir}")
-        return None
-
-    # Find xlsx file in leaderboard directory
-    xlsx_files = list(leaderboard_dir.glob("*.xlsx"))
-    if not xlsx_files:
-        logger.warning(
-            f"No xlsx files found in leaderboard directory: {leaderboard_dir}"
-        )
-        # Log what files are present for debugging
-        all_files = list(leaderboard_dir.iterdir())
-        logger.info(f"Files in leaderboard directory: {[f.name for f in all_files]}")
-        return None
-
-    xlsx_file = xlsx_files[0]  # Use the first xlsx file found
-    logger.info(f"Reading leaderboard from: {xlsx_file}")
-
-    try:
-        wb = openpyxl.load_workbook(str(xlsx_file), data_only=True)
-        logger.info(f"Workbook sheets: {wb.sheetnames}")
-
-        if "summary" not in wb.sheetnames:
-            logger.warning(
-                f"'summary' sheet not found in {xlsx_file.name}, sheets: {wb.sheetnames}"
-            )
-            return None
-
-        ws = wb["summary"]
-        # Get headers from first row (skip empty cells)
-        headers = [cell.value for cell in ws[1] if cell.value is not None]
-        logger.info(f"Leaderboard headers: {headers}")
-
-        leaderboard_summary = []
-        for row in ws.iter_rows(min_row=2, values_only=False):
-            if any(cell.value is not None for cell in row):
-                row_dict = {}
-                for idx, cell in enumerate(row):
-                    if idx < len(headers):
-                        row_dict[headers[idx]] = cell.value
-                if any(v is not None for v in row_dict.values()):
-                    leaderboard_summary.append(row_dict)
-
-        logger.info(f"Read {len(leaderboard_summary)} rows from leaderboard")
-        return leaderboard_summary
-    except Exception as e:
-        logger.warning(f"Failed to read leaderboard xlsx: {e}")
-        return None
 
 
 def run_tts_evaluation_task(
@@ -457,7 +377,7 @@ def run_tts_evaluation_task(
 
                 if leaderboard_dir.exists():
                     logger.info(f"Leaderboard directory exists: {leaderboard_dir}")
-                    leaderboard_summary = _read_leaderboard_xlsx(leaderboard_dir)
+                    leaderboard_summary = read_leaderboard_xlsx(leaderboard_dir)
 
                     # Upload leaderboard to S3
                     leaderboard_prefix = f"tts/evals/{task_id}/leaderboard"
@@ -822,7 +742,7 @@ async def get_tts_evaluation_status(
     # Normalize metrics format for backward compatibility (list -> dict)
     for provider_result in provider_results:
         if provider_result.get("metrics"):
-            provider_result["metrics"] = _normalize_metrics(provider_result["metrics"])
+            provider_result["metrics"] = normalize_metrics(provider_result["metrics"])
 
     # Generate presigned URLs on the fly for completed or failed jobs
     if status in (TaskStatus.DONE.value, TaskStatus.FAILED.value):

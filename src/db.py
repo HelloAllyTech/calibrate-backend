@@ -14,10 +14,10 @@ logger = logging.getLogger(__name__)
 # Database path
 DB_PATH = Path(join(os.getenv("DB_ROOT_DIR"), "pense.db"))
 
-# Default user configuration
-DEFAULT_USER_EMAIL = "amandalmia18@gmail.com"
-DEFAULT_USER_FIRST_NAME = "Aman"
-DEFAULT_USER_LAST_NAME = "Dalmia"
+# Default user configuration — set via environment variables for local dev
+DEFAULT_USER_EMAIL = os.getenv("DEFAULT_USER_EMAIL", "")
+DEFAULT_USER_FIRST_NAME = os.getenv("DEFAULT_USER_FIRST_NAME", "Admin")
+DEFAULT_USER_LAST_NAME = os.getenv("DEFAULT_USER_LAST_NAME", "User")
 
 
 @contextmanager
@@ -2926,6 +2926,18 @@ def add_dataset_items(
         conn.commit()
         logger.info(f"Added {len(item_uuids)} items to dataset {dataset_id}")
         return item_uuids
+
+
+def get_dataset_item(item_uuid: str, dataset_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single active dataset item by UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM dataset_items WHERE uuid = ? AND dataset_id = ? AND deleted_at IS NULL",
+            (item_uuid, dataset_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
 
 def get_dataset_items(dataset_id: str) -> List[Dict[str, Any]]:

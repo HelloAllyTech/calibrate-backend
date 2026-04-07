@@ -5,9 +5,11 @@ import threading
 import time
 from datetime import datetime, timedelta
 from enum import Enum
+from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
 
 import boto3
+import openpyxl
 import sentry_sdk
 from pydantic import BaseModel
 
@@ -705,3 +707,75 @@ def can_start_simulation_job(job_types: List[str], user_id: str) -> bool:
                 return False
 
         return True
+
+
+def normalize_metrics(metrics):
+    """Convert old list-of-dicts metrics format to new dict format.
+
+    Old format: [{"wer": 2.4}, {"string_similarity": 0.15}, {"metric_name": "ttfb", "mean": 0.1, ...}, ...]
+    New format: {"wer": 2.4, "string_similarity": 0.15, "ttfb": {"mean": 0.1, ...}, ...}
+    """
+    if metrics is None:
+        return None
+    if isinstance(metrics, dict):
+        return metrics
+    if isinstance(metrics, list):
+        result = {}
+        for item in metrics:
+            if isinstance(item, dict):
+                if "metric_name" in item:
+                    metric_name = item["metric_name"]
+                    value = {k: v for k, v in item.items() if k != "metric_name"}
+                    result[metric_name] = value
+                else:
+                    result.update(item)
+        return result if result else metrics
+    return metrics
+
+
+def read_leaderboard_xlsx(leaderboard_dir: Path) -> Optional[List[dict]]:
+    """Read the leaderboard summary from the xlsx file in leaderboard directory.
+
+    Looks for any .xlsx file in the directory (commonly stt_leaderboard.xlsx or tts_leaderboard.xlsx).
+    """
+    if not leaderboard_dir.exists():
+        logger.warning(f"Leaderboard directory does not exist: {leaderboard_dir}")
+        return None
+
+    xlsx_files = list(leaderboard_dir.glob("*.xlsx"))
+    if not xlsx_files:
+        logger.warning(f"No xlsx files found in leaderboard directory: {leaderboard_dir}")
+        all_files = list(leaderboard_dir.iterdir())
+        logger.info(f"Files in leaderboard directory: {[f.name for f in all_files]}")
+        return None
+
+    xlsx_file = xlsx_files[0]
+    logger.info(f"Reading leaderboard from: {xlsx_file}")
+
+    try:
+        wb = openpyxl.load_workbook(str(xlsx_file), data_only=True)
+        logger.info(f"Workbook sheets: {wb.sheetnames}")
+
+        if "summary" not in wb.sheetnames:
+            logger.warning(f"'summary' sheet not found in {xlsx_file.name}, sheets: {wb.sheetnames}")
+            return None
+
+        ws = wb["summary"]
+        headers = [cell.value for cell in ws[1] if cell.value is not None]
+        logger.info(f"Leaderboard headers: {headers}")
+
+        leaderboard_summary = []
+        for row in ws.iter_rows(min_row=2, values_only=False):
+            if any(cell.value is not None for cell in row):
+                row_dict = {}
+                for idx, cell in enumerate(row):
+                    if idx < len(headers):
+                        row_dict[headers[idx]] = cell.value
+                if any(v is not None for v in row_dict.values()):
+                    leaderboard_summary.append(row_dict)
+
+        logger.info(f"Read {len(leaderboard_summary)} rows from leaderboard")
+        return leaderboard_summary
+    except Exception as e:
+        logger.warning(f"Failed to read leaderboard xlsx: {e}")
+        return None
