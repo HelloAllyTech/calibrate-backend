@@ -40,8 +40,9 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 calibrate-backend/
 ├── src/
 │   ├── main.py              # FastAPI app entry point, lifespan management
-│   ├── db.py                # SQLite database layer (~2700 lines)
+│   ├── db.py                # SQLite database layer (~2900 lines)
 │   ├── utils.py             # Shared utilities (S3 client, tool config building)
+│   ├── dataset_utils.py     # Shared dataset resolution helper (used by STT & TTS routers)
 │   ├── job_recovery.py      # Restart in-progress jobs on app startup
 │   └── routers/
 │       ├── auth.py          # Authentication (Google OAuth, username/password signup & login)
@@ -57,6 +58,7 @@ calibrate-backend/
 │       ├── simulations.py   # Simulation orchestration (chat/voice)
 │       ├── stt.py           # STT provider evaluation
 │       ├── tts.py           # TTS provider evaluation
+│       ├── datasets.py      # Dataset CRUD and item management
 │       └── jobs.py          # Job listing API (STT/TTS eval jobs)
 ├── db/
 │   └── calibrate.db         # SQLite database file
@@ -80,7 +82,11 @@ users
   ├── scenarios (user_id FK)
   ├── metrics (user_id FK)
   ├── simulations (user_id FK)
+  ├── datasets (user_id FK)
   └── jobs (user_id FK)
+
+datasets
+  └── dataset_items (dataset_id FK → datasets.uuid)
 
 agents
   ├── agent_tools (many-to-many with tools)
@@ -107,6 +113,8 @@ simulations
 | `scenarios`       | Conversation scenarios/contexts                                        |
 | `metrics`         | Evaluation criteria for simulations                                    |
 | `simulations`     | Simulation configurations linking agents, personas, scenarios, metrics |
+| `datasets`        | Reusable evaluation datasets (type: `stt` or `tts`, user_id FK)        |
+| `dataset_items`   | Items within a dataset (text + optional audio_path, ordered by order_index) |
 | `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                  |
 | `agent_test_jobs` | LLM unit test and benchmark jobs                                       |
 | `simulation_jobs` | Chat/voice simulation jobs                                             |
@@ -180,6 +188,18 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 - `/agent-tools` - Link/unlink tools to agents
 - `/agent-tests` - Link/unlink tests to agents
+
+#### Datasets
+
+- `POST /datasets` - Create a new dataset (`name`, `dataset_type`: `stt`|`tts`)
+- `GET /datasets` - List datasets for the current user (optional `?dataset_type=stt|tts` filter)
+- `GET /datasets/{dataset_id}` - Get dataset with all items
+- `PATCH /datasets/{dataset_id}` - Rename a dataset
+- `DELETE /datasets/{dataset_id}` - Soft delete a dataset and all its items
+- `POST /datasets/{dataset_id}/items` - Add items to a dataset
+- `DELETE /datasets/{dataset_id}/items/{item_uuid}` - Soft delete a single item
+
+All dataset endpoints require JWT auth. Every DB operation is scoped to the authenticated user (`user_id` is always required, never optional).
 
 #### Evaluation & Testing (all require JWT auth)
 
@@ -416,6 +436,10 @@ The `is_job_timed_out(updated_at)` utility function in `utils.py` handles timest
 ### STT/TTS Evaluation Flow
 
 STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command with all providers specified at once. The calibrate CLI handles parallelization internally and generates the leaderboard automatically as part of the same command.
+
+**Dataset integration**: Both STT and TTS evaluation requests accept an optional `dataset_id` to load inputs from a saved dataset, or `dataset_name` to persist inline data as a new dataset. The shared `resolve_dataset_inputs()` helper in `dataset_utils.py` handles both paths (avoiding duplication between the two routers). When `dataset_id` is provided, the helper loads items from the dataset and `dataset_name` is ignored; when inline data is provided with `dataset_name`, it creates a new dataset atomically before the evaluation starts. The `resolved_dataset_id` and `dataset_item_ids` (ordered list of item UUIDs) are stored in the job's `details` for traceability.
+
+**Per-row `dataset_item_id` in results**: When an evaluation is linked to a dataset, each result row in the status response includes a `dataset_item_id` field. The `inject_dataset_item_ids()` helper in `dataset_utils.py` maps the CLI's `id` column (`audio_N` for STT 1-indexed, `N` for TTS 0-indexed) back to the corresponding dataset item UUID. Injection happens at the response level in the status endpoint (single injection point), so it covers all states: completed, in-progress intermediate, and failed/partial results. For older jobs or evaluations without a dataset, `dataset_item_ids` is absent from details and injection is safely skipped.
 
 - **Single command execution**: All providers evaluated in one CLI call (e.g., `calibrate stt -p openai deepgram sarvam -l english -i input -o output`)
 - **Internal parallelization**: The calibrate CLI handles concurrent provider execution internally
