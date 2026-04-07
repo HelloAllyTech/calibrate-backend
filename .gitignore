@@ -12,3 +12,5 @@ wheels/
 
 db
 notebooks
+.specstory
+.claude
