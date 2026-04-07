@@ -322,6 +322,7 @@ def init_db():
                 text TEXT NOT NULL,
                 order_index INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 deleted_at TIMESTAMP DEFAULT NULL,
                 FOREIGN KEY (dataset_id) REFERENCES datasets(uuid)
             )
@@ -388,6 +389,13 @@ def init_db():
             except sqlite3.OperationalError:
                 # Column already exists
                 pass
+
+        try:
+            cursor.execute(
+                "ALTER TABLE dataset_items ADD COLUMN updated_at TIMESTAMP DEFAULT NULL"
+            )
+        except sqlite3.OperationalError:
+            pass
 
         conn.commit()
 
@@ -2803,6 +2811,39 @@ def get_dataset_item_counts(dataset_uuids: List[str]) -> Dict[str, int]:
         return counts
 
 
+def get_dataset_eval_counts(dataset_uuids: List[str]) -> Dict[str, int]:
+    """Return a {dataset_uuid: eval_job_count} map by reading the dataset_id stored in job details."""
+    if not dataset_uuids:
+        return {}
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in dataset_uuids)
+        cursor.execute(
+            f"SELECT json_extract(details, '$.dataset_id') AS ds_id, COUNT(*) FROM jobs"
+            f" WHERE json_extract(details, '$.dataset_id') IN ({placeholders})"
+            f" GROUP BY ds_id",
+            dataset_uuids,
+        )
+        counts = {row[0]: row[1] for row in cursor.fetchall()}
+        for uid in dataset_uuids:
+            counts.setdefault(uid, 0)
+        return counts
+
+
+def get_active_dataset_ids(dataset_uuids: List[str]) -> set:
+    """Return the subset of dataset UUIDs that exist and are not soft-deleted."""
+    if not dataset_uuids:
+        return set()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in dataset_uuids)
+        cursor.execute(
+            f"SELECT uuid FROM datasets WHERE uuid IN ({placeholders}) AND deleted_at IS NULL",
+            dataset_uuids,
+        )
+        return {row[0] for row in cursor.fetchall()}
+
+
 def update_dataset_name(dataset_uuid: str, user_id: str, name: str) -> bool:
     """Rename a dataset. Returns True if found and updated."""
     with get_db_connection() as conn:
@@ -2877,6 +2918,11 @@ def add_dataset_items(
             )
             item_uuids.append(item_uuid)
 
+        if item_uuids:
+            cursor.execute(
+                "UPDATE datasets SET updated_at = CURRENT_TIMESTAMP WHERE uuid = ?",
+                (dataset_id,),
+            )
         conn.commit()
         logger.info(f"Added {len(item_uuids)} items to dataset {dataset_id}")
         return item_uuids
@@ -2894,6 +2940,44 @@ def get_dataset_items(dataset_id: str) -> List[Dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
+def update_dataset_item(
+    item_uuid: str,
+    dataset_id: str,
+    text: Optional[str] = None,
+    audio_path: Optional[str] = ...,
+) -> bool:
+    """Update a dataset item's text and/or audio_path. Returns True if found and updated.
+
+    audio_path uses sentinel default (...) so callers can explicitly pass None to clear it.
+    """
+    fields = []
+    params: list = []
+    if text is not None:
+        fields.append("text = ?")
+        params.append(text)
+    if audio_path is not ...:
+        fields.append("audio_path = ?")
+        params.append(audio_path)
+    if not fields:
+        return False
+    fields.append("updated_at = CURRENT_TIMESTAMP")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        params.extend([item_uuid, dataset_id])
+        cursor.execute(
+            f"UPDATE dataset_items SET {', '.join(fields)} WHERE uuid = ? AND dataset_id = ? AND deleted_at IS NULL",
+            params,
+        )
+        updated = cursor.rowcount > 0
+        if updated:
+            cursor.execute(
+                "UPDATE datasets SET updated_at = CURRENT_TIMESTAMP WHERE uuid = ?",
+                (dataset_id,),
+            )
+        conn.commit()
+        return updated
+
+
 def delete_dataset_item(item_uuid: str, dataset_id: str) -> bool:
     """Soft delete a single dataset item. Returns True if found and deleted.
 
@@ -2907,8 +2991,12 @@ def delete_dataset_item(item_uuid: str, dataset_id: str) -> bool:
             "UPDATE dataset_items SET deleted_at = CURRENT_TIMESTAMP WHERE uuid = ? AND dataset_id = ? AND deleted_at IS NULL",
             (item_uuid, dataset_id),
         )
-        conn.commit()
         deleted = cursor.rowcount > 0
         if deleted:
+            cursor.execute(
+                "UPDATE datasets SET updated_at = CURRENT_TIMESTAMP WHERE uuid = ?",
+                (dataset_id,),
+            )
             logger.info(f"Soft deleted dataset item {item_uuid}")
+        conn.commit()
         return deleted

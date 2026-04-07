@@ -13,6 +13,7 @@ class ResolvedDatasetInputs:
     texts: List[str]
     audio_paths: Optional[List[str]]
     dataset_id: Optional[str]
+    dataset_name: Optional[str]
     item_ids: Optional[List[str]]
 
 
@@ -54,6 +55,7 @@ def resolve_dataset_inputs(
             texts=resolved_texts,
             audio_paths=resolved_audio,
             dataset_id=dataset_id,
+            dataset_name=dataset.get("name"),
             item_ids=[i["uuid"] for i in items],
         )
 
@@ -98,6 +100,7 @@ def resolve_dataset_inputs(
         texts=resolved_texts,
         audio_paths=resolved_audio,
         dataset_id=resolved_dataset_id,
+        dataset_name=dataset_name,
         item_ids=resolved_item_ids,
     )
 

@@ -99,12 +99,16 @@ class ProviderResult(BaseModel):
 class TaskCreateResponse(BaseModel):
     task_id: str
     status: str
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
 
 
 class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
     language: Optional[str] = None
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
     provider_results: Optional[List[ProviderResult]] = None
     leaderboard_summary: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None

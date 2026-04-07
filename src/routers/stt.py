@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 import openpyxl
 
-from db import create_job, get_job, update_job
+from db import create_job, get_job, update_job, get_active_dataset_ids
 from dataset_utils import resolve_dataset_inputs, inject_dataset_item_ids
 from auth_utils import get_current_user_id
 from utils import (
@@ -562,6 +562,7 @@ async def evaluate_stt(
     audio_paths = resolved.audio_paths
     texts = resolved.texts
     resolved_dataset_id = resolved.dataset_id
+    resolved_dataset_name = resolved.dataset_name
     dataset_item_ids = resolved.item_ids
 
     request.audio_paths = audio_paths
@@ -591,6 +592,7 @@ async def evaluate_stt(
             "language": request.language,
             "s3_bucket": s3_bucket,
             "dataset_id": resolved_dataset_id,
+            "dataset_name": resolved_dataset_name,
             "dataset_item_ids": dataset_item_ids,
         },
         results=None,
@@ -608,7 +610,12 @@ async def evaluate_stt(
     else:
         logger.info(f"Queued STT evaluation job {job_id}")
 
-    return TaskCreateResponse(task_id=job_id, status=initial_status)
+    return TaskCreateResponse(
+        task_id=job_id,
+        status=initial_status,
+        dataset_id=resolved_dataset_id,
+        dataset_name=resolved_dataset_name,
+    )
 
 
 @router.get("/evaluate/{task_id}", response_model=TaskStatusResponse)
@@ -768,10 +775,16 @@ async def get_evaluation_status(
     if dataset_item_ids:
         inject_dataset_item_ids(provider_results, dataset_item_ids, "stt")
 
+    dataset_id = details.get("dataset_id")
+    active = get_active_dataset_ids([dataset_id]) if dataset_id else set()
+    dataset_active = dataset_id in active if dataset_id else False
+
     return TaskStatusResponse(
         task_id=task_id,
         status=status,
         language=details.get("language"),
+        dataset_id=dataset_id if dataset_active else None,
+        dataset_name=details.get("dataset_name") if dataset_active else None,
         provider_results=provider_results,
         leaderboard_summary=results.get("leaderboard_summary"),
         error=results.get("error"),
