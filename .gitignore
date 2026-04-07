@@ -12,4 +12,5 @@ wheels/
 
 db
 notebooks
-.claude/
+.specstory
+.claude

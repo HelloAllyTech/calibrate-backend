@@ -20,17 +20,17 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 
 ## Technology Stack
 
-| Component            | Technology          | Purpose                                                      |
-| -------------------- | ------------------- | ------------------------------------------------------------ |
-| **Framework**        | FastAPI             | Async REST API framework                                     |
-| **Database**         | SQLite              | Persistent data storage                                      |
-| **Storage**          | AWS S3              | File/result storage                                          |
+| Component            | Technology                          | Purpose                                                                                    |
+| -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| **Framework**        | FastAPI                             | Async REST API framework                                                                   |
+| **Database**         | SQLite                              | Persistent data storage                                                                    |
+| **Storage**          | AWS S3                              | File/result storage                                                                        |
 | **Authentication**   | Google OAuth + Email/Password + JWT | User authentication via Google ID tokens or email/password credentials, API access via JWT |
-| **Monitoring**       | Sentry              | Error tracking and performance monitoring                    |
-| **Tracing**          | Langfuse (via OTEL) | LLM observability and tracing                                |
-| **Package Manager**  | uv                  | Python dependency management                                 |
-| **Containerization** | Docker              | Deployment                                                   |
-| **CLI Tool**         | calibrate           | Core evaluation/simulation engine                            |
+| **Monitoring**       | Sentry                              | Error tracking and performance monitoring                                                  |
+| **Tracing**          | Langfuse (via OTEL)                 | LLM observability and tracing                                                              |
+| **Package Manager**  | uv                                  | Python dependency management                                                               |
+| **Containerization** | Docker                              | Deployment                                                                                 |
+| **CLI Tool**         | calibrate                           | Core evaluation/simulation engine                                                          |
 
 ---
 
@@ -42,7 +42,7 @@ calibrate-backend/
 │   ├── main.py              # FastAPI app entry point, lifespan management
 │   ├── db.py                # SQLite database layer (~2900 lines)
 │   ├── utils.py             # Shared utilities (S3 client, tool config building)
-│   ├── dataset_utils.py     # Shared dataset resolution helper (used by STT & TTS routers)
+│   ├── dataset_utils.py     # Dataset resolution helpers for STT/TTS evaluations
 │   ├── job_recovery.py      # Restart in-progress jobs on app startup
 │   └── routers/
 │       ├── auth.py          # Authentication (Google OAuth, username/password signup & login)
@@ -56,6 +56,7 @@ calibrate-backend/
 │       ├── scenarios.py     # Scenario CRUD operations
 │       ├── metrics.py       # Metric/evaluation criteria CRUD
 │       ├── simulations.py   # Simulation orchestration (chat/voice)
+│       ├── datasets.py      # Dataset CRUD and item management
 │       ├── stt.py           # STT provider evaluation
 │       ├── tts.py           # TTS provider evaluation
 │       ├── datasets.py      # Dataset CRUD and item management
@@ -103,36 +104,36 @@ simulations
 
 ### Core Tables
 
-| Table             | Purpose                                                                |
-| ----------------- | ---------------------------------------------------------------------- |
-| `users`           | User accounts (Google OAuth or email/password credentials)             |
-| `agents`          | AI agent configurations (system prompt, LLM config, STT/TTS settings)  |
-| `tools`           | Tool/function definitions for agents                                   |
-| `tests`           | Test cases with evaluation criteria                                    |
-| `personas`        | Simulated user personas (characteristics, gender, language)            |
-| `scenarios`       | Conversation scenarios/contexts                                        |
-| `metrics`         | Evaluation criteria for simulations                                    |
-| `simulations`     | Simulation configurations linking agents, personas, scenarios, metrics |
-| `datasets`        | Reusable evaluation datasets (type: `stt` or `tts`, user_id FK)        |
-| `dataset_items`   | Items within a dataset (text + optional audio_path, ordered by order_index) |
-| `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                  |
-| `agent_test_jobs` | LLM unit test and benchmark jobs                                       |
-| `simulation_jobs` | Chat/voice simulation jobs                                             |
+| Table             | Purpose                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| `users`           | User accounts (Google OAuth or email/password credentials)                                                    |
+| `agents`          | AI agent configurations (system prompt, LLM config, STT/TTS settings)                                         |
+| `tools`           | Tool/function definitions for agents                                                                          |
+| `tests`           | Test cases with evaluation criteria                                                                           |
+| `personas`        | Simulated user personas (characteristics, gender, language)                                                   |
+| `scenarios`       | Conversation scenarios/contexts                                                                               |
+| `metrics`         | Evaluation criteria for simulations                                                                           |
+| `simulations`     | Simulation configurations linking agents, personas, scenarios, metrics                                        |
+| `datasets`        | Named collections of evaluation inputs (STT or TTS), user_id FK                                               |
+| `dataset_items`   | Individual items within a dataset (text, optional audio_path, `updated_at` — nullable for pre-migration rows) |
+| `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                                                         |
+| `agent_test_jobs` | LLM unit test and benchmark jobs                                                                              |
+| `simulation_jobs` | Chat/voice simulation jobs                                                                                    |
 
 ### Users Table Schema
 
 The `users` table supports two authentication methods. Columns:
 
-| Column          | Type      | Notes                                                                 |
-| --------------- | --------- | --------------------------------------------------------------------- |
-| `id`            | INTEGER   | Auto-increment primary key                                            |
-| `uuid`          | TEXT      | Unique user identifier used across the app                            |
-| `first_name`    | TEXT      | NOT NULL                                                              |
-| `last_name`     | TEXT      | NOT NULL                                                              |
-| `email`         | TEXT      | NOT NULL UNIQUE. Used as the user identifier for both auth methods    |
-| `password_hash` | TEXT      | Nullable. bcrypt hash. Only set for email/password users              |
-| `created_at`    | TIMESTAMP | Default CURRENT_TIMESTAMP                                             |
-| `updated_at`    | TIMESTAMP | Default CURRENT_TIMESTAMP                                             |
+| Column          | Type      | Notes                                                              |
+| --------------- | --------- | ------------------------------------------------------------------ |
+| `id`            | INTEGER   | Auto-increment primary key                                         |
+| `uuid`          | TEXT      | Unique user identifier used across the app                         |
+| `first_name`    | TEXT      | NOT NULL                                                           |
+| `last_name`     | TEXT      | NOT NULL                                                           |
+| `email`         | TEXT      | NOT NULL UNIQUE. Used as the user identifier for both auth methods |
+| `password_hash` | TEXT      | Nullable. bcrypt hash. Only set for email/password users           |
+| `created_at`    | TIMESTAMP | Default CURRENT_TIMESTAMP                                          |
+| `updated_at`    | TIMESTAMP | Default CURRENT_TIMESTAMP                                          |
 
 **Two auth paths for the same table**: The `email` column is the shared identifier. Google OAuth users have `password_hash` as NULL (authenticated via Google tokens). Email/password users have `password_hash` set (authenticated via bcrypt). Both use the same `email` column — there is no separate `username` column.
 
@@ -142,6 +143,8 @@ The `users` table supports two authentication methods. Columns:
 2. **UUIDs**: All entities use UUID as primary identifier (separate from auto-increment id)
 3. **JSON Config**: Complex configurations stored as JSON strings in `config` columns
 4. **Pivot Tables**: Many-to-many relationships use dedicated pivot tables with soft delete support
+5. **Parent `updated_at` cascade**: When child rows are mutated the parent's `updated_at` is bumped in the same transaction. Currently applies to `datasets` ← `dataset_items` (add, update, delete)
+6. **Schema migrations**: New columns on existing tables are added via `ALTER TABLE ADD COLUMN` wrapped in `try/except sqlite3.OperationalError: pass` inside `init_db()`. **Gotcha**: SQLite does not allow `DEFAULT CURRENT_TIMESTAMP` (or any non-constant expression) in `ALTER TABLE ADD COLUMN` — the statement silently fails and the `except` swallows it. Always use `DEFAULT NULL` for migration `ADD COLUMN` statements. The `CREATE TABLE` definition can still use `DEFAULT CURRENT_TIMESTAMP` for new databases.
 
 ---
 
@@ -182,6 +185,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 - `/scenarios` - Conversation scenarios
 - `/metrics` - Evaluation metrics
 - `/simulations` - Simulation configurations
+- `/datasets` - Dataset CRUD, item management (add/update/delete items), `eval_count` per dataset (number of linked STT/TTS eval jobs via `json_extract` on jobs `details`)
 - `/users` - User management (read-only)
 
 #### Relationship Management
@@ -203,7 +207,7 @@ All dataset endpoints require JWT auth. Every DB operation is scoped to the auth
 
 #### Evaluation & Testing (all require JWT auth)
 
-- `GET /jobs` - List all STT/TTS evaluation jobs for authenticated user
+- `GET /jobs` - List all STT/TTS evaluation jobs for authenticated user (each item includes top-level `dataset_id` and `dataset_name` extracted from job details; both are `null` when the associated dataset has been deleted)
 - `DELETE /jobs/{job_uuid}` - Delete a job (kills processes, triggers next queued job)
 - `POST /stt/evaluate` - Start STT evaluation task
 - `GET /stt/evaluate/{task_id}` - Get STT evaluation status (includes timeout detection)
@@ -286,34 +290,34 @@ The queueing mechanism limits concurrent jobs to prevent resource exhaustion. Tw
 
 Three separate queues exist, each with its own concurrency limits:
 
-| Queue            | Job Types                        | Global Limit          | Per-User Limit                |
-| ---------------- | -------------------------------- | --------------------- | ----------------------------- |
+| Queue            | Job Types                        | Global Limit          | Per-User Limit                 |
+| ---------------- | -------------------------------- | --------------------- | ------------------------------ |
 | Eval Queue       | `stt-eval`, `tts-eval`           | `MAX_CONCURRENT_JOBS` | `MAX_CONCURRENT_JOBS_PER_USER` |
 | Agent Test Queue | `llm-unit-test`, `llm-benchmark` | `MAX_CONCURRENT_JOBS` | `MAX_CONCURRENT_JOBS_PER_USER` |
 | Simulation Queue | `text`, `voice`                  | `MAX_CONCURRENT_JOBS` | `MAX_CONCURRENT_JOBS_PER_USER` |
 
 #### Key Components
 
-| Component                        | Location   | Purpose                                      |
-| -------------------------------- | ---------- | -------------------------------------------- |
-| `TaskStatus.QUEUED`              | `utils.py` | Status for queued jobs                       |
-| `_job_starters` registry         | `utils.py` | Maps job types to starter callbacks          |
-| `register_job_starter()`         | `utils.py` | Registers callback for starting jobs         |
-| `can_start_*_job()`              | `utils.py` | Checks global + per-user capacity            |
-| `try_start_queued_*_job()`       | `utils.py` | Starts next eligible queued job              |
-| `get_queued_*()`                 | `db.py`    | Gets queued jobs with user_id (FIFO order)   |
-| `count_running_*()`              | `db.py`    | Counts in-progress jobs (global)             |
-| `count_running_*_for_user()`     | `db.py`    | Counts in-progress jobs for a specific user  |
+| Component                    | Location   | Purpose                                     |
+| ---------------------------- | ---------- | ------------------------------------------- |
+| `TaskStatus.QUEUED`          | `utils.py` | Status for queued jobs                      |
+| `_job_starters` registry     | `utils.py` | Maps job types to starter callbacks         |
+| `register_job_starter()`     | `utils.py` | Registers callback for starting jobs        |
+| `can_start_*_job()`          | `utils.py` | Checks global + per-user capacity           |
+| `try_start_queued_*_job()`   | `utils.py` | Starts next eligible queued job             |
+| `get_queued_*()`             | `db.py`    | Gets queued jobs with user_id (FIFO order)  |
+| `count_running_*()`          | `db.py`    | Counts in-progress jobs (global)            |
+| `count_running_*_for_user()` | `db.py`    | Counts in-progress jobs for a specific user |
 
 #### User ID Resolution for Jobs
 
 Different job tables store user ownership differently:
 
-| Table              | User ID Source                                      |
-| ------------------ | --------------------------------------------------- |
-| `jobs`             | Direct `user_id` column                             |
-| `agent_test_jobs`  | Via `agent_id` → `agents.user_id` (JOIN)            |
-| `simulation_jobs`  | Via `simulation_id` → `simulations.user_id` (JOIN)  |
+| Table             | User ID Source                                     |
+| ----------------- | -------------------------------------------------- |
+| `jobs`            | Direct `user_id` column                            |
+| `agent_test_jobs` | Via `agent_id` → `agents.user_id` (JOIN)           |
+| `simulation_jobs` | Via `simulation_id` → `simulations.user_id` (JOIN) |
 
 The `get_queued_*_jobs()` functions include JOINs to return `user_id` with each queued job.
 
@@ -433,6 +437,20 @@ The `is_job_timed_out(updated_at)` utility function in `utils.py` handles timest
 | `capture_exception_to_sentry()` | `utils.py` | Logs exception to Sentry as unhandled error                                                  |
 | `build_tool_configs()`          | `utils.py` | Builds calibrate tool configs from agent tools (handles structured_output and webhook types) |
 
+### Dataset Resolution for STT/TTS Evaluations
+
+Both STT and TTS evaluation endpoints accept inputs in two ways: an existing `dataset_id` or inline data (`audio_paths`/`texts`). The shared `resolve_dataset_inputs()` function in `dataset_utils.py` handles this:
+
+- **Existing dataset**: Fetches items from DB, returns `dataset_id`, `dataset_name`, and `item_ids`
+- **Inline data with `dataset_name`**: Creates a new dataset in DB, returns the new `dataset_id`, `dataset_name`, and `item_ids`
+- **Inline data without `dataset_name`**: No dataset created; `dataset_id`, `dataset_name`, and `item_ids` are all `None`
+
+The resolved `dataset_id`, `dataset_name`, and `dataset_item_ids` are stored in the job's `details` dict and returned in both the create response (`TaskCreateResponse`) and status response (`TaskStatusResponse`). The `dataset_item_ids` are used by `inject_dataset_item_ids()` to annotate each result row with its corresponding `dataset_item_id`.
+
+**Deleted dataset handling**: When returning evaluation data (job list, STT/TTS status), the `dataset_id` and `dataset_name` fields are set to `null` if the associated dataset has been soft-deleted. This is checked at read time via `get_active_dataset_ids()` in `db.py`, which batch-queries the `datasets` table for UUIDs that are not soft-deleted. The underlying dataset reference is preserved in job `details` but hidden from API responses.
+
+The dataset list API (`GET /datasets`) includes an `eval_count` field on each dataset, showing how many evaluation jobs reference it. This is computed by `get_dataset_eval_counts()` in `db.py` which uses `json_extract(details, '$.dataset_id')` on the `jobs` table.
+
 ### STT/TTS Evaluation Flow
 
 STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command with all providers specified at once. The calibrate CLI handles parallelization internally and generates the leaderboard automatically as part of the same command.
@@ -451,23 +469,34 @@ STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command 
 
 **Heartbeat to prevent false timeouts**: The background task uses a polling loop with a 60-second heartbeat interval. While waiting for the CLI process to complete, it calls `update_job(task_id)` every 60 seconds to refresh the `updated_at` timestamp. This prevents the job from being falsely marked as timed out when the CLI takes longer than the 5-minute timeout threshold. Without this heartbeat, a job running for 6+ minutes would be killed by the status API's timeout detection even though it's still actively processing.
 
+**Response Model (`TaskCreateResponse`):**
+
+| Field          | Type            | Description                                                     |
+| -------------- | --------------- | --------------------------------------------------------------- |
+| `task_id`      | `str`           | Job UUID                                                        |
+| `status`       | `str`           | Initial job status: `in_progress` or `queued`                   |
+| `dataset_id`   | `Optional[str]` | Dataset UUID (from existing dataset or newly created)           |
+| `dataset_name` | `Optional[str]` | Dataset name (from existing dataset or provided `dataset_name`) |
+
 **Response Model (`TaskStatusResponse`):**
 
-| Field                 | Type                             | Description                                                           |
-| --------------------- | -------------------------------- | --------------------------------------------------------------------- |
-| `task_id`             | `str`                            | Job UUID                                                              |
-| `status`              | `str`                            | Job status: `queued`, `in_progress`, `done`, `failed`                 |
-| `language`            | `Optional[str]`                  | Language from job details (e.g., "english", "hindi")                  |
-| `provider_results`    | `Optional[List[ProviderResult]]` | Results per provider (partial during in_progress, full on completion) |
-| `leaderboard_summary` | `Optional[List[Dict]]`           | Summary after job completes                                           |
-| `error`               | `Optional[str]`                  | Error message if job failed                                           |
+| Field                 | Type                             | Description                                                                                         |
+| --------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `task_id`             | `str`                            | Job UUID                                                                                            |
+| `status`              | `str`                            | Job status: `queued`, `in_progress`, `done`, `failed`                                               |
+| `language`            | `Optional[str]`                  | Language from job details (e.g., "english", "hindi")                                                |
+| `dataset_id`          | `Optional[str]`                  | Dataset UUID linked to this evaluation (from job details); `null` when the dataset has been deleted |
+| `dataset_name`        | `Optional[str]`                  | Dataset name linked to this evaluation (from job details); `null` when the dataset has been deleted |
+| `provider_results`    | `Optional[List[ProviderResult]]` | Results per provider (partial during in_progress, full on completion)                               |
+| `leaderboard_summary` | `Optional[List[Dict]]`           | Summary after job completes                                                                         |
+| `error`               | `Optional[str]`                  | Error message if job failed                                                                         |
 
 **Response Model (`ProviderResult`):**
 
 | Field      | Type                           | When Present                                                                                                                                                                                                                  |
 | ---------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `provider` | `str`                          | Always                                                                                                                                                                                                                        |
-| `success`  | `Optional[bool]`               | `None` while provider is still running/queued (during `in_progress`), `True` when provider finishes all files with metrics ready (even if overall job is still `in_progress`), `True`/`False` when job completes or fails |
+| `success`  | `Optional[bool]`               | `None` while provider is still running/queued (during `in_progress`), `True` when provider finishes all files with metrics ready (even if overall job is still `in_progress`), `True`/`False` when job completes or fails     |
 | `message`  | `Optional[str]`                | `"Queued..."` → `"Running... (N files/texts processed)"` → `"Done (N files/texts processed)"` (when provider finishes during in_progress) → `"Completed"` or error message (when job finishes). Present for both STT and TTS. |
 | `metrics`  | `Optional[Dict \| List[Dict]]` | Available when provider's `metrics.json` exists (during or after execution)                                                                                                                                                   |
 | `results`  | `Optional[List[Dict]]`         | Partial rows from `results.csv` while running, complete when done                                                                                                                                                             |
@@ -485,6 +514,7 @@ STT and TTS evaluations run a single `calibrate stt` or `calibrate tts` command 
 **Preserving results on failure (STT & TTS)**: When an STT or TTS job fails (subprocess error, timeout, or unexpected exception), the error handlers use `_collect_intermediate_results()` (STT) or `_collect_tts_intermediate_results()` (TTS) to read whatever partial results exist on disk before saving to DB. This ensures that providers that completed successfully retain their `metrics` and `results` even when other providers caused the failure. Each helper reads each provider's `results.csv` and `metrics.json`, marking providers with data as `success: true` and those without as `success: false`. The TTS helper additionally uploads audio files to S3 and replaces local paths with S3 keys (matching the success path pattern), so that presigned URLs can be generated when the status is fetched.
 
 **Critical: Merging results on timeout** (STT & TTS): When the status API detects a timeout, it must **merge** intermediate results from disk with any existing successful results already stored in the database — NOT replace them. This is critical because:
+
 1. The temp directory may already be cleaned up (background thread exited), making disk reads return empty results
 2. Some providers may have already been marked `success: true` in the database before the timeout
 3. Unconditionally overwriting `provider_results` would lose these successful results
@@ -648,7 +678,8 @@ All job types upload their config files to S3 for reproducibility and debugging.
 
 **Config file contents:**
 
-- **STT/TTS**: Contains `providers`, `language`, and `audio_count`/`text_count`
+- **STT/TTS config**: Contains `providers`, `language`, and `audio_count`/`text_count`
+- **STT/TTS job details** also store `dataset_id`, `dataset_name`, and `dataset_item_ids` for linking evaluations back to their source dataset
 - **Agent tests**: Contains the full calibrate config (system prompt, tools, test cases, etc.)
 - **Benchmarks**: Contains the calibrate config plus the `models` list being benchmarked
 - **Simulations**: Contains the full calibrate simulation config (personas, scenarios, metrics, tools, etc.)
@@ -951,6 +982,8 @@ if job["status"] == TaskStatus.DONE.value:
 ```
 
 **Backwards Compatibility**: When generating presigned URLs, skip entries that already start with `http` or `s3://` (older data with stored URLs).
+
+**Dataset item `audio_path`**: Stored as full `s3://bucket/key` URIs (unlike eval results which store bare S3 keys). The `_presign_audio_path()` helper in `routers/datasets.py` parses out the bucket and key before calling `generate_presigned_download_url()`. Falls back to the raw path if presigning fails. This applies to all dataset item responses (list, detail, add, update).
 
 ### 6. Background Job Pattern
 
