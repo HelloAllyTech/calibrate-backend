@@ -167,7 +167,7 @@ class AgentResponse(BaseModel):
 
 
 class RunTestRequest(BaseModel):
-    test_uuids: List[str]
+    test_uuids: Optional[List[str]] = None
 
 
 class ToolCallOutput(BaseModel):
@@ -907,27 +907,22 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
             detail="Agent connection not verified. Call POST /agents/{agent_uuid}/verify-connection first.",
         )
 
-    if not request.test_uuids:
-        raise HTTPException(
-            status_code=400, detail="At least one test UUID is required"
-        )
-
-    # Verify all tests exist and are linked to the agent
-    tests = []
-    for test_uuid in request.test_uuids:
-        test = get_test(test_uuid)
-        if not test:
-            raise HTTPException(status_code=404, detail=f"Test {test_uuid} not found")
-
-        # Verify agent-test link exists
-        link = get_agent_test_link(agent_uuid, test_uuid)
-        if not link:
+    if request.test_uuids:
+        # Verify all specified tests exist
+        tests = []
+        for test_uuid in request.test_uuids:
+            test = get_test(test_uuid)
+            if not test:
+                raise HTTPException(status_code=404, detail=f"Test {test_uuid} not found")
+            tests.append(test)
+    else:
+        # No test_uuids provided — run all tests linked to the agent
+        tests = get_tests_for_agent(agent_uuid)
+        if not tests:
             raise HTTPException(
                 status_code=400,
-                detail=f"Test {test_uuid} is not linked to this agent. Link the test first.",
+                detail="No tests linked to this agent. Link tests first or provide test_uuids.",
             )
-
-        tests.append(test)
 
     # Get S3 configuration
     try:
@@ -948,13 +943,14 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
     test_names = [test.get("name") for test in tests if test.get("name")]
 
     # Create job in database with details for recovery
+    test_uuids = [t["uuid"] for t in tests]
     job_id = create_agent_test_job(
         agent_id=agent_uuid,
         job_type="llm-unit-test",
         status=initial_status,
         details={
             "agent_uuid": agent_uuid,
-            "test_uuids": request.test_uuids,
+            "test_uuids": test_uuids,
             "test_names": test_names,
             "s3_bucket": s3_bucket,
         },
@@ -1024,7 +1020,6 @@ async def get_agent_test_run_status(task_id: str):
 
 
 class BenchmarkRequest(BaseModel):
-    test_uuids: List[str]
     models: List[str]  # List of model names to benchmark
 
 
@@ -1511,29 +1506,16 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
                 ),
             )
 
-    if not request.test_uuids:
-        raise HTTPException(
-            status_code=400, detail="At least one test UUID is required"
-        )
-
     if not request.models:
         raise HTTPException(status_code=400, detail="At least one model is required")
 
-    # Verify all tests exist and are linked to the agent
-    tests = []
-    for test_uuid in request.test_uuids:
-        test = get_test(test_uuid)
-        if not test:
-            raise HTTPException(status_code=404, detail=f"Test {test_uuid} not found")
-
-        link = get_agent_test_link(agent_uuid, test_uuid)
-        if not link:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Test {test_uuid} is not linked to this agent. Link the test first.",
-            )
-
-        tests.append(test)
+    # Benchmarks always run all tests linked to the agent
+    tests = get_tests_for_agent(agent_uuid)
+    if not tests:
+        raise HTTPException(
+            status_code=400,
+            detail="No tests linked to this agent. Link tests first.",
+        )
 
     # Get S3 configuration
     try:
@@ -1554,13 +1536,14 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
     test_names = [test.get("name") for test in tests if test.get("name")]
 
     # Create job in database with details for recovery
+    test_uuids = [t["uuid"] for t in tests]
     job_id = create_agent_test_job(
         agent_id=agent_uuid,
         job_type="llm-benchmark",
         status=initial_status,
         details={
             "agent_uuid": agent_uuid,
-            "test_uuids": request.test_uuids,
+            "test_uuids": test_uuids,
             "test_names": test_names,
             "models": request.models,
             "s3_bucket": s3_bucket,

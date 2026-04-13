@@ -191,7 +191,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 #### Relationship Management
 
 - `/agent-tools` - Link/unlink tools to agents
-- `/agent-tests` - Link/unlink tests to agents
+- `/agent-tests` - Link/unlink tests to agents (required for benchmarks; optional for run — run can also accept explicit test_uuids)
 
 #### Datasets
 
@@ -213,8 +213,8 @@ All dataset endpoints require JWT auth. Every DB operation is scoped to the auth
 - `GET /stt/evaluate/{task_id}` - Get STT evaluation status (includes timeout detection)
 - `POST /tts/evaluate` - Start TTS evaluation task
 - `GET /tts/evaluate/{task_id}` - Get TTS evaluation status (includes timeout detection)
-- `POST /agent-tests/agent/{uuid}/run` - Run agent unit tests
-- `POST /agent-tests/agent/{uuid}/benchmark` - Run multi-model benchmark
+- `POST /agent-tests/agent/{uuid}/run` - Run agent unit tests (optional `test_uuids` in body; if omitted, runs all linked tests)
+- `POST /agent-tests/agent/{uuid}/benchmark` - Run multi-model benchmark (always runs all linked tests; body only requires `models` list)
 - `GET /agent-tests/agent/{uuid}/runs` - List all test runs for an agent
 - `GET /agent-tests/run/{task_id}` - Get test run status (includes timeout detection)
 - `GET /agent-tests/benchmark/{task_id}` - Get benchmark status (includes timeout detection)
