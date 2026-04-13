@@ -184,6 +184,7 @@ class TestCaseResult(BaseModel):
 
     name: Optional[str] = None  # Test name, present during in-progress and done states
     passed: Optional[bool] = None  # Only present when done
+    reasoning: Optional[str] = None  # LLM judge reasoning or deterministic diff; null for passing tool call tests
     output: Optional[TestOutput] = None  # Only present when done
     test_case: Optional[Dict[str, Any]] = None  # Only present when done
 
@@ -461,6 +462,7 @@ def _parse_agent_test_results(results_data: Optional[List[dict]]) -> List[dict]:
             {
                 "name": test_case.get("name"),
                 "passed": metrics.get("passed", False),
+                "reasoning": metrics.get("reasoning"),
                 "output": {
                     "response": output_data.get("response"),
                     "tool_calls": output_data.get("tool_calls"),
