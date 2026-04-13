@@ -107,7 +107,7 @@ simulations
 | Table             | Purpose                                                                                                       |
 | ----------------- | ------------------------------------------------------------------------------------------------------------- |
 | `users`           | User accounts (Google OAuth or email/password credentials)                                                    |
-| `agents`          | AI agent configurations (system prompt, LLM config, STT/TTS settings)                                         |
+| `agents`          | AI agent configurations; `type` column distinguishes `agent` (platform-managed) from `agent_connection` (external HTTP endpoint) |
 | `tools`           | Tool/function definitions for agents                                                                          |
 | `tests`           | Test cases with evaluation criteria                                                                           |
 | `personas`        | Simulated user personas (characteristics, gender, language)                                                   |
@@ -611,6 +611,7 @@ This allows clients to see which tests have completed with their results while o
 Benchmark jobs (`llm-benchmark`) run a single `calibrate llm` command with all models specified at once. The calibrate CLI handles parallelization internally and generates the leaderboard automatically.
 
 - **Single command execution**: All models evaluated in one CLI call (e.g., `calibrate llm -c config.json -m gpt-4.1 claude-3.5-sonnet -p openrouter -o output`)
+- **Model name normalization (agent connections only)**: The frontend always sends model names in OpenRouter format (`provider/model`, e.g. `openai/gpt-4.1`). For agent connections, if `benchmark_provider` is not `openrouter`, the `provider/` prefix is stripped before passing to the CLI (e.g. `openai/gpt-4.1` → `gpt-4.1`). The original names are preserved for display in API responses (`model` field in `ModelResult`) and in `benchmark_models_verified` keys. This stripping does not apply to non-connection agents (`type: "agent"`).
 - **Internal parallelization**: The calibrate CLI handles concurrent model execution internally
 - **Automatic leaderboard**: The CLI generates the leaderboard in `output/leaderboard/` as part of the same command
 - **Output discovery**: After command completes, uses `os.walk()` on the output directory to find all `results.json` and `metrics.json` files
@@ -708,7 +709,15 @@ calibrate llm simulations run -c <config.json> -o <output_dir> -m <model> -n 4
 
 # Voice Agent Simulation (runs 4 simulations in parallel)
 calibrate agent simulation -c <config.json> -o <output_dir> -n 4
+
 ```
+
+**Agent connection verification** uses calibrate's Python API directly (not the CLI). The backend's `_verify_agent_connection()` in `agents.py` uses `TextAgentConnection(url=..., headers=...)` from `calibrate.connections`, then calls `await agent.verify(**kwargs)` where `kwargs` optionally contains `model`. The `verify()` method returns `{"ok": bool, "error": str|None, "sample_output": dict|None}`:
+- On success: `sample_output` contains the normalized agent response (`{"response": str|None, "tool_calls": list}`)
+- On structure errors (wrong keys/types): `sample_output` contains the raw JSON the agent returned
+- On connection/timeout/HTTP errors: `sample_output` is absent
+
+When `model` is passed as a kwarg, it's included in the verification request payload so the agent can route to the right model — used for per-model benchmark verification. For the post-save endpoint, the same model name normalization applies as for benchmarks: if `benchmark_provider` is not `openrouter`, the `provider/` prefix is stripped before sending to the agent (e.g. `openai/gpt-4.1` → `gpt-4.1`), but the original name is preserved as the key in `benchmark_models_verified`. The `sample_response` field in the API response carries this data through to the frontend. Two verify endpoints exist: `POST /agents/verify-connection` (pre-save, no auth, requires `agent_url` in the request body) and `POST /agents/{uuid}/verify-connection` (post-save, auth required, reads `agent_url`/`agent_headers` from the saved agent config). The pre-save endpoint is declared before the `/{agent_uuid}` routes to avoid FastAPI treating `verify-connection` as a UUID path parameter.
 
 **STT/TTS CLI Notes:**
 
@@ -799,7 +808,20 @@ ELEVENLABS_API_KEY=xxx
 OPENROUTER_API_KEY=xxx
 ```
 
+### Agent Types
+
+Agents have a `type` column in the database (and a `type` field in the API) that determines how they are evaluated:
+
+| Type                 | Description                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agent` (default)     | Platform-managed agent — system prompt, tools, LLM/STT/TTS providers are defined in the agent config         |
+| `agent_connection`    | External agent — the user's own agent running at `agent_url`; calibrate sends HTTP requests to it directly   |
+
+The `type` is set at creation time via `POST /agents` and returned in all agent responses. Existing agents default to `agent` via the `ALTER TABLE` migration. The duplicate endpoint carries over the original agent's type. All Pydantic models use `Literal["agent", "agent_connection"]` for the `type` field — invalid values are rejected with a 422 at both input and output serialization.
+
 ### Agent Configuration Schema
+
+**Agent** (`type: "agent"`):
 
 ```json
 {
@@ -826,6 +848,31 @@ OPENROUTER_API_KEY=xxx
   "data_extraction_fields": []
 }
 ```
+
+**Agent connection** (`type: "agent_connection"`):
+
+```json
+{
+  "agent_url": "https://your-agent.com/chat",
+  "agent_headers": {
+    "Authorization": "Bearer YOUR_API_KEY"
+  },
+  "connection_verified": true,
+  "connection_verified_at": "2026-04-08T12:00:00+00:00",
+  "connection_verified_error": null,
+  "supports_benchmark": true,
+  "benchmark_provider": "openrouter",
+  "benchmark_models_verified": {
+    "openai/gpt-4.1": { "verified": true, "verified_at": "...", "error": null }
+  },
+  "settings": {
+    "agent_speaks_first": true,
+    "max_assistant_turns": 20
+  }
+}
+```
+
+The `connection_verified` / `benchmark_models_verified` fields are managed by the verify endpoints and reset automatically when `agent_url` or `agent_headers` change (set to `false`/`null`/`{}` respectively, so the fields are always present in the response). They are stripped when duplicating an agent.
 
 **Simulation Config Generation**: When running simulations, `_build_calibrate_simulation_config()` builds the calibrate config from agent/personas/scenarios/metrics. Key fields always included:
 
@@ -1003,7 +1050,7 @@ Key Python packages:
 - `pydantic>=2.0.0` - Data validation
 - `python-dotenv>=1.0.0` - Environment variable loading
 - `openpyxl>=3.1.5` - Excel file parsing for leaderboards
-- `httpx>=0.27.0` - Async HTTP client for Google OAuth
+- `httpx>=0.27.0` - Async HTTP client (used in `auth.py` for Google OAuth token verification)
 - `python-jose[cryptography]>=3.3.0` - JWT token encoding/decoding
 - `bcrypt>=4.0.0` - Password hashing for username/password authentication
 - `sentry-sdk[fastapi]>=2.0.0` - Error tracking and performance monitoring

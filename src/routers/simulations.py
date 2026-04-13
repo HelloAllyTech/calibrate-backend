@@ -7,7 +7,7 @@ import threading
 import logging
 import tempfile
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, field_validator
@@ -313,6 +313,7 @@ class MetricResponse(BaseModel):
 class AgentSummaryResponse(BaseModel):
     uuid: str
     name: str
+    type: Literal["agent", "connection"]
     config: Optional[Dict[str, Any]] = None
     created_at: str
     updated_at: str
@@ -486,6 +487,7 @@ async def list_simulations(user_id: str = Depends(get_current_user_id)):
                 agent = AgentSummaryResponse(
                     uuid=agent_data["uuid"],
                     name=agent_data["name"],
+                    type=agent_data.get("type", "agent"),
                     config=agent_data.get("config"),
                     created_at=agent_data["created_at"],
                     updated_at=agent_data["updated_at"],
@@ -690,6 +692,7 @@ async def get_simulation_endpoint(
             agent = AgentSummaryResponse(
                 uuid=agent_data["uuid"],
                 name=agent_data["name"],
+                type=agent_data.get("type", "agent"),
                 config=agent_data.get("config"),
                 created_at=agent_data["created_at"],
                 updated_at=agent_data["updated_at"],
@@ -817,6 +820,7 @@ async def update_simulation_endpoint(
             agent = AgentSummaryResponse(
                 uuid=agent_data["uuid"],
                 name=agent_data["name"],
+                type=agent_data.get("type", "agent"),
                 config=agent_data.get("config"),
                 created_at=agent_data["created_at"],
                 updated_at=agent_data["updated_at"],
@@ -878,84 +882,81 @@ def _build_calibrate_simulation_config(
     """
     agent_config = agent.get("config") or {}
 
-    # Get model from agent config
-    llm_config = agent_config.get("llm", {})
-    model = llm_config.get("model", "gpt-4.1")
-
-    # Get tools from agent_tools table
-    agent_tools = get_tools_for_agent(agent["uuid"])
-    tool_configs = build_tool_configs(agent_tools)
-
-    # Build personas list as objects with label, characteristics, gender, and language
+    # Build personas list (same for both modes)
     persona_list = []
     for persona in personas:
         persona_config = persona.get("config") or {}
         persona_obj = {
-            "label": persona.get("name", ""),  # Store persona name/label
+            "label": persona.get("name", ""),
             "characteristics": persona.get("description") or persona.get("name"),
             "gender": persona_config.get("gender", "female"),
             "language": persona_config.get("language", "english"),
         }
-        # For voice simulations, add interruption_sensitivity if present
         if simulation_type == "voice":
-            interruption_sensitivity = persona_config.get(
+            persona_obj["interruption_sensitivity"] = persona_config.get(
                 "interruption_sensitivity", "medium"
             )
-            persona_obj["interruption_sensitivity"] = interruption_sensitivity
-
         if persona_obj["characteristics"]:
             persona_list.append(persona_obj)
 
-    # Build scenarios list as objects with name and description
-    scenario_list = []
-    for scenario in scenarios:
-        scenario_obj = {
-            "name": scenario.get("name", ""),  # Store scenario name/label
-            "description": scenario.get("description", ""),
-        }
-        scenario_list.append(scenario_obj)
-
-    # Build evaluation criteria from metrics
-    evaluation_criteria = [
-        {
-            "name": metric.get("name"),
-            "description": metric.get("description") or metric.get("name"),
-        }
-        for metric in metrics
-        if metric.get("name")
+    # Build scenarios list (same for both modes)
+    scenario_list = [
+        {"name": s.get("name", ""), "description": s.get("description", "")}
+        for s in scenarios
     ]
 
+    # Build evaluation criteria (same for both modes)
+    evaluation_criteria = [
+        {"name": m.get("name"), "description": m.get("description") or m.get("name")}
+        for m in metrics
+        if m.get("name")
+    ]
+
+    settings_config = agent_config.get("settings", {})
+    shared_settings = {
+        "agent_speaks_first": settings_config.get("agent_speaks_first", True),
+        "max_turns": settings_config.get("max_assistant_turns", 50),
+    }
+
+    if agent_config.get("agent_url"):
+        # Agent connection mode — agent owns its LLM; no system_prompt/tools/params
+        # Only supported for text simulations (caller must guard voice)
+        config: Dict[str, Any] = {
+            "agent_url": agent_config["agent_url"],
+            "personas": persona_list,
+            "scenarios": scenario_list,
+            "evaluation_criteria": evaluation_criteria,
+            "settings": shared_settings,
+        }
+        if agent_config.get("agent_headers"):
+            config["agent_headers"] = agent_config["agent_headers"]
+        return config
+
+    # Calibrate agent mode
+    llm_config = agent_config.get("llm", {})
+    model = llm_config.get("model", "gpt-4.1")
+
+    agent_tools = get_tools_for_agent(agent["uuid"])
+    tool_configs = build_tool_configs(agent_tools)
+
     config = {
+        "system_prompt": agent_config.get("system_prompt", ""),
         "tools": tool_configs,
         "personas": persona_list,
         "scenarios": scenario_list,
         "evaluation_criteria": evaluation_criteria,
-    }
-
-    config["system_prompt"] = agent_config.get("system_prompt", "")
-
-    # Copy settings from agent config, with defaults
-    settings_config = agent_config.get("settings", {})
-    config["settings"] = {
-        "agent_speaks_first": settings_config.get("agent_speaks_first", True),
-        "max_turns": settings_config.get("max_assistant_turns", 50),
+        "settings": shared_settings,
     }
 
     if simulation_type == "text":
         config["params"] = {"model": model}
     else:
-        # For voice simulations, include stt, tts, and llm configurations
-        # Get STT config from agent config (default: google)
         stt_config = agent_config.get("stt", {})
         if stt_config:
             config["stt"] = stt_config
-
-        # Get TTS config from agent config (default: google)
         tts_config = agent_config.get("tts", {})
         if tts_config:
             config["tts"] = tts_config
-
-        # Get LLM config from agent config (includes provider and model)
         if llm_config:
             config["llm"] = llm_config
 
@@ -1151,7 +1152,7 @@ def _update_text_simulation_intermediate_results(
 
 
 def _run_calibrate_text_simulation(
-    model: str,
+    model: Optional[str],
     calibrate_config: Dict[str, Any],
     input_dir: Path,
     output_dir: Path,
@@ -1179,9 +1180,10 @@ def _run_calibrate_text_simulation(
     """
     s3 = get_s3_client()
 
-    # Update config with model
+    # Update config with model only in Calibrate agent mode
     config = calibrate_config.copy()
-    config["params"] = {"model": model}
+    if model:
+        config["params"] = {"model": model}
 
     # Resolve directories to absolute paths
     input_dir = input_dir.resolve()
@@ -1202,8 +1204,7 @@ def _run_calibrate_text_simulation(
     scenarios_list = calibrate_config.get("scenarios", [])
     expected_total = len(personas_list) * len(scenarios_list)
 
-    # Run calibrate llm simulations run command
-    # Use absolute paths for config and output
+    # Build CLI command — agent connection mode omits -m (agent owns its model)
     run_cmd = [
         "calibrate",
         "simulations",
@@ -1213,11 +1214,11 @@ def _run_calibrate_text_simulation(
         str(config_file),
         "-o",
         str(output_dir),
-        "-m",
-        model,
         "-n",
         "2",
     ]
+    if model:
+        run_cmd += ["-m", model]
 
     logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
 
@@ -1967,7 +1968,13 @@ def run_simulation_task(
                         log_prefix=f"Voice simulation {task_id}",
                     )
                 else:
-                    model_to_use = calibrate_config["params"]["model"]
+                    # Agent connection mode has no params.model — pass None
+                    agent_cfg = agent.get("config") or {}
+                    model_to_use = (
+                        None
+                        if agent_cfg.get("agent_url")
+                        else calibrate_config["params"]["model"]
+                    )
                     result = _run_calibrate_text_simulation(
                         model=model_to_use,
                         calibrate_config=calibrate_config,
@@ -2088,6 +2095,20 @@ async def run_simulation_endpoint(
     agent = get_agent(agent_uuid)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Guard: agent connection is not supported for voice simulations
+    agent_config = agent.get("config") or {}
+    if agent_config.get("agent_url"):
+        if request.type == "voice":
+            raise HTTPException(
+                status_code=400,
+                detail="Voice simulations are not supported for agent connection mode. Use a Calibrate agent instead.",
+            )
+        if not agent_config.get("connection_verified"):
+            raise HTTPException(
+                status_code=400,
+                detail="Agent connection not verified. Call POST /agents/{agent_uuid}/verify-connection first.",
+            )
 
     # Get linked entities
     personas = get_personas_for_simulation(simulation_uuid)

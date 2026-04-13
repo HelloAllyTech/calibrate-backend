@@ -1,8 +1,10 @@
 import copy
 import logging
-from typing import Optional, List, Dict, Any
+from datetime import datetime, timezone
+from typing import Optional, List, Dict, Any, Literal
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from calibrate.connections import TextAgentConnection
 
 from db import (
     create_agent,
@@ -20,11 +22,48 @@ from auth_utils import get_current_user_id
 logger = logging.getLogger(__name__)
 
 
+async def _verify_agent_connection(
+    agent_url: str,
+    agent_headers: Optional[Dict[str, str]] = None,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Verify agent connection using calibrate's TextAgentConnection."""
+    agent = TextAgentConnection(url=agent_url, headers=agent_headers)
+
+    try:
+        kwargs = {}
+        if model:
+            kwargs["model"] = model
+        result = await agent.verify(**kwargs)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Unexpected error: {str(e)}",
+            "sample_response": None,
+        }
+
+    sample_output = result.get("sample_output")
+
+    if result["ok"]:
+        return {
+            "success": True,
+            "error": None,
+            "sample_response": sample_output,
+        }
+
+    return {
+        "success": False,
+        "error": result.get("error", "Verification failed"),
+        "sample_response": sample_output,
+    }
+
+
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
 class AgentCreate(BaseModel):
     name: str
+    type: Literal["agent", "connection"] = "agent"
     config: Optional[Dict[str, Any]] = None
 
 
@@ -36,6 +75,7 @@ class AgentUpdate(BaseModel):
 class AgentResponse(BaseModel):
     uuid: str
     name: str
+    type: Literal["agent", "connection"]
     config: Optional[Dict[str, Any]] = None
     created_at: str
     updated_at: str
@@ -55,6 +95,102 @@ class AgentDuplicateResponse(BaseModel):
     message: str
 
 
+class VerifyConnectionRequest(BaseModel):
+    agent_url: Optional[str] = None
+    agent_headers: Optional[Dict[str, str]] = None
+    model: Optional[str] = None
+
+
+class VerifyConnectionResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+    sample_response: Optional[Dict[str, Any]] = None
+
+
+@router.post("/verify-connection", response_model=VerifyConnectionResponse)
+async def verify_agent_connection_presave(request: VerifyConnectionRequest):
+    """
+    Verify an agent connection before saving (no agent UUID needed).
+    Requires agent_url in the request body.
+    """
+    if not request.agent_url:
+        raise HTTPException(status_code=400, detail="agent_url is required")
+
+    result = await _verify_agent_connection(
+        agent_url=request.agent_url,
+        agent_headers=request.agent_headers,
+        model=request.model,
+    )
+    return VerifyConnectionResponse(**result)
+
+
+@router.post("/{agent_uuid}/verify-connection", response_model=VerifyConnectionResponse)
+async def verify_agent_connection(
+    agent_uuid: str,
+    request: VerifyConnectionRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Verify a saved agent's connection and persist the result in the agent config.
+
+    - No model: basic check (required before running LLM unit tests or text simulations).
+    - With model: model-specific check (required for each model before running a benchmark).
+    """
+    agent = get_agent(agent_uuid)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if agent.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    agent_config = agent.get("config") or {}
+    agent_url = agent_config.get("agent_url")
+    if not agent_url:
+        raise HTTPException(
+            status_code=400,
+            detail="This agent does not have an agent_url configured. Add agent_url to use connection mode.",
+        )
+
+    agent_headers = agent_config.get("agent_headers")
+    model = request.model
+
+    # Strip provider/ prefix for non-openrouter providers so the agent
+    # receives just the model name (e.g. "gpt-4.1" not "openai/gpt-4.1").
+    verify_model = model
+    if model and "/" in model:
+        benchmark_provider = agent_config.get("benchmark_provider", "openrouter")
+        if benchmark_provider != "openrouter":
+            verify_model = model.split("/", 1)[-1]
+
+    result = await _verify_agent_connection(
+        agent_url=agent_url,
+        agent_headers=agent_headers,
+        model=verify_model,
+    )
+
+    # Persist verification result into agent config
+    now = datetime.now(timezone.utc).isoformat()
+    new_config = copy.deepcopy(agent_config)
+
+    if model:
+        # Model-specific verification for benchmarks
+        benchmark_verified = new_config.get("benchmark_models_verified") or {}
+        benchmark_verified[model] = {
+            "verified": result["success"],
+            "verified_at": now,
+            "error": result["error"],
+        }
+        new_config["benchmark_models_verified"] = benchmark_verified
+    else:
+        # Basic connection verification
+        new_config["connection_verified"] = result["success"]
+        new_config["connection_verified_at"] = now
+        new_config["connection_verified_error"] = result["error"]
+
+    update_agent(agent_uuid=agent_uuid, config=new_config)
+
+    return VerifyConnectionResponse(**result)
+
+
 @router.post("", response_model=AgentCreateResponse)
 async def create_agent_endpoint(
     agent: AgentCreate, user_id: str = Depends(get_current_user_id)
@@ -62,6 +198,7 @@ async def create_agent_endpoint(
     """Create a new agent."""
     agent_uuid = create_agent(
         name=agent.name,
+        agent_type=agent.type,
         config=agent.config,
         user_id=user_id,
     )
@@ -102,6 +239,17 @@ async def update_agent_endpoint(
     # Verify user owns this agent
     if existing_agent.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # If agent_url or agent_headers changed, reset all verification flags
+    if agent.config is not None:
+        existing_config = existing_agent.get("config") or {}
+        if agent.config.get("agent_url") != existing_config.get(
+            "agent_url"
+        ) or agent.config.get("agent_headers") != existing_config.get("agent_headers"):
+            agent.config["connection_verified"] = False
+            agent.config["connection_verified_at"] = None
+            agent.config["connection_verified_error"] = None
+            agent.config["benchmark_models_verified"] = {}
 
     # Update only provided fields
     updated = update_agent(
@@ -168,10 +316,16 @@ async def duplicate_agent_endpoint(
     if new_config:
         # Deep copy the config to avoid reference issues
         new_config = copy.deepcopy(new_config)
+        # Strip verification flags — the duplicated agent's connection is unverified
+        new_config.pop("connection_verified", None)
+        new_config.pop("connection_verified_at", None)
+        new_config.pop("connection_verified_error", None)
+        new_config.pop("benchmark_models_verified", None)
 
     # Create the new agent
     new_agent_uuid = create_agent(
         name=new_name,
+        agent_type=original_agent.get("type", "agent"),
         config=new_config,
         user_id=user_id,
     )
