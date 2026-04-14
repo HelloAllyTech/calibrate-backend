@@ -8,7 +8,7 @@ import traceback
 import threading
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -160,13 +160,14 @@ class TestResponse(BaseModel):
 class AgentResponse(BaseModel):
     uuid: str
     name: str
+    type: Literal["agent", "connection"]
     config: Dict[str, Any] | None = None
     created_at: str
     updated_at: str
 
 
 class RunTestRequest(BaseModel):
-    test_uuids: List[str]
+    test_uuids: Optional[List[str]] = None
 
 
 class ToolCallOutput(BaseModel):
@@ -373,16 +374,7 @@ def _build_calibrate_config(
     """
     agent_config = agent.get("config") or {}
 
-    # Get model from param or agent config
-    if model is None:
-        llm_config = agent_config.get("llm", {})
-        model = llm_config.get("model", "gpt-4.1")
-
-    # Get tools from agent_tools table
-    agent_tools = get_tools_for_agent(agent["uuid"])
-    tool_configs = build_tool_configs(agent_tools)
-
-    # Combine test cases from all tests
+    # Combine test cases from all tests (same for both modes)
     all_test_cases = []
     for test in tests:
         test_name = test.get("name")
@@ -408,6 +400,24 @@ def _build_calibrate_config(
             test_config["evaluation"]["tool_calls"] = tool_calls
 
         all_test_cases.append(test_config)
+
+    if agent_config.get("agent_url"):
+        # Agent connection mode — agent owns its LLM; no system_prompt/tools/model in config
+        config: Dict[str, Any] = {
+            "agent_url": agent_config["agent_url"],
+            "test_cases": all_test_cases,
+        }
+        if agent_config.get("agent_headers"):
+            config["agent_headers"] = agent_config["agent_headers"]
+        return config
+
+    # Calibrate agent mode
+    if model is None:
+        llm_config = agent_config.get("llm", {})
+        model = llm_config.get("model", "gpt-4.1")
+
+    agent_tools = get_tools_for_agent(agent["uuid"])
+    tool_configs = build_tool_configs(agent_tools)
 
     return {
         "params": {"model": model},
@@ -639,12 +649,7 @@ def run_llm_test_task(
             try:
                 # Build calibrate config
                 calibrate_config = _build_calibrate_config(agent, tests)
-                model = calibrate_config["params"]["model"]
-
-                # Get provider from agent config (default to openrouter)
                 agent_config = agent.get("config") or {}
-                llm_config = agent_config.get("llm", {})
-                provider = llm_config.get("provider", "openrouter")
 
                 # Create directories
                 input_dir = temp_path / "input"
@@ -657,19 +662,35 @@ def run_llm_test_task(
                 with open(config_file, "w", encoding="utf-8") as f:
                     json.dump(calibrate_config, f, indent=2)
 
-                # Run calibrate llm command with single model
-                run_cmd = [
-                    "calibrate",
-                    "llm",
-                    "-c",
-                    str(config_file),
-                    "-m",
-                    model,
-                    "-p",
-                    provider,
-                    "-o",
-                    str(output_dir),
-                ]
+                if agent_config.get("agent_url"):
+                    # Agent connection mode: agent owns its model — no -m or -p
+                    model = "agent-connection"
+                    run_cmd = [
+                        "calibrate",
+                        "llm",
+                        "-c",
+                        str(config_file),
+                        "-o",
+                        str(output_dir),
+                        "--skip-verify",
+                    ]
+                else:
+                    # Calibrate agent mode: use model + provider from agent config
+                    model = calibrate_config["params"]["model"]
+                    llm_config = agent_config.get("llm", {})
+                    provider = llm_config.get("provider", "openrouter")
+                    run_cmd = [
+                        "calibrate",
+                        "llm",
+                        "-c",
+                        str(config_file),
+                        "-m",
+                        model,
+                        "-p",
+                        provider,
+                        "-o",
+                        str(output_dir),
+                    ]
 
                 logger.info(f"Running LLM test command: {' '.join(run_cmd)}")
 
@@ -879,27 +900,30 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    if not request.test_uuids:
+    # Guard: agent connection must be verified before running tests
+    agent_config = agent.get("config") or {}
+    if agent_config.get("agent_url") and not agent_config.get("connection_verified"):
         raise HTTPException(
-            status_code=400, detail="At least one test UUID is required"
+            status_code=400,
+            detail="Agent connection not verified. Call POST /agents/{agent_uuid}/verify-connection first.",
         )
 
-    # Verify all tests exist and are linked to the agent
-    tests = []
-    for test_uuid in request.test_uuids:
-        test = get_test(test_uuid)
-        if not test:
-            raise HTTPException(status_code=404, detail=f"Test {test_uuid} not found")
-
-        # Verify agent-test link exists
-        link = get_agent_test_link(agent_uuid, test_uuid)
-        if not link:
+    if request.test_uuids:
+        # Verify all specified tests exist
+        tests = []
+        for test_uuid in request.test_uuids:
+            test = get_test(test_uuid)
+            if not test:
+                raise HTTPException(status_code=404, detail=f"Test {test_uuid} not found")
+            tests.append(test)
+    else:
+        # No test_uuids provided — run all tests linked to the agent
+        tests = get_tests_for_agent(agent_uuid)
+        if not tests:
             raise HTTPException(
                 status_code=400,
-                detail=f"Test {test_uuid} is not linked to this agent. Link the test first.",
+                detail="No tests linked to this agent. Link tests first or provide test_uuids.",
             )
-
-        tests.append(test)
 
     # Get S3 configuration
     try:
@@ -920,13 +944,14 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
     test_names = [test.get("name") for test in tests if test.get("name")]
 
     # Create job in database with details for recovery
+    test_uuids = [t["uuid"] for t in tests]
     job_id = create_agent_test_job(
         agent_id=agent_uuid,
         job_type="llm-unit-test",
         status=initial_status,
         details={
             "agent_uuid": agent_uuid,
-            "test_uuids": request.test_uuids,
+            "test_uuids": test_uuids,
             "test_names": test_names,
             "s3_bucket": s3_bucket,
         },
@@ -996,7 +1021,6 @@ async def get_agent_test_run_status(task_id: str):
 
 
 class BenchmarkRequest(BaseModel):
-    test_uuids: List[str]
     models: List[str]  # List of model names to benchmark
 
 
@@ -1023,11 +1047,18 @@ def _update_benchmark_intermediate_results(
     task_id: str,
     output_dir: Path,
     models: List[str],
+    cli_models: Optional[List[str]] = None,
 ) -> int:
     """
     Update intermediate results for a benchmark job.
     Returns the number of models with completed results.
+
+    models: display names (original from frontend, e.g. "openai/gpt-4.1")
+    cli_models: names passed to CLI (may be stripped, e.g. "gpt-4.1"); defaults to models
     """
+    if cli_models is None:
+        cli_models = models
+
     # Find all results in output directory
     all_results = _find_all_results_in_output(output_dir)
     folder_names = list(all_results.keys())
@@ -1035,8 +1066,8 @@ def _update_benchmark_intermediate_results(
     model_results = []
     completed_count = 0
 
-    for model in models:
-        matched_folder = _match_model_to_folder(model, folder_names)
+    for model, cli_model in zip(models, cli_models):
+        matched_folder = _match_model_to_folder(cli_model, folder_names)
 
         if matched_folder and matched_folder in all_results:
             results_data, metrics_data = all_results[matched_folder]
@@ -1150,10 +1181,12 @@ def run_benchmark_task(
 
             try:
                 # Build the calibrate config
-                calibrate_config = _build_calibrate_config(
-                    agent, tests, model=models[0]
-                )
-                calibrate_config["params"] = {}  # Clear model, will be set via CLI
+                calibrate_config = _build_calibrate_config(agent, tests)
+                agent_config = agent.get("config") or {}
+
+                # Clear any model from config — models are passed via CLI flags
+                if "params" in calibrate_config:
+                    calibrate_config["params"] = {}
 
                 # Create directories
                 input_dir = temp_path / "input"
@@ -1166,29 +1199,32 @@ def run_benchmark_task(
                 with open(config_file, "w", encoding="utf-8") as f:
                     json.dump(calibrate_config, f, indent=2)
 
-                # Get provider from agent config (default to openrouter)
-                agent_config = agent.get("config") or {}
-                llm_config = agent_config.get("llm", {})
-                provider = llm_config.get("provider", "openrouter")
-
-                # Run calibrate llm command with all models at once
-                # The CLI handles parallelization internally and generates leaderboard
-                run_cmd = (
-                    [
-                        "calibrate",
-                        "llm",
-                        "-c",
-                        str(config_file),
-                        "-m",
-                    ]
-                    + models
-                    + [
-                        "-p",
-                        provider,
-                        "-o",
-                        str(output_dir),
-                    ]
-                )
+                if agent_config.get("agent_url"):
+                    # Agent connection mode: -m {models} but no -p
+                    # Calibrate sends model in each request body; agent routes internally
+                    # Frontend always sends models in openrouter format (provider/model).
+                    # Strip the provider prefix for non-openrouter providers so the
+                    # agent receives just the model name (e.g. "gpt-4.1" not "openai/gpt-4.1").
+                    benchmark_provider = agent_config.get("benchmark_provider", "openrouter")
+                    if benchmark_provider != "openrouter":
+                        cli_models = [m.split("/", 1)[-1] if "/" in m else m for m in models]
+                    else:
+                        cli_models = models
+                    run_cmd = (
+                        ["calibrate", "llm", "-c", str(config_file), "-m"]
+                        + cli_models
+                        + ["-o", str(output_dir), "--skip-verify"]
+                    )
+                else:
+                    # Calibrate agent mode: -m {models} -p {provider}
+                    llm_config = agent_config.get("llm", {})
+                    provider = llm_config.get("provider", "openrouter")
+                    cli_models = models
+                    run_cmd = (
+                        ["calibrate", "llm", "-c", str(config_file), "-m"]
+                        + cli_models
+                        + ["-p", provider, "-o", str(output_dir)]
+                    )
 
                 logger.info(f"Running benchmark command: {' '.join(run_cmd)}")
 
@@ -1213,7 +1249,7 @@ def run_benchmark_task(
                     prev_completed = 0
                     while process.poll() is None:
                         completed = _update_benchmark_intermediate_results(
-                            task_id, output_dir, models
+                            task_id, output_dir, models, cli_models
                         )
                         if completed != prev_completed:
                             logger.info(
@@ -1223,7 +1259,7 @@ def run_benchmark_task(
                         time.sleep(2)  # Poll every 2 seconds
 
                     # Final update after process completes
-                    _update_benchmark_intermediate_results(task_id, output_dir, models)
+                    _update_benchmark_intermediate_results(task_id, output_dir, models, cli_models)
 
                 # Read stdout/stderr
                 with open(stdout_path, "r") as f:
@@ -1261,8 +1297,8 @@ def run_benchmark_task(
                 logger.info(f"Found result folders: {folder_names}")
 
                 model_results = []
-                for model in models:
-                    matched_folder = _match_model_to_folder(model, folder_names)
+                for model, cli_model in zip(models, cli_models):
+                    matched_folder = _match_model_to_folder(cli_model, folder_names)
 
                     if matched_folder and matched_folder in all_results:
                         results_data, metrics_data = all_results[matched_folder]
@@ -1452,29 +1488,35 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    if not request.test_uuids:
-        raise HTTPException(
-            status_code=400, detail="At least one test UUID is required"
-        )
-
     if not request.models:
         raise HTTPException(status_code=400, detail="At least one model is required")
 
-    # Verify all tests exist and are linked to the agent
-    tests = []
-    for test_uuid in request.test_uuids:
-        test = get_test(test_uuid)
-        if not test:
-            raise HTTPException(status_code=404, detail=f"Test {test_uuid} not found")
-
-        link = get_agent_test_link(agent_uuid, test_uuid)
-        if not link:
+    # Guard: for agent connection mode, verify each requested model is verified
+    agent_config = agent.get("config") or {}
+    if agent_config.get("agent_url"):
+        benchmark_verified = agent_config.get("benchmark_models_verified") or {}
+        unverified = [
+            m
+            for m in request.models
+            if not benchmark_verified.get(m, {}).get("verified")
+        ]
+        if unverified:
             raise HTTPException(
                 status_code=400,
-                detail=f"Test {test_uuid} is not linked to this agent. Link the test first.",
+                detail=(
+                    f"The following models are not verified for this agent connection: "
+                    f"{', '.join(unverified)}. "
+                    f"Call POST /agents/{agent_uuid}/verify-connection with each model first."
+                ),
             )
 
-        tests.append(test)
+    # Benchmarks always run all tests linked to the agent
+    tests = get_tests_for_agent(agent_uuid)
+    if not tests:
+        raise HTTPException(
+            status_code=400,
+            detail="No tests linked to this agent. Link tests first.",
+        )
 
     # Get S3 configuration
     try:
@@ -1495,13 +1537,14 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
     test_names = [test.get("name") for test in tests if test.get("name")]
 
     # Create job in database with details for recovery
+    test_uuids = [t["uuid"] for t in tests]
     job_id = create_agent_test_job(
         agent_id=agent_uuid,
         job_type="llm-benchmark",
         status=initial_status,
         details={
             "agent_uuid": agent_uuid,
-            "test_uuids": request.test_uuids,
+            "test_uuids": test_uuids,
             "test_names": test_names,
             "models": request.models,
             "s3_bucket": s3_bucket,

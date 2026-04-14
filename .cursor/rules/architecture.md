@@ -107,7 +107,7 @@ simulations
 | Table             | Purpose                                                                                                       |
 | ----------------- | ------------------------------------------------------------------------------------------------------------- |
 | `users`           | User accounts (Google OAuth or email/password credentials)                                                    |
-| `agents`          | AI agent configurations (system prompt, LLM config, STT/TTS settings)                                         |
+| `agents`          | AI agent configurations; `type` column distinguishes `agent` (platform-managed) from `connection` (external HTTP endpoint) |
 | `tools`           | Tool/function definitions for agents                                                                          |
 | `tests`           | Test cases with evaluation criteria                                                                           |
 | `personas`        | Simulated user personas (characteristics, gender, language)                                                   |
@@ -191,7 +191,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 #### Relationship Management
 
 - `/agent-tools` - Link/unlink tools to agents
-- `/agent-tests` - Link/unlink tests to agents
+- `/agent-tests` - Link/unlink tests to agents (required for benchmarks; optional for run — run can also accept explicit test_uuids)
 
 #### Datasets
 
@@ -213,8 +213,8 @@ All dataset endpoints require JWT auth. Every DB operation is scoped to the auth
 - `GET /stt/evaluate/{task_id}` - Get STT evaluation status (includes timeout detection)
 - `POST /tts/evaluate` - Start TTS evaluation task
 - `GET /tts/evaluate/{task_id}` - Get TTS evaluation status (includes timeout detection)
-- `POST /agent-tests/agent/{uuid}/run` - Run agent unit tests
-- `POST /agent-tests/agent/{uuid}/benchmark` - Run multi-model benchmark
+- `POST /agent-tests/agent/{uuid}/run` - Run agent unit tests (optional `test_uuids` in body; if omitted, runs all linked tests)
+- `POST /agent-tests/agent/{uuid}/benchmark` - Run multi-model benchmark (always runs all linked tests; body only requires `models` list)
 - `GET /agent-tests/agent/{uuid}/runs` - List all test runs for an agent
 - `GET /agent-tests/run/{task_id}` - Get test run status (includes timeout detection)
 - `GET /agent-tests/benchmark/{task_id}` - Get benchmark status (includes timeout detection)
@@ -409,10 +409,14 @@ Simulation jobs can be aborted via `POST /simulations/run/{job_uuid}/abort`. Unl
 3. Add `"aborted": true` to each incomplete simulation result (where `evaluation_results` is `None`), and `"aborted": false` to completed ones. Transcripts are left untouched.
 4. Save with `status=done` and `aborted: true` in job details
 
-**Race condition handling**: The `_is_job_aborted(task_id)` helper checks for the `aborted` flag in job details. It is used in all places where the background thread would otherwise overwrite abort results:
+**Race condition handling**: The `_is_job_aborted(task_id)` helper checks for the `aborted` flag in job details. It is checked at multiple layers to prevent the background monitoring thread from overwriting abort state:
 
-- `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` call it after the polling loop exits. If set, they return early without final processing.
-- `run_simulation_task` calls it before the final `update_simulation_job` call and in all exception handlers. If set, it returns early (the `finally` block still triggers the queue).
+- **Inside the polling loops** (primary defense): Both `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` check `_is_job_aborted()` at the start of each loop iteration. If set, they call `kill_process_group(process.pid, task_id)` followed by `process.wait(timeout=5)` to terminate the subprocess and all its children, then `break` out of the monitoring loop. The 5-second timeout prevents the monitoring thread from blocking indefinitely if the process somehow survives SIGKILL (e.g., stuck in uninterruptible I/O); on timeout it logs a warning and moves on. This prevents orphan `calibrate` CLI processes from continuing to run (consuming resources and making LLM API calls) after the user aborts.
+- **Inside `_update_text_simulation_intermediate_results`**: Checks before writing to DB, closing the race window between the loop-level check and the actual DB write.
+- **After the polling loop exits**: `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` check again before final processing. If set, they return early.
+- **In `run_simulation_task`**: Checks before the final `update_simulation_job` call and in all exception handlers. If set, it returns early (the `finally` block still triggers the queue).
+
+**Why all layers matter**: Without the in-loop checks, a race occurs when the monitoring thread has already entered the loop body (passed `process.poll()`) before the abort handler kills the process and sets `status=DONE`. The thread's `update_simulation_job(status=IN_PROGRESS)` would overwrite the abort state, leaving the job stuck as `IN_PROGRESS` with no running process.
 
 ### Job Timeout Detection
 
@@ -611,6 +615,7 @@ This allows clients to see which tests have completed with their results while o
 Benchmark jobs (`llm-benchmark`) run a single `calibrate llm` command with all models specified at once. The calibrate CLI handles parallelization internally and generates the leaderboard automatically.
 
 - **Single command execution**: All models evaluated in one CLI call (e.g., `calibrate llm -c config.json -m gpt-4.1 claude-3.5-sonnet -p openrouter -o output`)
+- **Model name normalization (agent connections only)**: The frontend always sends model names in OpenRouter format (`provider/model`, e.g. `openai/gpt-4.1`). For agent connections, if `benchmark_provider` is not `openrouter`, the `provider/` prefix is stripped before passing to the CLI (e.g. `openai/gpt-4.1` → `gpt-4.1`). The original names are preserved for display in API responses (`model` field in `ModelResult`) and in `benchmark_models_verified` keys. This stripping does not apply to non-connection agents (`type: "agent"`).
 - **Internal parallelization**: The calibrate CLI handles concurrent model execution internally
 - **Automatic leaderboard**: The CLI generates the leaderboard in `output/leaderboard/` as part of the same command
 - **Output discovery**: After command completes, uses `os.walk()` on the output directory to find all `results.json` and `metrics.json` files
@@ -708,7 +713,24 @@ calibrate llm simulations run -c <config.json> -o <output_dir> -m <model> -n 4
 
 # Voice Agent Simulation (runs 4 simulations in parallel)
 calibrate agent simulation -c <config.json> -o <output_dir> -n 4
+
 ```
+
+**`--skip-verify` for agent connections**: All CLI commands for agent connections (`calibrate llm` for tests/benchmarks, `calibrate simulations --type text`) pass `--skip-verify` to skip the CLI's built-in connection verification. The backend already verifies connections via the `/agents/{uuid}/verify-connection` endpoint before running jobs, making the CLI's verification redundant.
+
+**Agent connection verification** uses calibrate's Python API directly (not the CLI). The backend's `_verify_agent_connection()` in `agents.py` uses `TextAgentConnection(url=..., headers=...)` from `calibrate.connections`, then calls `await agent.verify(**kwargs)` where `kwargs` optionally contains `model`. The `verify()` method returns `{"ok": bool, "error": str|None, "sample_output": dict|None}`:
+- On success: `sample_output` contains the normalized agent response (`{"response": str|None, "tool_calls": list}`)
+- On structure errors (wrong keys/types): `sample_output` contains the raw JSON the agent returned
+- On connection/timeout/HTTP errors: `sample_output` is absent
+
+When `model` is passed as a kwarg, it's included in the verification request payload so the agent can route to the right model — used for per-model benchmark verification. For the post-save endpoint, the same model name normalization applies as for benchmarks: if `benchmark_provider` is not `openrouter`, the `provider/` prefix is stripped before sending to the agent (e.g. `openai/gpt-4.1` → `gpt-4.1`), but the original name is preserved as the key in `benchmark_models_verified`. The `sample_response` field in the API response carries this data through to the frontend. Two verify endpoints exist: `POST /agents/verify-connection` (pre-save, auth required, requires `agent_url` in the request body) and `POST /agents/{uuid}/verify-connection` (post-save, auth required, reads `agent_url`/`agent_headers` from the saved agent config). The pre-save endpoint is declared before the `/{agent_uuid}` routes to avoid FastAPI treating `verify-connection` as a UUID path parameter.
+
+**Race condition protection (post-save verify)**: The post-save endpoint re-reads the agent's config from the database **after** the `await agent.verify()` call completes, right before persisting the result. This prevents concurrent verify calls (e.g., two different models verified simultaneously) from overwriting each other — without this, both calls would snapshot the config before the slow network call, then the second write would clobber the first's `benchmark_models_verified` entry.
+
+**Security: URL validation and header sanitization** — `_verify_agent_connection()` applies two safeguards before making outbound requests:
+
+1. **URL validation** (`_validate_agent_url()`): Rejects non-HTTP(S) schemes, missing hostnames, localhost, and `.local` domains by string check, then **resolves the hostname via `socket.getaddrinfo`** and rejects any resolved IP that is loopback, private (RFC 1918), link-local (`169.254.x.x`, `fe80::`), reserved, multicast, or unspecified — using Python's `ipaddress` module (`is_loopback`, `is_private`, `is_reserved`, `is_link_local`, `is_multicast`, `is_unspecified`). This prevents SSRF via DNS rebinding, numeric IP encoding tricks, and cloud metadata endpoints (`169.254.169.254`).
+2. **Header sanitization** (`_sanitize_headers()`): Strips hop-by-hop and security-sensitive headers (`host`, `transfer-encoding`, `content-length`, `connection`, `upgrade`, `te`, `trailer`, `keep-alive`, `proxy-authorization`, `proxy-authenticate`, `proxy-connection`) from user-supplied `agent_headers` before forwarding.
 
 **STT/TTS CLI Notes:**
 
@@ -799,7 +821,20 @@ ELEVENLABS_API_KEY=xxx
 OPENROUTER_API_KEY=xxx
 ```
 
+### Agent Types
+
+Agents have a `type` column in the database (and a `type` field in the API) that determines how they are evaluated:
+
+| Type                 | Description                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agent` (default)     | Platform-managed agent — system prompt, tools, LLM/STT/TTS providers are defined in the agent config         |
+| `connection`          | External agent — the user's own agent running at `agent_url`; calibrate sends HTTP requests to it directly   |
+
+The `type` is set at creation time via `POST /agents` and returned in all agent responses. Existing agents default to `agent` via the `ALTER TABLE` migration. The duplicate endpoint carries over the original agent's type. All Pydantic models use `Literal["agent", "connection"]` for the `type` field — invalid values are rejected with a 422 at both input and output serialization.
+
 ### Agent Configuration Schema
+
+**Agent** (`type: "agent"`):
 
 ```json
 {
@@ -826,6 +861,31 @@ OPENROUTER_API_KEY=xxx
   "data_extraction_fields": []
 }
 ```
+
+**Agent connection** (`type: "connection"`):
+
+```json
+{
+  "agent_url": "https://your-agent.com/chat",
+  "agent_headers": {
+    "Authorization": "Bearer YOUR_API_KEY"
+  },
+  "connection_verified": true,
+  "connection_verified_at": "2026-04-08T12:00:00+00:00",
+  "connection_verified_error": null,
+  "supports_benchmark": true,
+  "benchmark_provider": "openrouter",
+  "benchmark_models_verified": {
+    "openai/gpt-4.1": { "verified": true, "verified_at": "...", "error": null }
+  },
+  "settings": {
+    "agent_speaks_first": true,
+    "max_assistant_turns": 20
+  }
+}
+```
+
+The `connection_verified` / `benchmark_models_verified` fields are managed by the verify endpoints, can also be set directly via `PUT /agents/{uuid}` (top-level fields on the update request body, merged into config), and are reset automatically when `agent_url` or `agent_headers` change (set to `false`/`null`/`{}` respectively, so the fields are always present in the response). They are stripped when duplicating an agent.
 
 **Simulation Config Generation**: When running simulations, `_build_calibrate_simulation_config()` builds the calibrate config from agent/personas/scenarios/metrics. Key fields always included:
 
@@ -1003,7 +1063,7 @@ Key Python packages:
 - `pydantic>=2.0.0` - Data validation
 - `python-dotenv>=1.0.0` - Environment variable loading
 - `openpyxl>=3.1.5` - Excel file parsing for leaderboards
-- `httpx>=0.27.0` - Async HTTP client for Google OAuth
+- `httpx>=0.27.0` - Async HTTP client (used in `auth.py` for Google OAuth token verification)
 - `python-jose[cryptography]>=3.3.0` - JWT token encoding/decoding
 - `bcrypt>=4.0.0` - Password hashing for username/password authentication
 - `sentry-sdk[fastapi]>=2.0.0` - Error tracking and performance monitoring

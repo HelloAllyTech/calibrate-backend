@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlite3 import IntegrityError
@@ -52,6 +52,7 @@ class ToolResponse(BaseModel):
 class AgentResponse(BaseModel):
     uuid: str
     name: str
+    type: Literal["agent", "connection"]
     config: Dict[str, Any] | None = None
     created_at: str
     updated_at: str

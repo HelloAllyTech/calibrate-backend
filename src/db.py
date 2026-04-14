@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
-
 logger = logging.getLogger(__name__)
 
 # Database path
@@ -60,6 +59,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'agent',
                 config TEXT,
                 user_id TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -383,6 +383,13 @@ def init_db():
                 # Column already exists
                 pass
 
+        try:
+            cursor.execute(
+                "ALTER TABLE agents ADD COLUMN type TEXT NOT NULL DEFAULT 'agent'"
+            )
+        except sqlite3.OperationalError:
+            pass
+
         conn.commit()
 
         # Create default user if not exists and update existing rows with NULL user_id
@@ -576,12 +583,16 @@ def create_user_with_password(
 
 
 def create_agent(
-    name: str, config: Optional[Dict[str, Any]] = None, user_id: str = None
+    name: str,
+    agent_type: str = "agent",
+    config: Optional[Dict[str, Any]] = None,
+    user_id: str = None,
 ) -> str:
     """Create a new agent and return its UUID.
 
     Args:
         name: Name of the agent
+        agent_type: Type of agent — 'agent' or 'connection'
         config: Optional configuration dict
         user_id: UUID of the user creating this agent (required)
 
@@ -592,16 +603,14 @@ def create_agent(
         raise ValueError("user_id is required when creating an agent")
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # Generate UUID for the agent
         agent_uuid = str(uuid.uuid4())
-        # Serialize config to JSON string for storage
         config_json = json.dumps(config) if config is not None else None
         cursor.execute(
             """
-            INSERT INTO agents (uuid, name, config, user_id)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO agents (uuid, name, type, config, user_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (agent_uuid, name, config_json, user_id),
+            (agent_uuid, name, agent_type, config_json, user_id),
         )
         conn.commit()
         logger.info(f"Created agent with UUID: {agent_uuid}")
