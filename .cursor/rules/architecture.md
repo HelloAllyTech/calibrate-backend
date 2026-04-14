@@ -107,7 +107,7 @@ simulations
 | Table             | Purpose                                                                                                       |
 | ----------------- | ------------------------------------------------------------------------------------------------------------- |
 | `users`           | User accounts (Google OAuth or email/password credentials)                                                    |
-| `agents`          | AI agent configurations; `type` column distinguishes `agent` (platform-managed) from `agent_connection` (external HTTP endpoint) |
+| `agents`          | AI agent configurations; `type` column distinguishes `agent` (platform-managed) from `connection` (external HTTP endpoint) |
 | `tools`           | Tool/function definitions for agents                                                                          |
 | `tests`           | Test cases with evaluation criteria                                                                           |
 | `personas`        | Simulated user personas (characteristics, gender, language)                                                   |
@@ -411,7 +411,7 @@ Simulation jobs can be aborted via `POST /simulations/run/{job_uuid}/abort`. Unl
 
 **Race condition handling**: The `_is_job_aborted(task_id)` helper checks for the `aborted` flag in job details. It is checked at multiple layers to prevent the background monitoring thread from overwriting abort state:
 
-- **Inside the polling loops** (primary defense): Both `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` check `_is_job_aborted()` at the start of each loop iteration. If set, they `break` out of the monitoring loop immediately, preventing any `update_simulation_job(status=IN_PROGRESS)` call from overwriting the abort handler's `status=DONE`.
+- **Inside the polling loops** (primary defense): Both `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` check `_is_job_aborted()` at the start of each loop iteration. If set, they call `kill_process_group(process.pid, task_id)` followed by `process.wait(timeout=5)` to terminate the subprocess and all its children, then `break` out of the monitoring loop. The 5-second timeout prevents the monitoring thread from blocking indefinitely if the process somehow survives SIGKILL (e.g., stuck in uninterruptible I/O); on timeout it logs a warning and moves on. This prevents orphan `calibrate` CLI processes from continuing to run (consuming resources and making LLM API calls) after the user aborts.
 - **Inside `_update_text_simulation_intermediate_results`**: Checks before writing to DB, closing the race window between the loop-level check and the actual DB write.
 - **After the polling loop exits**: `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` check again before final processing. If set, they return early.
 - **In `run_simulation_task`**: Checks before the final `update_simulation_job` call and in all exception handlers. If set, it returns early (the `finally` block still triggers the queue).
@@ -723,7 +723,12 @@ calibrate agent simulation -c <config.json> -o <output_dir> -n 4
 - On structure errors (wrong keys/types): `sample_output` contains the raw JSON the agent returned
 - On connection/timeout/HTTP errors: `sample_output` is absent
 
-When `model` is passed as a kwarg, it's included in the verification request payload so the agent can route to the right model — used for per-model benchmark verification. For the post-save endpoint, the same model name normalization applies as for benchmarks: if `benchmark_provider` is not `openrouter`, the `provider/` prefix is stripped before sending to the agent (e.g. `openai/gpt-4.1` → `gpt-4.1`), but the original name is preserved as the key in `benchmark_models_verified`. The `sample_response` field in the API response carries this data through to the frontend. Two verify endpoints exist: `POST /agents/verify-connection` (pre-save, no auth, requires `agent_url` in the request body) and `POST /agents/{uuid}/verify-connection` (post-save, auth required, reads `agent_url`/`agent_headers` from the saved agent config). The pre-save endpoint is declared before the `/{agent_uuid}` routes to avoid FastAPI treating `verify-connection` as a UUID path parameter.
+When `model` is passed as a kwarg, it's included in the verification request payload so the agent can route to the right model — used for per-model benchmark verification. For the post-save endpoint, the same model name normalization applies as for benchmarks: if `benchmark_provider` is not `openrouter`, the `provider/` prefix is stripped before sending to the agent (e.g. `openai/gpt-4.1` → `gpt-4.1`), but the original name is preserved as the key in `benchmark_models_verified`. The `sample_response` field in the API response carries this data through to the frontend. Two verify endpoints exist: `POST /agents/verify-connection` (pre-save, auth required, requires `agent_url` in the request body) and `POST /agents/{uuid}/verify-connection` (post-save, auth required, reads `agent_url`/`agent_headers` from the saved agent config). The pre-save endpoint is declared before the `/{agent_uuid}` routes to avoid FastAPI treating `verify-connection` as a UUID path parameter.
+
+**Security: URL validation and header sanitization** — `_verify_agent_connection()` applies two safeguards before making outbound requests:
+
+1. **URL validation** (`_validate_agent_url()`): Rejects non-HTTP(S) schemes, missing hostnames, localhost, and `.local` domains by string check, then **resolves the hostname via `socket.getaddrinfo`** and rejects any resolved IP that is loopback, private (RFC 1918), link-local (`169.254.x.x`, `fe80::`), reserved, multicast, or unspecified — using Python's `ipaddress` module (`is_loopback`, `is_private`, `is_reserved`, `is_link_local`, `is_multicast`, `is_unspecified`). This prevents SSRF via DNS rebinding, numeric IP encoding tricks, and cloud metadata endpoints (`169.254.169.254`).
+2. **Header sanitization** (`_sanitize_headers()`): Strips hop-by-hop and security-sensitive headers (`host`, `transfer-encoding`, `content-length`, `connection`, `upgrade`, `te`, `trailer`, `keep-alive`, `proxy-authorization`, `proxy-authenticate`, `proxy-connection`) from user-supplied `agent_headers` before forwarding.
 
 **STT/TTS CLI Notes:**
 
@@ -821,9 +826,9 @@ Agents have a `type` column in the database (and a `type` field in the API) that
 | Type                 | Description                                                                                                   |
 | -------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `agent` (default)     | Platform-managed agent — system prompt, tools, LLM/STT/TTS providers are defined in the agent config         |
-| `agent_connection`    | External agent — the user's own agent running at `agent_url`; calibrate sends HTTP requests to it directly   |
+| `connection`          | External agent — the user's own agent running at `agent_url`; calibrate sends HTTP requests to it directly   |
 
-The `type` is set at creation time via `POST /agents` and returned in all agent responses. Existing agents default to `agent` via the `ALTER TABLE` migration. The duplicate endpoint carries over the original agent's type. All Pydantic models use `Literal["agent", "agent_connection"]` for the `type` field — invalid values are rejected with a 422 at both input and output serialization.
+The `type` is set at creation time via `POST /agents` and returned in all agent responses. Existing agents default to `agent` via the `ALTER TABLE` migration. The duplicate endpoint carries over the original agent's type. All Pydantic models use `Literal["agent", "connection"]` for the `type` field — invalid values are rejected with a 422 at both input and output serialization.
 
 ### Agent Configuration Schema
 
@@ -855,7 +860,7 @@ The `type` is set at creation time via `POST /agents` and returned in all agent 
 }
 ```
 
-**Agent connection** (`type: "agent_connection"`):
+**Agent connection** (`type: "connection"`):
 
 ```json
 {

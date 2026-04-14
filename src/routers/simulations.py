@@ -1245,7 +1245,12 @@ def _run_calibrate_text_simulation(
         while process.poll() is None:
             if task_id:
                 if _is_job_aborted(task_id):
-                    logger.info(f"Text simulation {task_id} aborted, stopping monitoring loop")
+                    logger.info(f"Text simulation {task_id} aborted, killing process group and stopping")
+                    kill_process_group(process.pid, task_id)
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        logger.warning(f"Text simulation {task_id}: process {process.pid} did not exit within 5s after kill")
                     break
                 prev_state = _update_text_simulation_intermediate_results(
                     task_id,
@@ -1740,7 +1745,12 @@ def _run_calibrate_voice_simulation(
 
         while process.poll() is None:
             if _is_job_aborted(task_id):
-                logger.info(f"Voice simulation {task_id} aborted, stopping monitoring loop")
+                logger.info(f"Voice simulation {task_id} aborted, killing process group and stopping")
+                kill_process_group(process.pid, task_id)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Voice simulation {task_id}: process {process.pid} did not exit within 5s after kill")
                 break
 
             in_progress_results = []  # Rebuilt each iteration

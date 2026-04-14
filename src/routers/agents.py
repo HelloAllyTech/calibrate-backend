@@ -1,7 +1,10 @@
 import copy
+import ipaddress
 import logging
+import socket
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Literal
+from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from calibrate.connections import TextAgentConnection
@@ -21,6 +24,84 @@ from auth_utils import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
+BLOCKED_HEADERS = frozenset({
+    "host",
+    "transfer-encoding",
+    "content-length",
+    "connection",
+    "upgrade",
+    "te",
+    "trailer",
+    "keep-alive",
+    "proxy-authorization",
+    "proxy-authenticate",
+    "proxy-connection",
+})
+
+
+def _is_private_ip(addr: str) -> bool:
+    """Return True if addr is loopback, private, link-local, or otherwise non-public."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_reserved
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def _validate_agent_url(url: str) -> None:
+    """Raise HTTPException if url is not a valid public HTTP(S) endpoint.
+
+    Checks both the hostname string and the resolved IP addresses to
+    prevent SSRF via DNS rebinding or numeric IP encoding tricks.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="agent_url must use http or https")
+    if not parsed.hostname:
+        raise HTTPException(status_code=400, detail="agent_url must include a hostname")
+    hostname = parsed.hostname.lower()
+
+    if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"):
+        raise HTTPException(
+            status_code=400, detail="agent_url must not point to localhost"
+        )
+    if hostname.endswith(".local"):
+        raise HTTPException(
+            status_code=400, detail="agent_url must not point to a private network address"
+        )
+
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="agent_url hostname could not be resolved")
+
+    if not addr_infos:
+        raise HTTPException(status_code=400, detail="agent_url hostname could not be resolved")
+
+    for family, _type, _proto, _canonname, sockaddr in addr_infos:
+        ip_str = sockaddr[0]
+        if _is_private_ip(ip_str):
+            raise HTTPException(
+                status_code=400,
+                detail="agent_url must not resolve to a private or reserved network address",
+            )
+
+
+def _sanitize_headers(headers: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """Remove hop-by-hop and security-sensitive headers."""
+    if not headers:
+        return headers
+    return {
+        k: v for k, v in headers.items() if k.lower() not in BLOCKED_HEADERS
+    }
+
 
 async def _verify_agent_connection(
     agent_url: str,
@@ -28,7 +109,9 @@ async def _verify_agent_connection(
     model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Verify agent connection using calibrate's TextAgentConnection."""
-    agent = TextAgentConnection(url=agent_url, headers=agent_headers)
+    _validate_agent_url(agent_url)
+    safe_headers = _sanitize_headers(agent_headers)
+    agent = TextAgentConnection(url=agent_url, headers=safe_headers)
 
     try:
         kwargs = {}
@@ -108,7 +191,10 @@ class VerifyConnectionResponse(BaseModel):
 
 
 @router.post("/verify-connection", response_model=VerifyConnectionResponse)
-async def verify_agent_connection_presave(request: VerifyConnectionRequest):
+async def verify_agent_connection_presave(
+    request: VerifyConnectionRequest,
+    user_id: str = Depends(get_current_user_id),
+):
     """
     Verify an agent connection before saving (no agent UUID needed).
     Requires agent_url in the request body.

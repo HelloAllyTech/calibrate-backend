@@ -592,7 +592,7 @@ def create_agent(
 
     Args:
         name: Name of the agent
-        agent_type: Type of agent — 'calibrate' or 'connection'
+        agent_type: Type of agent — 'agent' or 'connection'
         config: Optional configuration dict
         user_id: UUID of the user creating this agent (required)
 
