@@ -24,7 +24,11 @@ if sentry_dsn:
         profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "1.0")),
     )
 
-from fastapi import FastAPI, HTTPException
+import secrets
+
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -71,7 +75,41 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutting down")
 
 
-app = FastAPI(lifespan=lifespan)
+DOCS_USERNAME = os.getenv("DOCS_USERNAME", "admin")
+DOCS_PASSWORD = os.getenv("DOCS_PASSWORD", "changeme")
+
+docs_basic_auth = HTTPBasic()
+
+
+def _verify_docs_access(
+    credentials: HTTPBasicCredentials = Depends(docs_basic_auth),
+):
+    correct_username = secrets.compare_digest(credentials.username, DOCS_USERNAME)
+    correct_password = secrets.compare_digest(credentials.password, DOCS_PASSWORD)
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+
+@app.get("/docs", include_in_schema=False)
+def custom_swagger_ui(_: HTTPBasicCredentials = Depends(_verify_docs_access)):
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="API Docs")
+
+
+@app.get("/redoc", include_in_schema=False)
+def custom_redoc(_: HTTPBasicCredentials = Depends(_verify_docs_access)):
+    return get_redoc_html(openapi_url="/openapi.json", title="API ReDoc")
+
+
+@app.get("/openapi.json", include_in_schema=False)
+def custom_openapi(_: HTTPBasicCredentials = Depends(_verify_docs_access)):
+    return app.openapi()
 
 # Include routers
 app.include_router(auth_router)

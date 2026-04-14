@@ -25,7 +25,7 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 | **Framework**        | FastAPI                             | Async REST API framework                                                                   |
 | **Database**         | SQLite                              | Persistent data storage                                                                    |
 | **Storage**          | AWS S3                              | File/result storage                                                                        |
-| **Authentication**   | Google OAuth + Email/Password + JWT | User authentication via Google ID tokens or email/password credentials, API access via JWT |
+| **Authentication**   | Google OAuth + Email/Password + JWT | User authentication via Google ID tokens or email/password credentials, API access via JWT. API docs (`/docs`, `/redoc`, `/openapi.json`) are protected with HTTP Basic Auth |
 | **Monitoring**       | Sentry                              | Error tracking and performance monitoring                                                  |
 | **Tracing**          | Langfuse (via OTEL)                 | LLM observability and tracing                                                              |
 | **Package Manager**  | uv                                  | Python dependency management                                                               |
@@ -234,6 +234,14 @@ All dataset endpoints require JWT auth. Every DB operation is scoped to the auth
 - `completed_simulations` - Number of completed simulations (for in_progress text/voice simulations)
 - `simulation_results` - Array of simulation results (partial for in_progress; includes both complete and in-progress simulations). Each result includes an `aborted` field (`true`/`false`/`null`) set by the abort endpoint for incomplete/complete simulations respectively; `null` for non-aborted runs.
 - `metrics` - Aggregated evaluation metrics (only populated when all simulations complete)
+
+#### API Documentation (HTTP Basic Auth Protected)
+
+- `GET /docs` - Swagger UI (requires HTTP Basic Auth via `DOCS_USERNAME`/`DOCS_PASSWORD`)
+- `GET /redoc` - ReDoc (requires HTTP Basic Auth)
+- `GET /openapi.json` - OpenAPI schema (requires HTTP Basic Auth)
+
+FastAPI's default docs routes are disabled (`docs_url=None`, `redoc_url=None`, `openapi_url=None`). Custom routes re-serve the same pages behind HTTP Basic Auth. Credentials are read from `DOCS_USERNAME` and `DOCS_PASSWORD` env vars (defaults: `admin`/`changeme`). Uses `secrets.compare_digest` for timing-safe comparison.
 
 #### Utilities
 
@@ -782,6 +790,10 @@ CORS_ALLOWED_ORIGINS=*           # Comma-separated origins (e.g., "http://localh
 # JWT Authentication
 JWT_SECRET_KEY=your-secret-key   # REQUIRED: At least 32 characters, change in production!
 JWT_EXPIRATION_HOURS=168         # Token validity (default: 7 days)
+
+# API Docs Authentication (HTTP Basic Auth)
+DOCS_USERNAME=admin              # Username for /docs, /redoc, /openapi.json (default: admin)
+DOCS_PASSWORD=changeme           # Password for docs access (default: changeme — change in production!)
 
 # Sentry (Error Tracking)
 SENTRY_DSN=                      # Sentry DSN (leave empty to disable)
