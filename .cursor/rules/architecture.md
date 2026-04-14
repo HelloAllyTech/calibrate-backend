@@ -409,10 +409,14 @@ Simulation jobs can be aborted via `POST /simulations/run/{job_uuid}/abort`. Unl
 3. Add `"aborted": true` to each incomplete simulation result (where `evaluation_results` is `None`), and `"aborted": false` to completed ones. Transcripts are left untouched.
 4. Save with `status=done` and `aborted: true` in job details
 
-**Race condition handling**: The `_is_job_aborted(task_id)` helper checks for the `aborted` flag in job details. It is used in all places where the background thread would otherwise overwrite abort results:
+**Race condition handling**: The `_is_job_aborted(task_id)` helper checks for the `aborted` flag in job details. It is checked at multiple layers to prevent the background monitoring thread from overwriting abort state:
 
-- `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` call it after the polling loop exits. If set, they return early without final processing.
-- `run_simulation_task` calls it before the final `update_simulation_job` call and in all exception handlers. If set, it returns early (the `finally` block still triggers the queue).
+- **Inside the polling loops** (primary defense): Both `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` check `_is_job_aborted()` at the start of each loop iteration. If set, they `break` out of the monitoring loop immediately, preventing any `update_simulation_job(status=IN_PROGRESS)` call from overwriting the abort handler's `status=DONE`.
+- **Inside `_update_text_simulation_intermediate_results`**: Checks before writing to DB, closing the race window between the loop-level check and the actual DB write.
+- **After the polling loop exits**: `_run_calibrate_text_simulation` and `_run_calibrate_voice_simulation` check again before final processing. If set, they return early.
+- **In `run_simulation_task`**: Checks before the final `update_simulation_job` call and in all exception handlers. If set, it returns early (the `finally` block still triggers the queue).
+
+**Why all layers matter**: Without the in-loop checks, a race occurs when the monitoring thread has already entered the loop body (passed `process.poll()`) before the abort handler kills the process and sets `status=DONE`. The thread's `update_simulation_job(status=IN_PROGRESS)` would overwrite the abort state, leaving the job stuck as `IN_PROGRESS` with no running process.
 
 ### Job Timeout Detection
 
@@ -711,6 +715,8 @@ calibrate llm simulations run -c <config.json> -o <output_dir> -m <model> -n 4
 calibrate agent simulation -c <config.json> -o <output_dir> -n 4
 
 ```
+
+**`--skip-verify` for agent connections**: All CLI commands for agent connections (`calibrate llm` for tests/benchmarks, `calibrate simulations --type text`) pass `--skip-verify` to skip the CLI's built-in connection verification. The backend already verifies connections via the `/agents/{uuid}/verify-connection` endpoint before running jobs, making the CLI's verification redundant.
 
 **Agent connection verification** uses calibrate's Python API directly (not the CLI). The backend's `_verify_agent_connection()` in `agents.py` uses `TextAgentConnection(url=..., headers=...)` from `calibrate.connections`, then calls `await agent.verify(**kwargs)` where `kwargs` optionally contains `model`. The `verify()` method returns `{"ok": bool, "error": str|None, "sample_output": dict|None}`:
 - On success: `sample_output` contains the normalized agent response (`{"response": str|None, "tool_calls": list}`)

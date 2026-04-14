@@ -1134,8 +1134,10 @@ def _update_text_simulation_intermediate_results(
         tuple(sorted(transcript_lengths)),
     )
 
-    # Only update DB if state changed
+    # Only update DB if state changed and job hasn't been aborted
     if current_state != prev_state:
+        if _is_job_aborted(task_id):
+            return current_state
         update_simulation_job(
             task_id,
             status=TaskStatus.IN_PROGRESS.value,
@@ -1219,6 +1221,8 @@ def _run_calibrate_text_simulation(
     ]
     if model:
         run_cmd += ["-m", model]
+    else:
+        run_cmd += ["--skip-verify"]
 
     logger.info(f"{log_prefix} command: {' '.join(run_cmd)}")
 
@@ -1240,6 +1244,9 @@ def _run_calibrate_text_simulation(
 
         while process.poll() is None:
             if task_id:
+                if _is_job_aborted(task_id):
+                    logger.info(f"Text simulation {task_id} aborted, stopping monitoring loop")
+                    break
                 prev_state = _update_text_simulation_intermediate_results(
                     task_id,
                     output_dir,
@@ -1732,6 +1739,10 @@ def _run_calibrate_voice_simulation(
         prev_state = None  # Track state to avoid unnecessary DB updates
 
         while process.poll() is None:
+            if _is_job_aborted(task_id):
+                logger.info(f"Voice simulation {task_id} aborted, stopping monitoring loop")
+                break
+
             in_progress_results = []  # Rebuilt each iteration
             in_progress_transcript_lengths = (
                 []

@@ -672,6 +672,7 @@ def run_llm_test_task(
                         str(config_file),
                         "-o",
                         str(output_dir),
+                        "--skip-verify",
                     ]
                 else:
                     # Calibrate agent mode: use model + provider from agent config
@@ -1212,7 +1213,7 @@ def run_benchmark_task(
                     run_cmd = (
                         ["calibrate", "llm", "-c", str(config_file), "-m"]
                         + cli_models
-                        + ["-o", str(output_dir)]
+                        + ["-o", str(output_dir), "--skip-verify"]
                     )
                 else:
                     # Calibrate agent mode: -m {models} -p {provider}
