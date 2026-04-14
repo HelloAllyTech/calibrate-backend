@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any, Literal
+from typing import ClassVar, Optional, List, Dict, Any, Literal
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, model_validator
 
@@ -68,7 +68,7 @@ class BulkTestUpload(BaseModel):
     agent_uuids: Optional[List[str]] = None
     language: Optional[str] = None
 
-    MAX_BATCH_SIZE = 500
+    MAX_BATCH_SIZE: ClassVar[int] = 500
 
     @model_validator(mode="after")
     def validate_tests(self):
