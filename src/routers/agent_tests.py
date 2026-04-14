@@ -1488,6 +1488,9 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    if not request.models:
+        raise HTTPException(status_code=400, detail="At least one model is required")
+
     # Guard: for agent connection mode, verify each requested model is verified
     agent_config = agent.get("config") or {}
     if agent_config.get("agent_url"):
@@ -1506,9 +1509,6 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
                     f"Call POST /agents/{agent_uuid}/verify-connection with each model first."
                 ),
             )
-
-    if not request.models:
-        raise HTTPException(status_code=400, detail="At least one model is required")
 
     # Benchmarks always run all tests linked to the agent
     tests = get_tests_for_agent(agent_uuid)

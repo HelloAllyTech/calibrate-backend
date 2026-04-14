@@ -24,19 +24,21 @@ from auth_utils import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
-BLOCKED_HEADERS = frozenset({
-    "host",
-    "transfer-encoding",
-    "content-length",
-    "connection",
-    "upgrade",
-    "te",
-    "trailer",
-    "keep-alive",
-    "proxy-authorization",
-    "proxy-authenticate",
-    "proxy-connection",
-})
+BLOCKED_HEADERS = frozenset(
+    {
+        "host",
+        "transfer-encoding",
+        "content-length",
+        "connection",
+        "upgrade",
+        "te",
+        "trailer",
+        "keep-alive",
+        "proxy-authorization",
+        "proxy-authenticate",
+        "proxy-connection",
+    }
+)
 
 
 def _is_private_ip(addr: str) -> bool:
@@ -74,16 +76,21 @@ def _validate_agent_url(url: str) -> None:
         )
     if hostname.endswith(".local"):
         raise HTTPException(
-            status_code=400, detail="agent_url must not point to a private network address"
+            status_code=400,
+            detail="agent_url must not point to a private network address",
         )
 
     try:
         addr_infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
     except socket.gaierror:
-        raise HTTPException(status_code=400, detail="agent_url hostname could not be resolved")
+        raise HTTPException(
+            status_code=400, detail="agent_url hostname could not be resolved"
+        )
 
     if not addr_infos:
-        raise HTTPException(status_code=400, detail="agent_url hostname could not be resolved")
+        raise HTTPException(
+            status_code=400, detail="agent_url hostname could not be resolved"
+        )
 
     for family, _type, _proto, _canonname, sockaddr in addr_infos:
         ip_str = sockaddr[0]
@@ -98,9 +105,7 @@ def _sanitize_headers(headers: Optional[Dict[str, str]]) -> Optional[Dict[str, s
     """Remove hop-by-hop and security-sensitive headers."""
     if not headers:
         return headers
-    return {
-        k: v for k, v in headers.items() if k.lower() not in BLOCKED_HEADERS
-    }
+    return {k: v for k, v in headers.items() if k.lower() not in BLOCKED_HEADERS}
 
 
 async def _verify_agent_connection(
@@ -119,6 +124,9 @@ async def _verify_agent_connection(
             kwargs["model"] = model
         result = await agent.verify(**kwargs)
     except Exception as e:
+        logger.exception(
+            "Agent connection verification failed unexpectedly: %s", str(e)
+        )
         return {
             "success": False,
             "error": f"Unexpected error: {str(e)}",
@@ -253,12 +261,15 @@ async def verify_agent_connection(
         model=verify_model,
     )
 
-    # Persist verification result into agent config
+    # Persist verification result into agent config.
+    # Re-read the agent to get the latest config, avoiding a race condition
+    # where two concurrent verify calls (different models) would each snapshot
+    # the config before the await, then the second write would overwrite the first.
     now = datetime.now(timezone.utc).isoformat()
-    new_config = copy.deepcopy(agent_config)
+    fresh_agent = get_agent(agent_uuid)
+    new_config = copy.deepcopy(fresh_agent.get("config") or {})
 
     if model:
-        # Model-specific verification for benchmarks
         benchmark_verified = new_config.get("benchmark_models_verified") or {}
         benchmark_verified[model] = {
             "verified": result["success"],
@@ -267,7 +278,6 @@ async def verify_agent_connection(
         }
         new_config["benchmark_models_verified"] = benchmark_verified
     else:
-        # Basic connection verification
         new_config["connection_verified"] = result["success"]
         new_config["connection_verified_at"] = now
         new_config["connection_verified_error"] = result["error"]
