@@ -13487,7 +13487,24 @@ _**Agent (claude-4.6-opus-high-thinking)**_
 
 <details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src/routers/stt.py</summary>
 
-Status: **loading**
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now do the same for `tts.py`.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src/routers/tts.py</summary>
 
 </details>
 
@@ -13504,8 +13521,6 @@ _**Agent (claude-4.6-opus-high-thinking)**_
 
 <details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src/routers/tts.py</summary>
 
-Status: **loading**
-
 </details>
 
 </tool-use>
@@ -13521,7 +13536,24 @@ _**Agent (claude-4.6-opus-high-thinking)**_
 
 <details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src/routers/tts.py</summary>
 
-Status: **loading**
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now inject in the TTS status endpoint, right before the return.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src/routers/tts.py</summary>
 
 </details>
 
@@ -13534,43 +13566,25 @@ Status: **loading**
 
 _**Agent (claude-4.6-opus-high-thinking)**_
 
-<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
-
-<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src/routers/tts.py</summary>
-
-Status: **loading**
-
-</details>
-
-</tool-use>
-
-<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
-<summary>Tool use: **edit_file_v2**</summary>
-
-</details></tool-use>
-
-_**Agent (claude-4.6-opus-high-thinking)**_
-
-<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
-
-<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src/routers/tts.py</summary>
-
-Status: **loading**
-
-</details>
-
-</tool-use>
-
-<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
-<summary>Tool use: **edit_file_v2**</summary>
-
-</details></tool-use>
+Let me verify everything is consistent.
 
 _**Agent (claude-4.6-opus-high-thinking)**_
 
 <tool-use data-tool-type="shell" data-tool-name="run_terminal_command_v2">
-<details><summary>Tool use: **run_terminal_command_v2**</summary>
+<details><summary>Tool use: **run_terminal_command_v2** • Run command: cd .claude/worktrees/sleepy-franklin && git diff --stat</summary>
 
+```bash
+cd .claude/worktrees/sleepy-franklin && git diff --stat
+```
+
+```
+ src/db.py          | 214 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/main.py        |   2 +
+ src/routers/stt.py |  43 ++++++++---
+ src/routers/tts.py |  36 ++++++---
+ 4 files changed, 275 insertions(+), 20 deletions(-)
+
+```
 </details>
 </tool-use>
 
@@ -13585,7 +13599,43 @@ _**Agent (claude-4.6-opus-high-thinking)**_
 <details>
 <summary>Tool use: **ripgrep_raw_search**</summary>
 
-Status: **loading**
+
+Parameters:
+
+```json
+{
+  "caseInsensitive": false,
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src",
+  "pattern": "dataset_item_ids"
+}
+```
+Additional data:
+
+```json
+{
+  "isPruned": true,
+  "outputMode": "content",
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src",
+  "pattern": "dataset_item_ids",
+  "topFiles": [
+    {
+      "matchCount": 6,
+      "uri": ".claude/worktrees/sleepy-franklin/src/routers/tts.py"
+    },
+    {
+      "matchCount": 6,
+      "uri": ".claude/worktrees/sleepy-franklin/src/routers/stt.py"
+    },
+    {
+      "matchCount": 4,
+      "uri": ".claude/worktrees/sleepy-franklin/src/dataset_utils.py"
+    }
+  ],
+  "totalFiles": 3,
+  "totalMatches": 16
+}
+```
+Status: **completed**
 
 
 </details>
@@ -13598,8 +13648,12 @@ Status: **loading**
 
 _**Agent (claude-4.6-opus-high-thinking)**_
 
+Clean. Let me verify the final `dataset_utils.py`.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
 <tool-use data-tool-type="read" data-tool-name="read_file_v2">
-<details><summary>Tool use: **read_file_v2** • Read file: </summary>
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.claude/worktrees/sleepy-franklin/src/dataset_utils.py</summary>
 
 </details>
 </tool-use>
@@ -13609,11 +13663,267 @@ _**Agent (claude-4.6-opus-high-thinking)**_
 
 </details></tool-use>
 
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+All changes are done. Here's the summary:
+
+**What changed:**
+
+1. **`dataset_utils.py`** — `ResolvedDatasetInputs` now includes `item_ids: Optional[List[str]]`. Both paths (load from existing dataset, create new dataset) capture the item UUIDs. Added `inject_dataset_item_ids()` helper that maps each result row's `id` field back to the corresponding dataset item UUID.
+
+2. **`stt.py`** — Stores `dataset_item_ids` in job details. The status endpoint calls `inject_dataset_item_ids()` right before returning, so every result row gets a `dataset_item_id` field.
+
+3. **`tts.py`** — Same pattern.
+
+**How it works:**
+- The CLI input CSV has an `id` column (`audio_1`, `audio_2` for STT; `0`, `1` for TTS). The CLI preserves this `id` in `results.csv`. The helper parses it back to an index and looks up the corresponding dataset item UUID.
+- Injection happens at the response level in the status endpoint — one injection point covers all cases (completed, in-progress intermediate, failed with partial results, timeout).
+
+**Backward compatibility:**
+- Older jobs won't have `dataset_item_ids` in their details. The guard `if dataset_item_ids:` means injection is simply skipped — no error, no `dataset_item_id` field in results, exactly like before.
+- Jobs without a dataset (legacy inline data without `dataset_name`) also have `dataset_item_ids` as `None` — same safe skip.
+
 ---
 
 _**User**_
 
 regenerate the blurp for the frontend with the updated changes
+
+---
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+## Datasets Feature — API Reference for Frontend
+
+### Overview
+
+Users can save, reuse, and manage collections of evaluation inputs. Datasets can be referenced by ID when starting STT/TTS evaluations instead of re-uploading the same data each time. Each evaluation result row is linked back to its source dataset item via `dataset_item_id`.
+
+---
+
+### Dataset Endpoints
+
+All endpoints require `Authorization: Bearer <jwt_token>`.
+
+#### 1. Create Dataset
+
+```
+POST /datasets
+```
+
+**Request:**
+```json
+{
+  "name": "My STT Dataset",
+  "dataset_type": "stt"   // "stt" or "tts"
+}
+```
+
+**Response (201):**
+```json
+{
+  "uuid": "abc-123",
+  "name": "My STT Dataset",
+  "dataset_type": "stt",
+  "item_count": 0,
+  "created_at": "2026-04-07T10:00:00",
+  "updated_at": "2026-04-07T10:00:00"
+}
+```
+
+---
+
+#### 2. List Datasets
+
+```
+GET /datasets
+GET /datasets?dataset_type=stt
+GET /datasets?dataset_type=tts
+```
+
+**Response (200):** Array of `DatasetResponse` objects (same shape as create, with `item_count`).
+
+---
+
+#### 3. Get Dataset Detail (with items)
+
+```
+GET /datasets/{dataset_id}
+```
+
+**Response (200):**
+```json
+{
+  "uuid": "abc-123",
+  "name": "My STT Dataset",
+  "dataset_type": "stt",
+  "item_count": 2,
+  "created_at": "2026-04-07T10:00:00",
+  "updated_at": "2026-04-07T10:00:00",
+  "items": [
+    {
+      "uuid": "item-1",
+      "audio_path": "s3://bucket/audio1.wav",
+      "text": "Hello world",
+      "order_index": 0,
+      "created_at": "2026-04-07T10:01:00"
+    },
+    {
+      "uuid": "item-2",
+      "audio_path": "s3://bucket/audio2.wav",
+      "text": "Goodbye world",
+      "order_index": 1,
+      "created_at": "2026-04-07T10:01:00"
+    }
+  ]
+}
+```
+
+---
+
+#### 4. Rename Dataset
+
+```
+PATCH /datasets/{dataset_id}
+```
+
+**Request:**
+```json
+{ "name": "Renamed Dataset" }
+```
+
+**Response (200):** `DatasetResponse` (without items).
+
+---
+
+#### 5. Delete Dataset
+
+```
+DELETE /datasets/{dataset_id}
+```
+
+**Response:** `204 No Content`. Soft deletes the dataset and all its items.
+
+---
+
+#### 6. Add Items to Dataset
+
+```
+POST /datasets/{dataset_id}/items
+```
+
+**Request:**
+```json
+[
+  { "audio_path": "s3://bucket/audio1.wav", "text": "Hello world" },
+  { "audio_path": "s3://bucket/audio2.wav", "text": "Goodbye world" }
+]
+```
+
+- **STT datasets**: `audio_path` is **required** on every item.
+- **TTS datasets**: `audio_path` must **not** be provided.
+
+**Response (201):** Array of the newly created `DatasetItemResponse` objects.
+
+---
+
+#### 7. Delete a Single Item
+
+```
+DELETE /datasets/{dataset_id}/items/{item_uuid}
+```
+
+**Response:** `204 No Content`.
+
+---
+
+### Changes to STT/TTS Evaluation Endpoints
+
+Both `POST /stt/evaluate` and `POST /tts/evaluate` now accept two new optional fields.
+
+#### STT Evaluate
+
+```json
+{
+  // Option A: reference an existing dataset
+  "dataset_id": "abc-123",
+
+  // Option B: inline data (same as before, now optional when dataset_id is set)
+  "audio_paths": ["s3://bucket/a1.wav", "s3://bucket/a2.wav"],
+  "texts": ["ground truth 1", "ground truth 2"],
+
+  // When providing inline data, save it as a named dataset for reuse (ignored when dataset_id is set)
+  "dataset_name": "My new dataset",
+
+  // Required (unchanged)
+  "providers": ["deepgram", "openai"],
+  "language": "english"
+}
+```
+
+#### TTS Evaluate
+
+```json
+{
+  "dataset_id": "abc-123",
+
+  "texts": ["text to synthesize 1", "text to synthesize 2"],
+
+  "dataset_name": "My new dataset",
+
+  // Required (unchanged)
+  "providers": ["smallest", "openai"],
+  "language": "english"
+}
+```
+
+**Rules:**
+- Provide **either** `dataset_id` **or** inline data — not both.
+- If `dataset_id` is given, `dataset_name` is ignored.
+- `dataset_name` is optional — when provided with inline data, the backend saves it as a new dataset automatically.
+
+---
+
+### `dataset_item_id` in Evaluation Results
+
+When an evaluation is linked to a dataset (via `dataset_id` or `dataset_name`), each result row in the status response includes a `dataset_item_id` field that maps back to the source dataset item.
+
+**Example result row in `provider_results[].results[]`:**
+
+```json
+{
+  "id": "audio_1",
+  "dataset_item_id": "item-uuid-abc",
+  "text": "Hello world",
+  "transcription": "hello world",
+  "wer": 0.0
+}
+```
+
+- Present when the evaluation was run against a dataset.
+- Absent for legacy evaluations or inline data without `dataset_name`.
+- Available in all states: `in_progress` (intermediate results), `done`, and `failed` (partial results).
+
+This allows the frontend to link each provider result row back to the specific dataset item, enabling per-item comparison views across providers and across evaluation runs.
+
+---
+
+### Backward Compatibility
+
+- Older evaluations (created before datasets existed) work unchanged — `dataset_item_id` is simply absent from their result rows.
+- The `dataset_id` and `dataset_item_ids` fields are only present in job details for new evaluations that use datasets.
+
+---
+
+### Frontend UX Implications
+
+1. **Dataset management page** — CRUD for datasets with items (list, create, rename, delete, add/remove items).
+2. **Evaluation form** — "Pick existing dataset" dropdown or "Upload new" toggle. When uploading inline, optionally provide a `dataset_name` to save for reuse.
+3. **Dataset type awareness** — STT items have `audio_path` + `text`. TTS items have only `text`. Adapt the item form based on `dataset_type`.
+4. **Results linking** — Use `dataset_item_id` in result rows to build per-item comparison views across providers or across repeated evaluation runs on the same dataset.
+5. **Item ordering** — Items are ordered by `order_index`. Deleting an item leaves gaps (no re-index); rely on the API's returned order.
+
+---
 
 _**User**_
 
@@ -13636,11 +13946,772 @@ If any environment variables are added/changed/removed, update the "src/.env.exa
 
 _**Agent (claude-4.6-opus-high-thinking)**_
 
+I did make code changes (added `dataset_item_ids` to job details and result injection, renamed `save_as_dataset` → `dataset_name`). Let me update the architecture doc.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
 <tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search">
 <details>
 <summary>Tool use: **ripgrep_raw_search**</summary>
 
-Status: **loading**
+
+Parameters:
+
+```json
+{
+  "caseInsensitive": false,
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md",
+  "pattern": "dataset_item_id|dataset_name|save_as_dataset"
+}
+```
+Additional data:
+
+```json
+{
+  "isPruned": true,
+  "outputMode": "content",
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md",
+  "pattern": "dataset_item_id|dataset_name|save_as_dataset",
+  "topFiles": [
+    {
+      "matchCount": 1,
+      "uri": ".cursor/rules/architecture.md"
+    }
+  ],
+  "totalFiles": 1,
+  "totalMatches": 1
+}
+```
+Status: **completed**
+
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search"><details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+The `dataset_name` rename is already reflected. I just need to add the `dataset_item_ids` tracing info.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Updated the architecture doc with the `dataset_item_ids` tracing pattern and the response-level injection approach. No env vars changed.
+
+---
+
+_**User**_
+
+the agent creation api should also take a type as input which should be either agent_connection or agent
+
+---
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now let me find the `create_agent` DB function and the agents table schema.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search">
+<details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+
+Parameters:
+
+```json
+{
+  "caseInsensitive": false,
+  "contextAfter": 15,
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "CREATE TABLE IF NOT EXISTS agents"
+}
+```
+Additional data:
+
+```json
+{
+  "isPruned": true,
+  "outputMode": "content",
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "CREATE TABLE IF NOT EXISTS agents",
+  "topFiles": [
+    {
+      "matchCount": 16,
+      "uri": "src/db.py"
+    }
+  ],
+  "totalFiles": 1,
+  "totalMatches": 1
+}
+```
+Status: **completed**
+
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search"><details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search">
+<details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+
+Parameters:
+
+```json
+{
+  "caseInsensitive": false,
+  "contextAfter": 25,
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "def create_agent"
+}
+```
+Additional data:
+
+```json
+{
+  "isPruned": true,
+  "outputMode": "content",
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "def create_agent",
+  "topFiles": [
+    {
+      "matchCount": 52,
+      "uri": "src/db.py"
+    }
+  ],
+  "totalFiles": 1,
+  "totalMatches": 2
+}
+```
+Status: **completed**
+
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search"><details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search">
+<details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+
+Parameters:
+
+```json
+{
+  "caseInsensitive": false,
+  "contextAfter": 20,
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "def get_all_agents"
+}
+```
+Additional data:
+
+```json
+{
+  "isPruned": true,
+  "outputMode": "content",
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "def get_all_agents",
+  "topFiles": [
+    {
+      "matchCount": 21,
+      "uri": "src/db.py"
+    }
+  ],
+  "totalFiles": 1,
+  "totalMatches": 1
+}
+```
+Status: **completed**
+
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search"><details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search">
+<details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+
+Parameters:
+
+```json
+{
+  "caseInsensitive": false,
+  "contextAfter": 20,
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "def _parse_agent_row"
+}
+```
+Additional data:
+
+```json
+{
+  "isPruned": true,
+  "outputMode": "content",
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "def _parse_agent_row",
+  "topFiles": [
+    {
+      "matchCount": 21,
+      "uri": "src/db.py"
+    }
+  ],
+  "totalFiles": 1,
+  "totalMatches": 1
+}
+```
+Status: **completed**
+
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search"><details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now I have the full picture. I need to:
+
+1. Add a `type` column to the `agents` table (with migration for existing rows)
+2. Update `create_agent` in `db.py` to accept and store the type
+3. Update `AgentCreate`, `AgentResponse`, and the router
+4. Handle the duplicate endpoint to copy the type
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now add a migration for the new column (after the existing migration block). Let me find where other ALTER TABLE migrations live.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search">
+<details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+
+Parameters:
+
+```json
+{
+  "caseInsensitive": false,
+  "contextAfter": 4,
+  "contextBefore": 2,
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "ALTER TABLE.*ADD COLUMN"
+}
+```
+Additional data:
+
+```json
+{
+  "isPruned": true,
+  "outputMode": "content",
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py",
+  "pattern": "ALTER TABLE.*ADD COLUMN",
+  "topFiles": [
+    {
+      "matchCount": 28,
+      "uri": "src/db.py"
+    }
+  ],
+  "totalFiles": 1,
+  "totalMatches": 4
+}
+```
+Status: **completed**
+
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search"><details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Good. I'll add the migration right after the `user_id` migration block.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now update `create_agent` to accept `agent_type`.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now update the INSERT values to include `agent_type`.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now update the router — models and endpoints.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now update the create endpoint to pass `agent_type`, and add validation.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now I need to make sure `AgentResponse` gets the `agent_type` field from the DB row. The DB column is `type` but the Pydantic field is `agent_type`. Let me update `_parse_agent_row` to map it.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/db.py</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now update the duplicate endpoint to copy the type.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py</summary>
+
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now let me also check the `list_agents` endpoint — it should support filtering by type. Let me check if the user asked for that... They didn't explicitly, so I'll leave it as-is. Let me verify everything compiles by checking lints.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="unknown" data-tool-name="read_lints">
+<details>
+<summary>Tool use: **read_lints**</summary>
+
+
+Parameters:
+
+```json
+{
+  "paths": [
+    "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py",
+    "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py"
+  ]
+}
+```
+Result:
+
+```json
+{
+  "linterErrorsByFile": [
+    {
+      "relativeWorkspacePath": "/Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py"
+    },
+    {
+      "relativeWorkspacePath": "/Users/aman/Documents/repos/artpark/pense-backend/src/db.py"
+    }
+  ]
+}
+```
+Status: **completed**
+
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="unknown" data-tool-name="read_lints"><details>
+<summary>Tool use: **read_lints**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Let me verify the final state of the agents router.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/src/routers/agents.py</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Everything looks good. Let me confirm the dev server still reloads cleanly.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/.cursor/projects/Users-aman-Documents-repos-artpark-pense-backend/terminals/1.txt</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+The server is stopped. Let me verify the diff is correct.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="shell" data-tool-name="run_terminal_command_v2">
+<details><summary>Tool use: **run_terminal_command_v2** • Run command: git diff --stat</summary>
+
+```bash
+git diff --stat
+```
+
+```
+ .../2026-04-06_19-10-27Z-code-review-discussion.md | 386 ++++++++++++++++++++-
+ src/db.py                                          |  27 +-
+ src/routers/agents.py                              |   9 +-
+ 3 files changed, 400 insertions(+), 22 deletions(-)
+
+```
+</details>
+</tool-use>
+
+<tool-use data-tool-type="shell" data-tool-name="run_terminal_command_v2"><details>
+<summary>Tool use: **run_terminal_command_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Done. Here's what changed:
+
+**`src/db.py`:**
+- **Agents table schema**: Added `type TEXT NOT NULL DEFAULT 'agent'` column.
+- **Migration**: Added `ALTER TABLE agents ADD COLUMN type ...` for existing databases — existing agents default to `'agent'`.
+- **`create_agent()`**: New `agent_type` parameter (defaults to `"agent"`, validated to be `"agent"` or `"agent_connection"`).
+- **`_parse_agent_row()`**: Maps DB column `type` → `agent_type` in the returned dict (avoids shadowing the Python builtin, consistent with the `dataset_type` convention).
+
+**`src/routers/agents.py`:**
+- **`AgentCreate`**: New `agent_type` field (defaults to `"agent"`).
+- **`AgentResponse`**: Now includes `agent_type`.
+- **Create endpoint**: Validates `agent_type` and passes it through.
+- **Duplicate endpoint**: Copies `agent_type` from the original agent.
+
+**Backward compatible**: Existing agents get `type = 'agent'` via the column default. The API default is also `"agent"`, so existing clients that don't send `agent_type` continue working unchanged.
+
+---
+
+_**User**_
+
+Only go ahead if you made code changes (not just updated .cursor/rules/architecture.md):
+    
+    Update .cursor/rules/architecture.md with any new information about the codebase from the changes you just made. Include:
+- What changed
+- Why it changed
+- New patterns or conventions introduced
+- Dependencies or relationships affected
+- Any gotchas or edge cases discovered
+
+Don't maintain it as a changelog. Instead, look for what was already present but has become obsolete now. Remove or update it as necessary. Look for what is missing and add it.
+
+Keep the file organized and don't remove existing relevant context.
+
+If any environment variables are added/changed/removed, update the "src/.env.example" file accordingly, docker-compose.yml and github actions workflows accordingly in the .github/workflows folder.
+
+---
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+I did make code changes (added `agent_type` to agents). Let me update the architecture doc.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="unknown" data-tool-name="ripgrep_raw_search">
+<details>
+<summary>Tool use: **ripgrep_raw_search**</summary>
+
+
+Parameters:
+
+```json
+{
+  "caseInsensitive": true,
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md",
+  "pattern": "agents.*config|Agent.*config|agents table|agent_type"
+}
+```
+Additional data:
+
+```json
+{
+  "isPruned": true,
+  "outputMode": "content",
+  "path": "/Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md",
+  "pattern": "agents.*config|Agent.*config|agents table|agent_type",
+  "topFiles": [
+    {
+      "matchCount": 11,
+      "uri": ".cursor/rules/architecture.md"
+    }
+  ],
+  "totalFiles": 1,
+  "totalMatches": 11
+}
+```
+Status: **completed**
 
 
 </details>
@@ -13657,7 +14728,37 @@ _**Agent (claude-4.6-opus-high-thinking)**_
 
 <details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
 
-Status: **loading**
+</details>
+
+</tool-use>
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2"><details>
+<summary>Tool use: **edit_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+Now update the Agent Configuration Schema section to mention the type.
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2">
+<details><summary>Tool use: **read_file_v2** • Read file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
+
+</details>
+</tool-use>
+
+<tool-use data-tool-type="read" data-tool-name="read_file_v2"><details>
+<summary>Tool use: **read_file_v2**</summary>
+
+</details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+<tool-use data-tool-type="write" data-tool-name="edit_file_v2">
+
+<details><summary>Tool use: **edit_file_v2** • Edit file: /Users/aman/Documents/repos/artpark/pense-backend/.cursor/rules/architecture.md</summary>
 
 </details>
 
@@ -13667,3 +14768,7 @@ Status: **loading**
 <summary>Tool use: **edit_file_v2**</summary>
 
 </details></tool-use>
+
+_**Agent (claude-4.6-opus-high-thinking)**_
+
+No environment variables were added or changed — only a DB schema column with a default. Nothing to update in `.env.example`, `docker-compose.yml`, or GitHub Actions.

@@ -40,7 +40,7 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 calibrate-backend/
 ├── src/
 │   ├── main.py              # FastAPI app entry point, lifespan management
-│   ├── db.py                # SQLite database layer (~2900 lines)
+│   ├── db.py                # SQLite database layer (~3070 lines)
 │   ├── utils.py             # Shared utilities (S3 client, tool config building)
 │   ├── dataset_utils.py     # Dataset resolution helpers for STT/TTS evaluations
 │   ├── job_recovery.py      # Restart in-progress jobs on app startup
@@ -50,7 +50,7 @@ calibrate-backend/
 │       ├── agents.py        # Agent CRUD operations
 │       ├── tools.py         # Tool CRUD operations
 │       ├── agent_tools.py   # Agent-Tool relationship management
-│       ├── tests.py         # Test case CRUD operations
+│       ├── tests.py         # Test case CRUD and bulk upload operations
 │       ├── agent_tests.py   # Agent test execution & benchmarking
 │       ├── personas.py      # Persona CRUD operations
 │       ├── scenarios.py     # Scenario CRUD operations
@@ -180,7 +180,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 - `/agents` - Agent management
 - `/tools` - Tool definitions
-- `/tests` - Test cases
+- `/tests` - Test cases (CRUD + bulk upload)
 - `/personas` - User personas
 - `/scenarios` - Conversation scenarios
 - `/metrics` - Evaluation metrics
@@ -956,9 +956,18 @@ The tool type is determined by the `type` field in the tool's `config` column in
 
 ### Test Case Configuration Schema
 
+Tests store conversation history in the `history` field (OpenAI chat message format) and evaluation criteria in the `evaluation` field. Two evaluation types are supported:
+
+**Tool call evaluation:**
+
 ```json
 {
-  "input": "What's the weather in Mumbai?",
+  "history": [
+    { "role": "assistant", "content": "Hello, how can I help you today?" },
+    { "role": "user", "content": "Hi" },
+    { "role": "assistant", "tool_calls": [{ "id": "...", "function": { "name": "some_tool", "arguments": "{}" }, "type": "function" }] },
+    { "role": "tool", "content": "{\"status\": \"received\"}", "tool_call_id": "..." }
+  ],
   "evaluation": {
     "type": "tool_call",
     "tool_calls": [
@@ -971,6 +980,58 @@ The tool type is determined by the `type` field in the tool's `config` column in
   }
 }
 ```
+
+**Response (criteria) evaluation:**
+
+```json
+{
+  "history": [
+    { "role": "assistant", "content": "Hello, how can I help you today?" },
+    { "role": "user", "content": "What is your return policy?" }
+  ],
+  "settings": { "language": "english" },
+  "evaluation": {
+    "type": "response",
+    "criteria": "The agent should clearly explain the return policy in a helpful and friendly tone"
+  }
+}
+```
+
+The `history` field uses the OpenAI chat messages format with `role` (system/user/assistant/tool), `content`, and optional `tool_calls`/`tool_call_id`/`name` fields. The `evaluation.type` is `"response"` (for LLM judge criteria evaluation) or `"tool_call"` (for expected tool call matching). The optional `settings` field can include language and other test settings. All fields are stored in the test's `config` JSON column and passed through to calibrate as-is by `_build_calibrate_config()`.
+
+### Bulk Test Upload
+
+`POST /tests/bulk` creates multiple tests in a single request. All tests in the batch must share the same `type`.
+
+**Request:**
+
+```json
+{
+  "type": "response",
+  "language": "hindi",
+  "agent_uuids": ["agent-uuid-1", "agent-uuid-2"],
+  "tests": [
+    {
+      "name": "test-greeting",
+      "conversation_history": [
+        { "role": "user", "content": "Hello" }
+      ],
+      "criteria": "Response should be a polite greeting"
+    }
+  ]
+}
+```
+
+- `type`: `"response"` or `"tool_call"` — stored as `evaluation.type` in the config (same values used in both the API and the stored config)
+- `language`: Optional, applies to all tests — stored as `settings.language` in each test's config
+- `agent_uuids`: Optional list of agent UUIDs to link all created tests to. Agents are validated upfront (must exist and be owned by the user) before any tests are created. Linking failures for individual test-agent pairs are surfaced in the response `warnings` array but don't fail the request.
+- Maximum batch size is 500 tests (enforced by `BulkTestUpload.MAX_BATCH_SIZE` in the Pydantic validator)
+- Each test requires a unique `name` — validated both within the batch and against existing tests for the user
+- `conversation_history`: Required, OpenAI chat message format — stored as `history` in the config to match the single-test format
+- `criteria`: Required when `type` is `"response"`
+- `tool_calls`: Required when `type` is `"tool_call"`, array of `{tool, arguments?, accept_any_arguments?}`
+
+All tests are inserted in a single DB transaction — if any name conflicts with an existing test, none are created. The `bulk_create_tests()` function in `db.py` handles the atomic insert with name uniqueness validation. Agent linking happens after test creation via `add_test_to_agent()`. The response includes a `warnings` array (nullable) that reports any agent linking failures, and the `message` reflects the actual number of successfully linked agents rather than the requested count.
 
 ### Persona Configuration Schema
 

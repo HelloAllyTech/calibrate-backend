@@ -1017,6 +1017,52 @@ def create_test(
         return test_uuid
 
 
+def bulk_create_tests(
+    tests: List[Dict[str, Any]],
+    user_id: str,
+) -> List[str]:
+    """Create multiple tests in a single transaction and return their UUIDs.
+
+    Each item in tests must have keys: name, type, config.
+    Raises ValueError if user_id is missing or any name collides with an
+    existing (non-deleted) test owned by the same user.
+    """
+    if not user_id:
+        raise ValueError("user_id is required when creating tests")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        names = [t["name"] for t in tests]
+        placeholders = ",".join("?" for _ in names)
+        cursor.execute(
+            f"SELECT name FROM tests WHERE user_id = ? AND deleted_at IS NULL AND name IN ({placeholders})",
+            [user_id] + names,
+        )
+        existing = {row["name"] for row in cursor.fetchall()}
+        if existing:
+            raise ValueError(
+                f"Test names already exist: {', '.join(sorted(existing))}"
+            )
+
+        uuids: List[str] = []
+        for t in tests:
+            test_uuid = str(uuid.uuid4())
+            config_json = json.dumps(t["config"]) if t.get("config") is not None else None
+            cursor.execute(
+                """
+                INSERT INTO tests (uuid, name, type, config, user_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (test_uuid, t["name"], t["type"], config_json, user_id),
+            )
+            uuids.append(test_uuid)
+
+        conn.commit()
+        logger.info(f"Bulk created {len(uuids)} tests")
+        return uuids
+
+
 def _parse_test_row(row: sqlite3.Row) -> Dict[str, Any]:
     """Parse a database row and deserialize JSON fields."""
     test = dict(row)
