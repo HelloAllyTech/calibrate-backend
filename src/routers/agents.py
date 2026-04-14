@@ -161,6 +161,8 @@ class AgentCreate(BaseModel):
 class AgentUpdate(BaseModel):
     name: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
+    connection_verified: Optional[bool] = None
+    benchmark_models_verified: Optional[Dict[str, Any]] = None
 
 
 class AgentResponse(BaseModel):
@@ -346,6 +348,15 @@ async def update_agent_endpoint(
             agent.config["connection_verified_at"] = None
             agent.config["connection_verified_error"] = None
             agent.config["benchmark_models_verified"] = {}
+
+    # Merge top-level verification fields into config
+    if agent.connection_verified is not None or agent.benchmark_models_verified is not None:
+        if agent.config is None:
+            agent.config = copy.deepcopy(existing_agent.get("config") or {})
+        if agent.connection_verified is not None:
+            agent.config["connection_verified"] = agent.connection_verified
+        if agent.benchmark_models_verified is not None:
+            agent.config["benchmark_models_verified"] = agent.benchmark_models_verified
 
     # Update only provided fields
     updated = update_agent(
