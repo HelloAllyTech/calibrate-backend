@@ -1,9 +1,13 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
-from db import create_test, get_test, get_all_tests, update_test, delete_test
+from db import create_test, get_test, get_all_tests, update_test, delete_test, bulk_create_tests, get_agent, add_test_to_agent
 from auth_utils import get_current_user_id
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/tests", tags=["tests"])
@@ -33,6 +37,124 @@ class TestResponse(BaseModel):
 class TestCreateResponse(BaseModel):
     uuid: str
     message: str
+
+
+# --- Bulk upload models ---
+
+class ChatMessage(BaseModel):
+    role: Literal["system", "user", "assistant", "tool"]
+    content: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
+
+
+class ExpectedToolCall(BaseModel):
+    tool: str
+    arguments: Optional[Dict[str, Any]] = None
+    accept_any_arguments: bool = False
+
+
+class BulkTestItem(BaseModel):
+    name: str
+    conversation_history: List[ChatMessage]
+    criteria: Optional[str] = None
+    tool_calls: Optional[List[ExpectedToolCall]] = None
+
+
+class BulkTestUpload(BaseModel):
+    type: Literal["response", "tool_call"]
+    tests: List[BulkTestItem]
+    agent_uuids: Optional[List[str]] = None
+    language: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_tests(self):
+        if not self.tests:
+            raise ValueError("tests list must not be empty")
+
+        names = [t.name for t in self.tests]
+        if len(names) != len(set(names)):
+            seen = set()
+            dupes = sorted({n for n in names if n in seen or seen.add(n)})
+            raise ValueError(f"Duplicate test names in request: {', '.join(dupes)}")
+
+        for t in self.tests:
+            if not t.conversation_history:
+                raise ValueError(f"Test '{t.name}' must have at least one message in conversation_history")
+            if self.type == "response":
+                if not t.criteria:
+                    raise ValueError(f"Test '{t.name}' must have 'criteria' for response type")
+            elif self.type == "tool_call":
+                if not t.tool_calls:
+                    raise ValueError(f"Test '{t.name}' must have 'tool_calls' for tool_call type")
+
+        return self
+
+
+class BulkTestUploadResponse(BaseModel):
+    uuids: List[str]
+    count: int
+    message: str
+
+
+@router.post("/bulk", response_model=BulkTestUploadResponse)
+async def bulk_upload_tests(
+    payload: BulkTestUpload, user_id: str = Depends(get_current_user_id)
+):
+    """Bulk upload LLM tests. All tests must be the same type (response or tool_call)."""
+    if payload.agent_uuids:
+        for agent_uuid in payload.agent_uuids:
+            agent = get_agent(agent_uuid)
+            if not agent:
+                raise HTTPException(status_code=404, detail=f"Agent {agent_uuid} not found")
+            if agent.get("user_id") != user_id:
+                raise HTTPException(status_code=403, detail=f"Access denied for agent {agent_uuid}")
+
+    db_tests = []
+    for t in payload.tests:
+        evaluation: Dict[str, Any] = {"type": payload.type}
+        if payload.type == "response":
+            evaluation["criteria"] = t.criteria
+        else:
+            evaluation["tool_calls"] = [tc.model_dump() for tc in t.tool_calls]
+
+        config: Dict[str, Any] = {
+            "history": [msg.model_dump(exclude_none=True) for msg in t.conversation_history],
+            "evaluation": evaluation,
+        }
+        if payload.language:
+            config["settings"] = {"language": payload.language}
+
+        db_tests.append({
+            "name": t.name,
+            "type": payload.type,
+            "config": config,
+        })
+
+    try:
+        uuids = bulk_create_tests(tests=db_tests, user_id=user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if payload.agent_uuids:
+        for agent_uuid in payload.agent_uuids:
+            for test_uuid in uuids:
+                try:
+                    add_test_to_agent(agent_uuid, test_uuid)
+                except Exception as e:
+                    logger.warning(f"Failed to link test {test_uuid} to agent {agent_uuid}: {e}")
+
+    linked_agents = len(payload.agent_uuids) if payload.agent_uuids else 0
+    message = f"Successfully created {len(uuids)} tests"
+    if linked_agents:
+        message += f" and linked to {linked_agents} agent(s)"
+
+    return BulkTestUploadResponse(
+        uuids=uuids,
+        count=len(uuids),
+        message=message,
+    )
 
 
 @router.post("", response_model=TestCreateResponse)
