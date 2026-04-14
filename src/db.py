@@ -1165,6 +1165,36 @@ def delete_test(test_uuid: str) -> bool:
         return deleted
 
 
+def bulk_delete_tests(test_uuids: List[str], user_id: str) -> int:
+    """Soft delete multiple tests owned by user_id.
+    Also soft deletes related agent_tests entries.
+    Returns the number of tests actually deleted.
+    """
+    if not test_uuids:
+        return 0
+
+    placeholders = ",".join("?" for _ in test_uuids)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE tests SET deleted_at = CURRENT_TIMESTAMP "
+            f"WHERE uuid IN ({placeholders}) AND user_id = ? AND deleted_at IS NULL",
+            (*test_uuids, user_id),
+        )
+        deleted_count = cursor.rowcount
+
+        if deleted_count > 0:
+            cursor.execute(
+                f"UPDATE agent_tests SET deleted_at = CURRENT_TIMESTAMP "
+                f"WHERE test_id IN ({placeholders}) AND deleted_at IS NULL",
+                test_uuids,
+            )
+            logger.info(f"Bulk soft deleted {deleted_count} tests for user {user_id}")
+
+        conn.commit()
+        return deleted_count
+
+
 # ============ Personas Functions ============
 
 
@@ -2035,6 +2065,28 @@ def remove_test_from_agent(agent_id: str, test_id: str) -> bool:
             logger.info(f"Soft deleted test {test_id} from agent {agent_id}")
 
         return deleted
+
+
+def bulk_remove_tests_from_agent(agent_id: str, test_ids: List[str]) -> int:
+    """Soft delete multiple test links from an agent. Returns the number of links removed."""
+    if not test_ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in test_ids)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE agent_tests SET deleted_at = CURRENT_TIMESTAMP "
+            f"WHERE agent_id = ? AND test_id IN ({placeholders}) AND deleted_at IS NULL",
+            (agent_id, *test_ids),
+        )
+        conn.commit()
+        deleted_count = cursor.rowcount
+
+        if deleted_count > 0:
+            logger.info(f"Bulk soft deleted {deleted_count} test links from agent {agent_id}")
+
+        return deleted_count
 
 
 def get_tests_for_agent(agent_id: str) -> List[Dict[str, Any]]:

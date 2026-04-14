@@ -180,7 +180,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 
 - `/agents` - Agent management
 - `/tools` - Tool definitions
-- `/tests` - Test cases (CRUD + bulk upload)
+- `/tests` - Test cases (CRUD + bulk upload + bulk delete)
 - `/personas` - User personas
 - `/scenarios` - Conversation scenarios
 - `/metrics` - Evaluation metrics
@@ -191,7 +191,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 #### Relationship Management
 
 - `/agent-tools` - Link/unlink tools to agents
-- `/agent-tests` - Link/unlink tests to agents (required for benchmarks; optional for run — run can also accept explicit test_uuids)
+- `/agent-tests` - Link/unlink tests to agents (single + bulk; required for benchmarks; optional for run — run can also accept explicit test_uuids)
 
 #### Datasets
 
@@ -1032,6 +1032,53 @@ The `history` field uses the OpenAI chat messages format with `role` (system/use
 - `tool_calls`: Required when `type` is `"tool_call"`, array of `{tool, arguments?, accept_any_arguments?}`
 
 All tests are inserted in a single DB transaction — if any name conflicts with an existing test, none are created. The `bulk_create_tests()` function in `db.py` handles the atomic insert with name uniqueness validation. Agent linking happens after test creation via `add_test_to_agent()`. The response includes a `warnings` array (nullable) that reports any agent linking failures, and the `message` reflects the actual number of successfully linked agents rather than the requested count.
+
+### Bulk Test Delete
+
+`POST /tests/bulk-delete` deletes multiple tests in a single request. Only tests owned by the authenticated user are deleted; others are silently skipped.
+
+**Request:**
+
+```json
+{
+  "test_uuids": ["uuid-1", "uuid-2", "uuid-3"]
+}
+```
+
+**Response:**
+
+```json
+{
+  "deleted_count": 3,
+  "message": "Successfully deleted 3 test(s)"
+}
+```
+
+The `bulk_delete_tests()` function in `db.py` performs a single SQL `UPDATE` scoped to the user's tests, and also soft deletes related `agent_tests` entries in the same transaction.
+
+### Bulk Unlink Tests from Agent
+
+`POST /agent-tests/bulk-unlink` removes multiple test links from an agent at once.
+
+**Request:**
+
+```json
+{
+  "agent_uuid": "agent-uuid",
+  "test_uuids": ["test-uuid-1", "test-uuid-2"]
+}
+```
+
+**Response:**
+
+```json
+{
+  "deleted_count": 2,
+  "message": "Successfully unlinked 2 test(s) from agent"
+}
+```
+
+The `bulk_remove_tests_from_agent()` function in `db.py` performs a single SQL `UPDATE` with an `IN` clause.
 
 ### Persona Configuration Schema
 

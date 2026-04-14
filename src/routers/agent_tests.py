@@ -17,6 +17,7 @@ from sqlite3 import IntegrityError
 from db import (
     add_test_to_agent,
     remove_test_from_agent,
+    bulk_remove_tests_from_agent,
     get_tests_for_agent,
     get_agents_for_test,
     get_agent_test_link,
@@ -354,6 +355,32 @@ async def delete_agent_test_link(agent_test: AgentTestDelete):
     if not deleted:
         raise HTTPException(status_code=404, detail="Agent-test link not found")
     return {"message": "Test removed from agent successfully"}
+
+
+class AgentTestBulkDelete(BaseModel):
+    agent_uuid: str
+    test_uuids: List[str]
+
+
+@router.post("/bulk-unlink")
+async def bulk_delete_agent_test_links(payload: AgentTestBulkDelete):
+    """Remove multiple tests from an agent at once."""
+    if not payload.test_uuids:
+        raise HTTPException(status_code=400, detail="test_uuids must not be empty")
+
+    agent = get_agent(payload.agent_uuid)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    deleted_count = bulk_remove_tests_from_agent(
+        agent_id=payload.agent_uuid,
+        test_ids=payload.test_uuids,
+    )
+
+    return {
+        "deleted_count": deleted_count,
+        "message": f"Successfully unlinked {deleted_count} test(s) from agent",
+    }
 
 
 # ============ Shared Helper Functions ============

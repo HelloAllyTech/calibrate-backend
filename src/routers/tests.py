@@ -2,7 +2,7 @@ from typing import ClassVar, Optional, List, Dict, Any, Literal
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, model_validator
 
-from db import create_test, get_test, get_all_tests, update_test, delete_test, bulk_create_tests, get_agent, add_test_to_agent
+from db import create_test, get_test, get_all_tests, update_test, delete_test, bulk_create_tests, bulk_delete_tests, get_agent, add_test_to_agent
 from auth_utils import get_current_user_id
 
 import logging
@@ -102,6 +102,31 @@ class BulkTestUploadResponse(BaseModel):
     count: int
     message: str
     warnings: Optional[List[str]] = None
+
+
+class BulkTestDelete(BaseModel):
+    test_uuids: List[str]
+
+
+class BulkTestDeleteResponse(BaseModel):
+    deleted_count: int
+    message: str
+
+
+@router.post("/bulk-delete", response_model=BulkTestDeleteResponse)
+async def bulk_delete_tests_endpoint(
+    payload: BulkTestDelete, user_id: str = Depends(get_current_user_id)
+):
+    """Bulk delete tests by UUIDs. Only deletes tests owned by the authenticated user."""
+    if not payload.test_uuids:
+        raise HTTPException(status_code=400, detail="test_uuids must not be empty")
+
+    deleted_count = bulk_delete_tests(test_uuids=payload.test_uuids, user_id=user_id)
+
+    return BulkTestDeleteResponse(
+        deleted_count=deleted_count,
+        message=f"Successfully deleted {deleted_count} test(s)",
+    )
 
 
 @router.post("/bulk", response_model=BulkTestUploadResponse)
