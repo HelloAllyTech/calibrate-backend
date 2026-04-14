@@ -1251,6 +1251,8 @@ def _run_calibrate_text_simulation(
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         logger.warning(f"Text simulation {task_id}: process {process.pid} did not exit within 5s after kill")
+                        process.kill()
+                        process.wait(timeout=5)
                     break
                 prev_state = _update_text_simulation_intermediate_results(
                     task_id,
@@ -1751,6 +1753,8 @@ def _run_calibrate_voice_simulation(
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     logger.warning(f"Voice simulation {task_id}: process {process.pid} did not exit within 5s after kill")
+                    process.kill()
+                    process.wait(timeout=5)
                 break
 
             in_progress_results = []  # Rebuilt each iteration
@@ -1823,8 +1827,9 @@ def _run_calibrate_voice_simulation(
 
             time.sleep(poll_interval)
 
-        # Process finished, wait for it to complete
-        process.wait()
+        # Process finished, wait for it to complete (skip if aborted — process is already killed)
+        if not (task_id and _is_job_aborted(task_id)):
+            process.wait()
 
     # Check if job was aborted by user before doing final processing
     if task_id:
