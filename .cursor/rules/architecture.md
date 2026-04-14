@@ -1024,13 +1024,14 @@ The `history` field uses the OpenAI chat messages format with `role` (system/use
 
 - `type`: `"response"` or `"tool_call"` — stored as `evaluation.type` in the config (same values used in both the API and the stored config)
 - `language`: Optional, applies to all tests — stored as `settings.language` in each test's config
-- `agent_uuids`: Optional list of agent UUIDs to link all created tests to. Agents are validated upfront (must exist and be owned by the user) before any tests are created. Linking failures for individual test-agent pairs are logged but don't fail the request.
+- `agent_uuids`: Optional list of agent UUIDs to link all created tests to. Agents are validated upfront (must exist and be owned by the user) before any tests are created. Linking failures for individual test-agent pairs are surfaced in the response `warnings` array but don't fail the request.
+- Maximum batch size is 500 tests (enforced by `BulkTestUpload.MAX_BATCH_SIZE` in the Pydantic validator)
 - Each test requires a unique `name` — validated both within the batch and against existing tests for the user
 - `conversation_history`: Required, OpenAI chat message format — stored as `history` in the config to match the single-test format
 - `criteria`: Required when `type` is `"response"`
 - `tool_calls`: Required when `type` is `"tool_call"`, array of `{tool, arguments?, accept_any_arguments?}`
 
-All tests are inserted in a single DB transaction — if any name conflicts with an existing test, none are created. The `bulk_create_tests()` function in `db.py` handles the atomic insert with name uniqueness validation. Agent linking happens after test creation via `add_test_to_agent()`.
+All tests are inserted in a single DB transaction — if any name conflicts with an existing test, none are created. The `bulk_create_tests()` function in `db.py` handles the atomic insert with name uniqueness validation. Agent linking happens after test creation via `add_test_to_agent()`. The response includes a `warnings` array (nullable) that reports any agent linking failures, and the `message` reflects the actual number of successfully linked agents rather than the requested count.
 
 ### Persona Configuration Schema
 

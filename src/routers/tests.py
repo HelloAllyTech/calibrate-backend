@@ -68,10 +68,15 @@ class BulkTestUpload(BaseModel):
     agent_uuids: Optional[List[str]] = None
     language: Optional[str] = None
 
+    MAX_BATCH_SIZE = 500
+
     @model_validator(mode="after")
     def validate_tests(self):
         if not self.tests:
             raise ValueError("tests list must not be empty")
+
+        if len(self.tests) > self.MAX_BATCH_SIZE:
+            raise ValueError(f"Batch size {len(self.tests)} exceeds maximum of {self.MAX_BATCH_SIZE}")
 
         names = [t.name for t in self.tests]
         if len(names) != len(set(names)):
@@ -96,6 +101,7 @@ class BulkTestUploadResponse(BaseModel):
     uuids: List[str]
     count: int
     message: str
+    warnings: Optional[List[str]] = None
 
 
 @router.post("/bulk", response_model=BulkTestUploadResponse)
@@ -137,23 +143,30 @@ async def bulk_upload_tests(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    warnings: List[str] = []
     if payload.agent_uuids:
+        linked_agents = set()
         for agent_uuid in payload.agent_uuids:
+            agent_failed = False
             for test_uuid in uuids:
                 try:
                     add_test_to_agent(agent_uuid, test_uuid)
+                    linked_agents.add(agent_uuid)
                 except Exception as e:
+                    agent_failed = True
                     logger.warning(f"Failed to link test {test_uuid} to agent {agent_uuid}: {e}")
+            if agent_failed:
+                warnings.append(f"Some tests could not be linked to agent {agent_uuid}")
 
-    linked_agents = len(payload.agent_uuids) if payload.agent_uuids else 0
     message = f"Successfully created {len(uuids)} tests"
-    if linked_agents:
-        message += f" and linked to {linked_agents} agent(s)"
+    if payload.agent_uuids:
+        message += f" and linked to {len(linked_agents)} agent(s)"
 
     return BulkTestUploadResponse(
         uuids=uuids,
         count=len(uuids),
         message=message,
+        warnings=warnings or None,
     )
 
 
