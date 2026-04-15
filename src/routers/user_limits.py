@@ -1,8 +1,8 @@
 import os
-from typing import Dict, Any
+import sqlite3
 
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field
 
 from db import (
     create_user_limits,
@@ -10,17 +10,15 @@ from db import (
     update_user_limits,
     delete_user_limits,
 )
-from auth_utils import get_current_user_id
+from auth_utils import get_current_user_id, require_superadmin
 
 router = APIRouter(prefix="/user-limits", tags=["user-limits"])
 
 DEFAULT_MAX_ROWS_PER_EVAL = int(os.getenv("DEFAULT_MAX_ROWS_PER_EVAL", "20"))
 
-ALLOWED_LIMIT_KEYS = {"max_rows_per_eval"}
-
 
 class UserLimits(BaseModel):
-    max_rows_per_eval: int
+    max_rows_per_eval: int = Field(gt=0)
 
 
 class UserLimitsCreate(BaseModel):
@@ -60,7 +58,7 @@ async def get_max_rows_per_eval(user_id: str = Depends(get_current_user_id)):
 
 @router.post("", response_model=UserLimitsCreateResponse)
 async def create_user_limits_endpoint(
-    data: UserLimitsCreate, user_id: str = Depends(get_current_user_id)
+    data: UserLimitsCreate, user_id: str = Depends(require_superadmin)
 ):
     """Create limits for a user."""
     existing = get_user_limits(data.user_id)
@@ -69,7 +67,13 @@ async def create_user_limits_endpoint(
             status_code=409,
             detail="Limits already exist for this user. Use PUT to update.",
         )
-    row_uuid = create_user_limits(user_id=data.user_id, limits=data.limits)
+    try:
+        row_uuid = create_user_limits(user_id=data.user_id, limits=data.limits)
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail="Limits already exist for this user. Use PUT to update.",
+        )
     return UserLimitsCreateResponse(
         uuid=row_uuid, message="User limits created successfully"
     )
@@ -90,7 +94,7 @@ async def get_user_limits_endpoint(
 async def update_user_limits_endpoint(
     target_user_id: str,
     data: UserLimitsUpdate,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(require_superadmin),
 ):
     """Update limits for a user."""
     existing = get_user_limits(target_user_id)
@@ -104,7 +108,7 @@ async def update_user_limits_endpoint(
 
 @router.delete("/{target_user_id}")
 async def delete_user_limits_endpoint(
-    target_user_id: str, user_id: str = Depends(get_current_user_id)
+    target_user_id: str, user_id: str = Depends(require_superadmin)
 ):
     """Delete limits for a user."""
     deleted = delete_user_limits(target_user_id)

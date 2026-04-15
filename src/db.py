@@ -5,8 +5,11 @@ import uuid
 from os.path import join
 import os
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from contextlib import contextmanager
+
+if TYPE_CHECKING:
+    from routers.user_limits import UserLimits
 
 logger = logging.getLogger(__name__)
 
@@ -3142,7 +3145,7 @@ def delete_dataset_item(item_uuid: str, dataset_id: str) -> bool:
 # ============ User Limits Functions ============
 
 
-def create_user_limits(user_id: str, limits: Dict[str, Any]) -> str:
+def create_user_limits(user_id: str, limits: "UserLimits") -> str:
     """Create a user limits row. Returns the UUID."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -3175,7 +3178,7 @@ def get_user_limits(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def update_user_limits(user_id: str, limits: Dict[str, Any]) -> bool:
+def update_user_limits(user_id: str, limits: "UserLimits") -> bool:
     """Update limits JSON for a user. Returns True if updated."""
     with get_db_connection() as conn:
         cursor = conn.cursor()

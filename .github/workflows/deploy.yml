@@ -98,6 +98,7 @@ jobs:
             export MAX_CONCURRENT_JOBS="${{ secrets.MAX_CONCURRENT_JOBS }}"
             export MAX_CONCURRENT_JOBS_PER_USER="${{ secrets.MAX_CONCURRENT_JOBS_PER_USER }}"
             export DEFAULT_MAX_ROWS_PER_EVAL="${{ vars.DEFAULT_MAX_ROWS_PER_EVAL }}"
+            export SUPERADMIN_EMAIL="${{ secrets.SUPERADMIN_EMAIL }}"
 
             # Navigate to directory with docker-compose.yml
             cd /tmp/pense-production
