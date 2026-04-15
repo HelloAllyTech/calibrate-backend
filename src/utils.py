@@ -280,6 +280,20 @@ def generate_presigned_download_url(
         return None
 
 
+def presign_audio_path(audio_path: Optional[str]) -> Optional[str]:
+    """Convert an s3://bucket/key path (or plain key) to a presigned download URL."""
+    if not audio_path:
+        return audio_path
+    if audio_path.startswith("s3://"):
+        parts = audio_path[5:].split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        return generate_presigned_download_url(key, bucket=bucket) or audio_path
+    if audio_path.startswith("http"):
+        return audio_path
+    return generate_presigned_download_url(audio_path) or audio_path
+
+
 def generate_presigned_upload_url(
     s3_key: str,
     content_type: str,
