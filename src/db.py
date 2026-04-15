@@ -3178,8 +3178,8 @@ def get_user_limits(user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def update_user_limits(user_id: str, limits: "UserLimits") -> bool:
-    """Update limits JSON for a user. Returns True if updated."""
+def update_user_limits(user_id: str, limits: "UserLimits") -> Optional[Dict[str, Any]]:
+    """Update limits JSON for a user. Returns the updated row, or None if not found."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -3187,7 +3187,18 @@ def update_user_limits(user_id: str, limits: "UserLimits") -> bool:
             (limits.model_dump_json(), user_id),
         )
         conn.commit()
-        return cursor.rowcount > 0
+        if cursor.rowcount == 0:
+            return None
+        cursor.execute(
+            "SELECT * FROM user_limits WHERE user_id = ?",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            result = dict(row)
+            result["limits"] = json.loads(result["limits"])
+            return result
+        return None
 
 
 def delete_user_limits(user_id: str) -> bool:

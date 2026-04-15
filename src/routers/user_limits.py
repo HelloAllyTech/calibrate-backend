@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from db import (
     create_user_limits,
+    get_user,
     get_user_limits,
     update_user_limits,
     delete_user_limits,
@@ -18,7 +19,7 @@ DEFAULT_MAX_ROWS_PER_EVAL = int(os.getenv("DEFAULT_MAX_ROWS_PER_EVAL", "20"))
 
 
 class UserLimits(BaseModel):
-    max_rows_per_eval: int = Field(gt=0)
+    max_rows_per_eval: int = Field(gt=0, le=10000)
 
 
 class UserLimitsCreate(BaseModel):
@@ -61,6 +62,8 @@ async def create_user_limits_endpoint(
     data: UserLimitsCreate, user_id: str = Depends(require_superadmin)
 ):
     """Create limits for a user."""
+    if not get_user(data.user_id):
+        raise HTTPException(status_code=404, detail="User not found")
     existing = get_user_limits(data.user_id)
     if existing:
         raise HTTPException(
@@ -97,12 +100,9 @@ async def update_user_limits_endpoint(
     user_id: str = Depends(require_superadmin),
 ):
     """Update limits for a user."""
-    existing = get_user_limits(target_user_id)
-    if not existing:
+    updated = update_user_limits(user_id=target_user_id, limits=data.limits)
+    if not updated:
         raise HTTPException(status_code=404, detail="User limits not found")
-
-    update_user_limits(user_id=target_user_id, limits=data.limits)
-    updated = get_user_limits(target_user_id)
     return updated
 
 

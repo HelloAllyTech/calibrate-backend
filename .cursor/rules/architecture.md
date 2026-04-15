@@ -121,7 +121,7 @@ simulations
 | `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                                                         |
 | `agent_test_jobs` | LLM unit test and benchmark jobs                                                                              |
 | `simulation_jobs` | Chat/voice simulation jobs                                                                                    |
-| `user_limits`     | Per-user limits/quotas as a JSON blob (one row per user, `user_id` UNIQUE). No soft delete — hard delete only. The `limits` JSON is validated at the API layer via the `UserLimits` Pydantic model in `user_limits.py` (with `Field(gt=0)` constraints); currently only `max_rows_per_eval` is permitted. The `create_user_limits` endpoint handles race conditions via `sqlite3.IntegrityError` catch (returns 409). DB functions in `db.py` accept `UserLimits` type (imported via `TYPE_CHECKING` to avoid circular imports) |
+| `user_limits`     | Per-user limits/quotas as a JSON blob (one row per user, `user_id` UNIQUE). No soft delete — hard delete only. The `limits` JSON is validated at the API layer via the `UserLimits` Pydantic model in `user_limits.py` (with `Field(gt=0, le=10000)` constraints); currently only `max_rows_per_eval` is permitted. The `create_user_limits` endpoint validates user existence explicitly via `get_user()` (returns 404) because SQLite FK constraints are not enforced (`PRAGMA foreign_keys` is off), and handles race conditions via `sqlite3.IntegrityError` catch (returns 409). `update_user_limits()` in `db.py` returns the updated row directly (update + select in one connection) to avoid extra round-trips. DB functions accept `UserLimits` type (imported via `TYPE_CHECKING` to avoid circular imports) |
 
 ### Users Table Schema
 
@@ -190,7 +190,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 - `/simulations` - Simulation configurations
 - `/datasets` - Dataset CRUD, item management (add/update/delete items), `eval_count` per dataset (number of linked STT/TTS eval jobs via `json_extract` on jobs `details`)
 - `/users` - User management (read-only)
-- `/user-limits` - Per-user limits CRUD + `/me/max-rows-per-eval` query endpoint. Mutating endpoints (`POST`, `PUT`, `DELETE`) require superadmin (`require_superadmin` dependency checks JWT email against `SUPERADMIN_EMAIL` env var); read endpoints (`GET`) require only standard JWT auth
+- `/user-limits` - Per-user limits CRUD + `/me/max-rows-per-eval` query endpoint. Mutating endpoints (`POST`, `PUT`, `DELETE`) require superadmin (`require_superadmin` dependency composes `get_current_user_id` for token validation, then checks JWT email against `SUPERADMIN_EMAIL` env var); read endpoints (`GET`) require only standard JWT auth
 
 #### Relationship Management
 

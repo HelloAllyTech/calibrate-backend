@@ -121,24 +121,9 @@ async def require_superadmin(
     Raises:
         HTTPException: 401 if token invalid, 403 if not superadmin
     """
-    token = credentials.credentials
-    payload = decode_token(token)
+    user_id = await get_current_user_id(credentials)
 
-    if not payload:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=401,
-            detail="Token missing user information",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
+    payload = decode_token(credentials.credentials)
     email = payload.get("email", "")
     if not SUPERADMIN_EMAIL or email != SUPERADMIN_EMAIL:
         raise HTTPException(status_code=403, detail="Superadmin access required")
