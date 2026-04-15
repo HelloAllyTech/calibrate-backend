@@ -1340,12 +1340,14 @@ def _run_calibrate_text_simulation(
         logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
     error = None
-    is_failure = process.returncode != 0
-    if not is_failure and not simulation_results:
+    if process.returncode != 0:
+        is_failure = True
+        error = f"Command failed with exit code {process.returncode}: {stderr_content}"
+    elif not simulation_results:
         is_failure = True
         error = "Simulation produced no output (no simulation directories found)"
-    elif process.returncode != 0:
-        error = f"Command failed with exit code {process.returncode}: {stderr_content}"
+    else:
+        is_failure = False
 
     if is_failure:
         logger.error(error)
@@ -1923,12 +1925,14 @@ def _run_calibrate_voice_simulation(
         logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
     error = None
-    is_failure = process.returncode != 0
-    if not is_failure and not completed_results:
+    if process.returncode != 0:
+        is_failure = True
+        error = f"Command failed with exit code {process.returncode}: {stderr}"
+    elif not completed_results:
         is_failure = True
         error = "Simulation produced no output (no simulation directories found)"
-    elif process.returncode != 0:
-        error = f"Command failed with exit code {process.returncode}: {stderr}"
+    else:
+        is_failure = False
 
     if is_failure:
         logger.error(error)
