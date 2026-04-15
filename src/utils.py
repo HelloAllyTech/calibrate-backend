@@ -114,6 +114,8 @@ class TaskStatusResponse(BaseModel):
     provider_results: Optional[List[ProviderResult]] = None
     leaderboard_summary: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None
+    is_public: bool = False
+    share_token: Optional[str] = None
 
 
 def kill_process_group(pid: int, job_id: str) -> bool:

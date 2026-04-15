@@ -1,0 +1,343 @@
+"""
+Public read-only endpoints for shared eval/run results.
+
+These routes bypass authentication entirely — they are excluded from the
+auth middleware by design so that anyone with a valid share_token can view
+the results without logging in.
+
+URL scheme:
+  GET /public/stt/{share_token}
+  GET /public/tts/{share_token}
+  GET /public/test-run/{share_token}
+  GET /public/benchmark/{share_token}
+  GET /public/simulation-run/{share_token}
+"""
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from db import (
+    get_job_by_share_token,
+    get_agent_test_job_by_share_token,
+    get_simulation_job_by_share_token,
+    get_simulation_jobs_for_simulation,
+)
+from utils import (
+    TaskStatus,
+    ProviderResult,
+    generate_presigned_download_url,
+    get_s3_output_config,
+    normalize_metrics,
+)
+# Re-use the audio URL helper from simulations (no circular import risk)
+from routers.simulations import _get_audio_urls_from_s3_key
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/public", tags=["public"])
+
+
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+class PublicSTTResponse(BaseModel):
+    task_id: str
+    status: str
+    language: Optional[str] = None
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
+    provider_results: Optional[List[ProviderResult]] = None
+    leaderboard_summary: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+
+
+class PublicTTSResponse(BaseModel):
+    task_id: str
+    status: str
+    language: Optional[str] = None
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
+    provider_results: Optional[List[ProviderResult]] = None
+    leaderboard_summary: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+
+
+class PublicTestRunResponse(BaseModel):
+    task_id: str
+    status: str
+    total_tests: Optional[int] = None
+    passed: Optional[int] = None
+    failed: Optional[int] = None
+    results: Optional[List[Dict[str, Any]]] = None
+    error: bool = False
+
+
+class PublicBenchmarkResponse(BaseModel):
+    task_id: str
+    status: str
+    model_results: Optional[List[Dict[str, Any]]] = None
+    leaderboard_summary: Optional[List[Dict[str, Any]]] = None
+    error: bool = False
+
+
+class PublicSimulationRunResponse(BaseModel):
+    task_id: str
+    name: str
+    status: str
+    type: str
+    updated_at: str
+    total_simulations: Optional[int] = None
+    metrics: Optional[Dict[str, Any]] = None
+    simulation_results: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _build_tts_provider_results_with_presigned_urls(
+    provider_results: List[Dict[str, Any]],
+    status: str,
+) -> List[Dict[str, Any]]:
+    """
+    For DONE/FAILED TTS jobs regenerate presigned download URLs for audio
+    entries whose audio_path is an S3 key rather than an http URL.
+    Mirrors the logic in routers/tts.py::get_tts_evaluation_status.
+    """
+    if status not in (TaskStatus.DONE.value, TaskStatus.FAILED.value):
+        return provider_results
+
+    for provider_result in provider_results:
+        if provider_result.get("results"):
+            for result_row in provider_result["results"]:
+                if "audio_path" in result_row and result_row["audio_path"]:
+                    audio_s3_key = result_row["audio_path"]
+                    if audio_s3_key.startswith("http") or audio_s3_key.startswith("s3://"):
+                        continue
+                    presigned_url = generate_presigned_download_url(audio_s3_key)
+                    if presigned_url:
+                        result_row["audio_path"] = presigned_url
+
+    return provider_results
+
+
+def _build_simulation_results_with_presigned_urls(
+    job: Dict[str, Any],
+    simulation_results: List[Dict[str, Any]],
+    status: str,
+) -> List[Dict[str, Any]]:
+    """
+    For DONE voice simulations regenerate presigned audio URLs on-the-fly.
+    Mirrors the logic in routers/simulations.py::get_simulation_run_status.
+    """
+    if job.get("type") != "voice" or not simulation_results:
+        return simulation_results
+
+    if status == TaskStatus.DONE.value:
+        try:
+            s3_bucket = get_s3_output_config()
+            for sim_result in simulation_results:
+                audios_s3_key_prefix = sim_result.get("audios_s3_path")
+                if audios_s3_key_prefix:
+                    audio_urls = _get_audio_urls_from_s3_key(
+                        audios_s3_key_prefix,
+                        s3_bucket,
+                        transcript=sim_result.get("transcript"),
+                    )
+                    sim_result["audio_urls"] = audio_urls
+
+                conversation_wav_s3_key = sim_result.get("conversation_wav_s3_key")
+                if conversation_wav_s3_key:
+                    conversation_wav_url = generate_presigned_download_url(
+                        conversation_wav_s3_key, bucket=s3_bucket
+                    )
+                    sim_result["conversation_wav_url"] = conversation_wav_url or ""
+                else:
+                    sim_result["conversation_wav_url"] = ""
+        except Exception as exc:
+            logger.warning(f"Failed to generate audio URLs for public endpoint: {exc}")
+
+    return simulation_results
+
+
+def _get_simulation_run_name(job: Dict[str, Any]) -> str:
+    """Return 'Run N' by looking at the job's position among sibling jobs."""
+    simulation_id = job.get("simulation_id")
+    if not simulation_id:
+        return "Run 1"
+    all_jobs = get_simulation_jobs_for_simulation(simulation_id)
+    sorted_jobs = sorted(all_jobs, key=lambda j: j.get("created_at", ""))
+    for idx, j in enumerate(sorted_jobs, start=1):
+        if j["uuid"] == job["uuid"]:
+            return f"Run {idx}"
+    return "Run 1"
+
+
+# ---------------------------------------------------------------------------
+# Public GET endpoints (no auth)
+# ---------------------------------------------------------------------------
+
+@router.get("/stt/{share_token}", response_model=PublicSTTResponse)
+async def get_public_stt(share_token: str):
+    """
+    Return a publicly shared STT evaluation result.
+    No authentication required — accessible to anyone with the share_token.
+    Returns 404 if the token is unknown or the run has been made private again.
+    """
+    job = get_job_by_share_token(share_token)
+    if not job:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    task_id = job["uuid"]
+    status = job["status"]
+    results = job.get("results") or {}
+    details = job.get("details") or {}
+
+    provider_results = results.get("provider_results") or []
+
+    # Normalize metrics format for backward compatibility (list -> dict)
+    for pr in provider_results:
+        if pr.get("metrics"):
+            pr["metrics"] = normalize_metrics(pr["metrics"])
+
+    return PublicSTTResponse(
+        task_id=task_id,
+        status=status,
+        language=details.get("language"),
+        dataset_id=details.get("dataset_id"),
+        dataset_name=details.get("dataset_name"),
+        provider_results=provider_results or None,
+        leaderboard_summary=results.get("leaderboard_summary"),
+        error=results.get("error"),
+    )
+
+
+@router.get("/tts/{share_token}", response_model=PublicTTSResponse)
+async def get_public_tts(share_token: str):
+    """
+    Return a publicly shared TTS evaluation result.
+    No authentication required — accessible to anyone with the share_token.
+    Returns 404 if the token is unknown or the run has been made private again.
+    """
+    job = get_job_by_share_token(share_token)
+    if not job:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    task_id = job["uuid"]
+    status = job["status"]
+    results = job.get("results") or {}
+    details = job.get("details") or {}
+
+    provider_results = results.get("provider_results") or []
+
+    # Normalize metrics format for backward compatibility (list -> dict)
+    for pr in provider_results:
+        if pr.get("metrics"):
+            pr["metrics"] = normalize_metrics(pr["metrics"])
+
+    # Regenerate presigned audio URLs for completed/failed jobs
+    provider_results = _build_tts_provider_results_with_presigned_urls(
+        provider_results, status
+    )
+
+    return PublicTTSResponse(
+        task_id=task_id,
+        status=status,
+        language=details.get("language"),
+        dataset_id=details.get("dataset_id"),
+        dataset_name=details.get("dataset_name"),
+        provider_results=provider_results or None,
+        leaderboard_summary=results.get("leaderboard_summary"),
+        error=results.get("error"),
+    )
+
+
+@router.get("/test-run/{share_token}", response_model=PublicTestRunResponse)
+async def get_public_test_run(share_token: str):
+    """
+    Return a publicly shared LLM test run result.
+    No authentication required — accessible to anyone with the share_token.
+    Returns 404 if the token is unknown or the run has been made private again.
+    """
+    job = get_agent_test_job_by_share_token(share_token)
+    if not job:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    task_id = job["uuid"]
+    status = job["status"]
+    results = job.get("results") or {}
+
+    return PublicTestRunResponse(
+        task_id=task_id,
+        status=status,
+        total_tests=results.get("total_tests"),
+        passed=results.get("passed"),
+        failed=results.get("failed"),
+        results=results.get("test_results"),
+        error=bool(results.get("error")),
+    )
+
+
+@router.get("/benchmark/{share_token}", response_model=PublicBenchmarkResponse)
+async def get_public_benchmark(share_token: str):
+    """
+    Return a publicly shared LLM benchmark result.
+    No authentication required — accessible to anyone with the share_token.
+    Returns 404 if the token is unknown or the run has been made private again.
+    """
+    job = get_agent_test_job_by_share_token(share_token)
+    if not job:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    task_id = job["uuid"]
+    status = job["status"]
+    results = job.get("results") or {}
+
+    return PublicBenchmarkResponse(
+        task_id=task_id,
+        status=status,
+        model_results=results.get("model_results"),
+        leaderboard_summary=results.get("leaderboard_summary"),
+        error=bool(results.get("error")),
+    )
+
+
+@router.get("/simulation-run/{share_token}", response_model=PublicSimulationRunResponse)
+async def get_public_simulation_run(share_token: str):
+    """
+    Return a publicly shared simulation run result.
+    No authentication required — accessible to anyone with the share_token.
+    Returns 404 if the token is unknown or the run has been made private again.
+    Presigned audio URLs are regenerated on-the-fly for voice simulations.
+    """
+    job = get_simulation_job_by_share_token(share_token)
+    if not job:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    task_id = job["uuid"]
+    status = job["status"]
+    results = job.get("results") or {}
+
+    simulation_results = results.get("simulation_results") or []
+    simulation_results = _build_simulation_results_with_presigned_urls(
+        job, simulation_results, status
+    )
+
+    run_name = _get_simulation_run_name(job)
+
+    return PublicSimulationRunResponse(
+        task_id=task_id,
+        name=run_name,
+        status=status,
+        type=job["type"],
+        updated_at=job["updated_at"],
+        total_simulations=results.get("total_simulations"),
+        metrics=results.get("metrics"),
+        simulation_results=simulation_results or None,
+        error=results.get("error"),
+    )

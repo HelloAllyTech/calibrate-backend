@@ -407,6 +407,21 @@ def init_db():
         except sqlite3.OperationalError:
             pass
 
+        # Add is_public and share_token columns for public sharing feature
+        for table in ("jobs", "agent_test_jobs", "simulation_jobs"):
+            try:
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN share_token TEXT DEFAULT NULL"
+                )
+            except sqlite3.OperationalError:
+                pass
+
         conn.commit()
 
         # Create default user if not exists and update existing rows with NULL user_id
@@ -2377,6 +2392,34 @@ def update_job(
         return updated
 
 
+def update_job_visibility(
+    job_uuid: str, is_public: bool, share_token: Optional[str]
+) -> bool:
+    """Update is_public and share_token for a job. Returns True if the job was found."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE jobs SET is_public = ?, share_token = ?, updated_at = CURRENT_TIMESTAMP WHERE uuid = ?",
+            (1 if is_public else 0, share_token, job_uuid),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_job_by_share_token(share_token: str) -> Optional[Dict[str, Any]]:
+    """Get a job by its share_token."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM jobs WHERE share_token = ? AND is_public = 1",
+            (share_token,),
+        )
+        row = cursor.fetchone()
+        if row:
+            return _parse_job_row(row)
+        return None
+
+
 def delete_job(job_uuid: str) -> bool:
     """Delete a job. Returns True if the job was found and deleted."""
     with get_db_connection() as conn:
@@ -2479,6 +2522,43 @@ def get_all_agent_test_jobs(job_type: Optional[str] = None) -> List[Dict[str, An
             )
         else:
             cursor.execute("SELECT * FROM agent_test_jobs ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        return [_parse_agent_test_job_row(row) for row in rows]
+
+
+def get_agent_test_jobs_for_user(
+    user_id: str, job_type: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Get all agent test jobs belonging to a user (across all their agents).
+
+    Joins agent_test_jobs with agents so that each returned dict includes
+    ``agent_name`` and ``agent_id`` alongside the normal job fields.
+    Results are ordered newest-updated-first.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if job_type:
+            cursor.execute(
+                """
+                SELECT atj.*, a.name AS agent_name, a.uuid AS agent_id
+                FROM agent_test_jobs atj
+                JOIN agents a ON atj.agent_id = a.uuid
+                WHERE a.user_id = ? AND a.deleted_at IS NULL AND atj.type = ?
+                ORDER BY atj.updated_at DESC
+                """,
+                (user_id, job_type),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT atj.*, a.name AS agent_name, a.uuid AS agent_id
+                FROM agent_test_jobs atj
+                JOIN agents a ON atj.agent_id = a.uuid
+                WHERE a.user_id = ? AND a.deleted_at IS NULL
+                ORDER BY atj.updated_at DESC
+                """,
+                (user_id,),
+            )
         rows = cursor.fetchall()
         return [_parse_agent_test_job_row(row) for row in rows]
 
@@ -2596,6 +2676,34 @@ def update_agent_test_job(
         if updated:
             logger.info(f"Updated agent test job with UUID: {job_uuid}")
         return updated
+
+
+def update_agent_test_job_visibility(
+    job_uuid: str, is_public: bool, share_token: Optional[str]
+) -> bool:
+    """Update is_public and share_token for an agent test job. Returns True if found."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE agent_test_jobs SET is_public = ?, share_token = ?, updated_at = CURRENT_TIMESTAMP WHERE uuid = ?",
+            (1 if is_public else 0, share_token, job_uuid),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_agent_test_job_by_share_token(share_token: str) -> Optional[Dict[str, Any]]:
+    """Get an agent test job by its share_token."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM agent_test_jobs WHERE share_token = ? AND is_public = 1",
+            (share_token,),
+        )
+        row = cursor.fetchone()
+        if row:
+            return _parse_agent_test_job_row(row)
+        return None
 
 
 def delete_agent_test_job(job_uuid: str) -> bool:
@@ -2838,6 +2946,34 @@ def update_simulation_job(
         if updated:
             logger.info(f"Updated simulation job with UUID: {job_uuid}")
         return updated
+
+
+def update_simulation_job_visibility(
+    job_uuid: str, is_public: bool, share_token: Optional[str]
+) -> bool:
+    """Update is_public and share_token for a simulation job. Returns True if found."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE simulation_jobs SET is_public = ?, share_token = ?, updated_at = CURRENT_TIMESTAMP WHERE uuid = ?",
+            (1 if is_public else 0, share_token, job_uuid),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_simulation_job_by_share_token(share_token: str) -> Optional[Dict[str, Any]]:
+    """Get a simulation job by its share_token."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM simulation_jobs WHERE share_token = ? AND is_public = 1",
+            (share_token,),
+        )
+        row = cursor.fetchone()
+        if row:
+            return _parse_simulation_job_row(row)
+        return None
 
 
 def delete_simulation_job(job_uuid: str) -> bool:

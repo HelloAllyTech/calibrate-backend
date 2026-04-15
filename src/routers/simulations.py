@@ -35,6 +35,7 @@ from db import (
     create_simulation_job,
     get_simulation_job,
     update_simulation_job,
+    update_simulation_job_visibility,
     get_simulation_jobs_for_simulation,
     delete_simulation_job,
 )
@@ -397,6 +398,8 @@ class SimulationRunStatusResponse(BaseModel):
     metrics: Optional[Dict[str, Any]] = None
     simulation_results: Optional[List[SimulationCaseResult]] = None
     error: Optional[str] = None
+    is_public: bool = False
+    share_token: Optional[str] = None
 
 
 class SimulationRunListItem(BaseModel):
@@ -502,6 +505,44 @@ async def list_simulations(user_id: str = Depends(get_current_user_id)):
             )
         )
     return result
+
+
+class VisibilityRequest(BaseModel):
+    is_public: bool
+
+
+class VisibilityResponse(BaseModel):
+    is_public: bool
+    share_token: str | None = None
+
+
+@router.patch("/run/{task_id}/visibility", response_model=VisibilityResponse)
+async def update_simulation_run_visibility(
+    task_id: str,
+    body: VisibilityRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Toggle public sharing for a simulation run."""
+    job = get_simulation_job(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    simulation_id = job.get("simulation_id")
+    if simulation_id:
+        simulation = get_simulation(simulation_id)
+        if not simulation or simulation.get("user_id") != user_id:
+            raise HTTPException(status_code=404, detail="Task not found")
+    else:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if body.is_public:
+        import uuid as _uuid
+        share_token = job.get("share_token") or str(_uuid.uuid4())
+    else:
+        share_token = None
+
+    update_simulation_job_visibility(task_id, body.is_public, share_token)
+    return VisibilityResponse(is_public=body.is_public, share_token=share_token)
 
 
 @router.get("/run/{task_id}", response_model=SimulationRunStatusResponse)
@@ -620,6 +661,8 @@ async def get_simulation_run_status(
         metrics=results.get("metrics"),
         simulation_results=simulation_results,
         error=results.get("error"),
+        is_public=bool(job.get("is_public")),
+        share_token=job.get("share_token"),
     )
 
 

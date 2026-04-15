@@ -28,7 +28,9 @@ from db import (
     create_agent_test_job,
     get_agent_test_job,
     update_agent_test_job,
+    update_agent_test_job_visibility,
     get_agent_test_jobs_for_agent,
+    get_agent_test_jobs_for_user,
     delete_agent_test_job,
 )
 from auth_utils import get_current_user_id
@@ -200,6 +202,8 @@ class TestRunStatusResponse(BaseModel):
     results: Optional[List[TestCaseResult]] = None
     results_s3_prefix: Optional[str] = None
     error: bool = False
+    is_public: bool = False
+    share_token: Optional[str] = None
 
 
 class AgentTestRunListItem(BaseModel):
@@ -219,10 +223,22 @@ class AgentTestRunListItem(BaseModel):
     # Common fields
     results_s3_prefix: Optional[str] = None
     error: bool = False
+    is_public: bool = False
+    share_token: Optional[str] = None
 
 
 class AgentTestRunsResponse(BaseModel):
     runs: List[AgentTestRunListItem]
+
+
+class GlobalTestRunListItem(AgentTestRunListItem):
+    """AgentTestRunListItem extended with agent identity for the global view."""
+    agent_id: str
+    agent_name: str
+
+
+class GlobalTestRunsResponse(BaseModel):
+    runs: List[GlobalTestRunListItem]
 
 
 @router.post("", response_model=AgentTestsCreateResponse)
@@ -330,10 +346,80 @@ async def get_agent_test_runs(agent_uuid: str):
             # Common fields
             results_s3_prefix=job_results.get("results_s3_prefix"),
             error=bool(job_results.get("error")),
+            is_public=bool(job.get("is_public")),
+            share_token=job.get("share_token"),
         )
         runs.append(run_item)
 
     return AgentTestRunsResponse(runs=runs)
+
+
+@router.get("/runs", response_model=GlobalTestRunsResponse)
+async def get_all_test_runs_for_user(
+    user_id: str = Depends(get_current_user_id),
+    type: Optional[str] = None,
+):
+    """
+    Get all test runs (unit tests and benchmarks) across every agent owned by
+    the authenticated user.
+
+    Optional query param:
+      ?type=llm-unit-test   — return only unit-test runs
+      ?type=llm-benchmark   — return only benchmark runs
+
+    Results are ordered newest-updated-first. Each item includes ``agent_id``
+    and ``agent_name`` so the frontend can group or label by agent.
+    """
+    jobs = get_agent_test_jobs_for_user(user_id, job_type=type)
+
+    # Per-agent counters for naming ("Run 1", "Benchmark 2", …).
+    # We need ascending order to assign names correctly, then flip back.
+    jobs_asc = sorted(jobs, key=lambda j: j.get("created_at", ""))
+    agent_unit_counts: Dict[str, int] = {}
+    agent_benchmark_counts: Dict[str, int] = {}
+    name_map: Dict[str, str] = {}  # job uuid → display name
+
+    for job in jobs_asc:
+        agent_id = job.get("agent_id", "")
+        job_type = job.get("type", "")
+        if job_type == "llm-unit-test":
+            agent_unit_counts[agent_id] = agent_unit_counts.get(agent_id, 0) + 1
+            name_map[job["uuid"]] = f"Run {agent_unit_counts[agent_id]}"
+        elif job_type == "llm-benchmark":
+            agent_benchmark_counts[agent_id] = agent_benchmark_counts.get(agent_id, 0) + 1
+            name_map[job["uuid"]] = f"Benchmark {agent_benchmark_counts[agent_id]}"
+        else:
+            name_map[job["uuid"]] = "Job"
+
+    runs = []
+    for job in jobs:  # already newest-first
+        job_results = job.get("results") or {}
+        run_item = GlobalTestRunListItem(
+            uuid=job["uuid"],
+            name=name_map[job["uuid"]],
+            status=job["status"],
+            type=job.get("type", ""),
+            updated_at=job.get("updated_at", job.get("created_at", "")),
+            # Unit test fields
+            total_tests=job_results.get("total_tests"),
+            passed=job_results.get("passed"),
+            failed=job_results.get("failed"),
+            results=job_results.get("test_results"),
+            # Benchmark fields
+            model_results=job_results.get("model_results"),
+            leaderboard_summary=job_results.get("leaderboard_summary"),
+            # Common fields
+            results_s3_prefix=job_results.get("results_s3_prefix"),
+            error=bool(job_results.get("error")),
+            is_public=bool(job.get("is_public")),
+            share_token=job.get("share_token"),
+            # Agent identity (global-only fields)
+            agent_id=job.get("agent_id", ""),
+            agent_name=job.get("agent_name", ""),
+        )
+        runs.append(run_item)
+
+    return GlobalTestRunsResponse(runs=runs)
 
 
 @router.get("/test/{test_uuid}/agents", response_model=List[AgentResponse])
@@ -1006,6 +1092,43 @@ async def run_agent_test(agent_uuid: str, request: RunTestRequest):
     return TaskCreateResponse(task_id=job_id, status=initial_status)
 
 
+class VisibilityRequest(BaseModel):
+    is_public: bool
+
+
+class VisibilityResponse(BaseModel):
+    is_public: bool
+    share_token: str | None = None
+
+
+@router.patch("/run/{task_id}/visibility", response_model=VisibilityResponse)
+async def update_test_run_visibility(
+    task_id: str,
+    body: VisibilityRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Toggle public sharing for an agent test run."""
+    job = get_agent_test_job(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    agent_id = job.get("agent_id")
+    if not agent_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    agent = get_agent(agent_id)
+    if not agent or agent.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if body.is_public:
+        import uuid as _uuid
+        share_token = job.get("share_token") or str(_uuid.uuid4())
+    else:
+        share_token = None
+
+    update_agent_test_job_visibility(task_id, body.is_public, share_token)
+    return VisibilityResponse(is_public=body.is_public, share_token=share_token)
+
+
 @router.get("/run/{task_id}", response_model=TestRunStatusResponse)
 async def get_agent_test_run_status(task_id: str):
     """
@@ -1047,6 +1170,8 @@ async def get_agent_test_run_status(task_id: str):
         results=results.get("test_results"),
         results_s3_prefix=results.get("results_s3_prefix"),
         error=bool(results.get("error")),
+        is_public=bool(job.get("is_public")),
+        share_token=job.get("share_token"),
     )
 
 
@@ -1074,6 +1199,8 @@ class BenchmarkStatusResponse(BaseModel):
     leaderboard_summary: Optional[List[Dict[str, Any]]] = None
     results_s3_prefix: Optional[str] = None
     error: bool = False
+    is_public: bool = False
+    share_token: Optional[str] = None
 
 
 def _update_benchmark_intermediate_results(
@@ -1606,6 +1733,34 @@ async def run_agent_benchmark(agent_uuid: str, request: BenchmarkRequest):
     return TaskCreateResponse(task_id=job_id, status=initial_status)
 
 
+@router.patch("/benchmark/{task_id}/visibility", response_model=VisibilityResponse)
+async def update_benchmark_visibility(
+    task_id: str,
+    body: VisibilityRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Toggle public sharing for a benchmark run."""
+    job = get_agent_test_job(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    agent_id = job.get("agent_id")
+    if not agent_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    agent = get_agent(agent_id)
+    if not agent or agent.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if body.is_public:
+        import uuid as _uuid
+        share_token = job.get("share_token") or str(_uuid.uuid4())
+    else:
+        share_token = None
+
+    update_agent_test_job_visibility(task_id, body.is_public, share_token)
+    return VisibilityResponse(is_public=body.is_public, share_token=share_token)
+
+
 @router.get("/benchmark/{task_id}", response_model=BenchmarkStatusResponse)
 async def get_benchmark_status(task_id: str):
     """
@@ -1645,6 +1800,8 @@ async def get_benchmark_status(task_id: str):
         leaderboard_summary=results.get("leaderboard_summary"),
         results_s3_prefix=results.get("results_s3_prefix"),
         error=bool(results.get("error")),
+        is_public=bool(job.get("is_public")),
+        share_token=job.get("share_token"),
     )
 
 

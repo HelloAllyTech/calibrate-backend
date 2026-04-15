@@ -13,7 +13,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
-from db import create_job, get_job, update_job
+from db import create_job, get_job, update_job, update_job_visibility
 from dataset_utils import resolve_dataset_inputs
 from auth_utils import get_current_user_id
 from utils import (
@@ -540,6 +540,36 @@ async def evaluate_stt(
     )
 
 
+class VisibilityRequest(BaseModel):
+    is_public: bool
+
+
+class VisibilityResponse(BaseModel):
+    is_public: bool
+    share_token: str | None = None
+
+
+@router.patch("/evaluate/{task_id}/visibility", response_model=VisibilityResponse)
+async def update_stt_visibility(
+    task_id: str,
+    body: VisibilityRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Toggle public sharing for an STT evaluation job."""
+    job = get_job(task_id, user_id=user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if body.is_public:
+        import uuid as _uuid
+        share_token = job.get("share_token") or str(_uuid.uuid4())
+    else:
+        share_token = None
+
+    update_job_visibility(task_id, body.is_public, share_token)
+    return VisibilityResponse(is_public=body.is_public, share_token=share_token)
+
+
 @router.get("/evaluate/{task_id}", response_model=TaskStatusResponse)
 async def get_evaluation_status(
     task_id: str, user_id: str = Depends(get_current_user_id)
@@ -702,4 +732,6 @@ async def get_evaluation_status(
         provider_results=provider_results,
         leaderboard_summary=results.get("leaderboard_summary"),
         error=results.get("error"),
+        is_public=bool(job.get("is_public")),
+        share_token=job.get("share_token"),
     )
