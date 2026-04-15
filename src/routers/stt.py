@@ -724,21 +724,28 @@ async def get_evaluation_status(
         if provider_result.get("metrics"):
             provider_result["metrics"] = normalize_metrics(provider_result["metrics"])
 
-    # Enrich each result row with a presigned audio URL from the dataset
+    # Enrich each result row with a presigned audio URL from the dataset.
+    # Only presign IDs that actually appear in results to avoid unnecessary
+    # S3 calls during early polling when results are still empty.
     audio_paths = details.get("audio_paths", [])
     if audio_paths:
-        # Build mapping: audio_id (e.g. "audio_1") -> presigned URL
-        audio_url_map = {}
-        for idx, path in enumerate(audio_paths):
-            audio_id = f"audio_{idx + 1}"
-            audio_url_map[audio_id] = presign_audio_path(path)
-
+        # Collect IDs actually present in results
+        needed_ids: set[str] = set()
         for provider_result in provider_results:
-            results_list = provider_result.get("results")
-            if results_list:
-                for row in results_list:
-                    row_id = row.get("id", "")
-                    row["audio_url"] = audio_url_map.get(row_id)
+            for row in provider_result.get("results") or []:
+                if row.get("id"):
+                    needed_ids.add(row["id"])
+
+        if needed_ids:
+            audio_url_map = {}
+            for idx, path in enumerate(audio_paths):
+                audio_id = f"audio_{idx + 1}"
+                if audio_id in needed_ids:
+                    audio_url_map[audio_id] = presign_audio_path(path)
+
+            for provider_result in provider_results:
+                for row in provider_result.get("results") or []:
+                    row["audio_url"] = audio_url_map.get(row.get("id", ""))
 
     return TaskStatusResponse(
         task_id=task_id,
