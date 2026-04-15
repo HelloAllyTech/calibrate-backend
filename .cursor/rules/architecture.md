@@ -20,17 +20,17 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 
 ## Technology Stack
 
-| Component            | Technology                          | Purpose                                                                                    |
-| -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------ |
-| **Framework**        | FastAPI                             | Async REST API framework                                                                   |
-| **Database**         | SQLite                              | Persistent data storage                                                                    |
-| **Storage**          | AWS S3                              | File/result storage                                                                        |
+| Component            | Technology                          | Purpose                                                                                                                                                                      |
+| -------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Framework**        | FastAPI                             | Async REST API framework                                                                                                                                                     |
+| **Database**         | SQLite                              | Persistent data storage                                                                                                                                                      |
+| **Storage**          | AWS S3                              | File/result storage                                                                                                                                                          |
 | **Authentication**   | Google OAuth + Email/Password + JWT | User authentication via Google ID tokens or email/password credentials, API access via JWT. API docs (`/docs`, `/redoc`, `/openapi.json`) are protected with HTTP Basic Auth |
-| **Monitoring**       | Sentry                              | Error tracking and performance monitoring                                                  |
-| **Tracing**          | Langfuse (via OTEL)                 | LLM observability and tracing                                                              |
-| **Package Manager**  | uv                                  | Python dependency management                                                               |
-| **Containerization** | Docker                              | Deployment                                                                                 |
-| **CLI Tool**         | calibrate                           | Core evaluation/simulation engine                                                          |
+| **Monitoring**       | Sentry                              | Error tracking and performance monitoring                                                                                                                                    |
+| **Tracing**          | Langfuse (via OTEL)                 | LLM observability and tracing                                                                                                                                                |
+| **Package Manager**  | uv                                  | Python dependency management                                                                                                                                                 |
+| **Containerization** | Docker                              | Deployment                                                                                                                                                                   |
+| **CLI Tool**         | calibrate                           | Core evaluation/simulation engine                                                                                                                                            |
 
 ---
 
@@ -106,21 +106,21 @@ simulations
 
 ### Core Tables
 
-| Table             | Purpose                                                                                                       |
-| ----------------- | ------------------------------------------------------------------------------------------------------------- |
-| `users`           | User accounts (Google OAuth or email/password credentials)                                                    |
-| `agents`          | AI agent configurations; `type` column distinguishes `agent` (platform-managed) from `connection` (external HTTP endpoint) |
-| `tools`           | Tool/function definitions for agents                                                                          |
-| `tests`           | Test cases with evaluation criteria                                                                           |
-| `personas`        | Simulated user personas (characteristics, gender, language)                                                   |
-| `scenarios`       | Conversation scenarios/contexts                                                                               |
-| `metrics`         | Evaluation criteria for simulations                                                                           |
-| `simulations`     | Simulation configurations linking agents, personas, scenarios, metrics                                        |
-| `datasets`        | Named collections of evaluation inputs (STT or TTS), user_id FK                                               |
-| `dataset_items`   | Individual items within a dataset (text, optional audio_path, `updated_at` — nullable for pre-migration rows) |
-| `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                                                         |
-| `agent_test_jobs` | LLM unit test and benchmark jobs                                                                              |
-| `simulation_jobs` | Chat/voice simulation jobs                                                                                    |
+| Table             | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`           | User accounts (Google OAuth or email/password credentials)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `agents`          | AI agent configurations; `type` column distinguishes `agent` (platform-managed) from `connection` (external HTTP endpoint)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `tools`           | Tool/function definitions for agents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `tests`           | Test cases with evaluation criteria                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `personas`        | Simulated user personas (characteristics, gender, language)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `scenarios`       | Conversation scenarios/contexts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `metrics`         | Evaluation criteria for simulations                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `simulations`     | Simulation configurations linking agents, personas, scenarios, metrics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `datasets`        | Named collections of evaluation inputs (STT or TTS), user_id FK                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `dataset_items`   | Individual items within a dataset (text, optional audio_path, `updated_at` — nullable for pre-migration rows)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `agent_test_jobs` | LLM unit test and benchmark jobs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `simulation_jobs` | Chat/voice simulation jobs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `user_limits`     | Per-user limits/quotas as a JSON blob (one row per user, `user_id` UNIQUE). No soft delete — hard delete only. The `limits` JSON is validated at the API layer via the `UserLimits` Pydantic model in `user_limits.py` (with `Field(gt=0, le=10000)` constraints); currently only `max_rows_per_eval` is permitted. The `create_user_limits` endpoint validates user existence explicitly via `get_user()` (returns 404) because SQLite FK constraints are not enforced (`PRAGMA foreign_keys` is off), and handles race conditions via `sqlite3.IntegrityError` catch (returns 409). `update_user_limits()` in `db.py` returns the updated row directly (update + select in one connection) to avoid extra round-trips. DB functions accept `UserLimits` type (imported via `TYPE_CHECKING` to avoid circular imports) |
 
 ### Users Table Schema
@@ -731,6 +731,7 @@ calibrate agent simulation -c <config.json> -o <output_dir> -n 4
 **`--skip-verify` for agent connections**: All CLI commands for agent connections (`calibrate llm` for tests/benchmarks, `calibrate simulations --type text`) pass `--skip-verify` to skip the CLI's built-in connection verification. The backend already verifies connections via the `/agents/{uuid}/verify-connection` endpoint before running jobs, making the CLI's verification redundant.
 
 **Agent connection verification** uses calibrate's Python API directly (not the CLI). The backend's `_verify_agent_connection()` in `agents.py` uses `TextAgentConnection(url=..., headers=...)` from `calibrate.connections`, then calls `await agent.verify(**kwargs)` where `kwargs` optionally contains `model`. The `verify()` method returns `{"ok": bool, "error": str|None, "sample_output": dict|None}`:
+
 - On success: `sample_output` contains the normalized agent response (`{"response": str|None, "tool_calls": list}`)
 - On structure errors (wrong keys/types): `sample_output` contains the raw JSON the agent returned
 - On connection/timeout/HTTP errors: `sample_output` is absent
@@ -845,10 +846,10 @@ OPENROUTER_API_KEY=xxx
 
 Agents have a `type` column in the database (and a `type` field in the API) that determines how they are evaluated:
 
-| Type                 | Description                                                                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `agent` (default)     | Platform-managed agent — system prompt, tools, LLM/STT/TTS providers are defined in the agent config         |
-| `connection`          | External agent — the user's own agent running at `agent_url`; calibrate sends HTTP requests to it directly   |
+| Type              | Description                                                                                                |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `agent` (default) | Platform-managed agent — system prompt, tools, LLM/STT/TTS providers are defined in the agent config       |
+| `connection`      | External agent — the user's own agent running at `agent_url`; calibrate sends HTTP requests to it directly |
 
 The `type` is set at creation time via `POST /agents` and returned in all agent responses. Existing agents default to `agent` via the `ALTER TABLE` migration. The duplicate endpoint carries over the original agent's type. All Pydantic models use `Literal["agent", "connection"]` for the `type` field — invalid values are rejected with a 422 at both input and output serialization.
 
@@ -985,8 +986,21 @@ Tests store conversation history in the `history` field (OpenAI chat message for
   "history": [
     { "role": "assistant", "content": "Hello, how can I help you today?" },
     { "role": "user", "content": "Hi" },
-    { "role": "assistant", "tool_calls": [{ "id": "...", "function": { "name": "some_tool", "arguments": "{}" }, "type": "function" }] },
-    { "role": "tool", "content": "{\"status\": \"received\"}", "tool_call_id": "..." }
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "...",
+          "function": { "name": "some_tool", "arguments": "{}" },
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "{\"status\": \"received\"}",
+      "tool_call_id": "..."
+    }
   ],
   "evaluation": {
     "type": "tool_call",
@@ -1033,9 +1047,7 @@ The `history` field uses the OpenAI chat messages format with `role` (system/use
   "tests": [
     {
       "name": "test-greeting",
-      "conversation_history": [
-        { "role": "user", "content": "Hello" }
-      ],
+      "conversation_history": [{ "role": "user", "content": "Hello" }],
       "criteria": "Response should be a polite greeting"
     }
   ]
@@ -1368,14 +1380,15 @@ This applies to:
 - Simulation failures (text and voice)
 - CLI command failures (non-zero exit codes OR tracebacks in stderr) - logged with full stderr output
 
-**CLI Failure Detection**: The calibrate CLI may catch exceptions internally and exit with code 0 even when errors occur. To handle this, CLI wrapper functions check for BOTH:
+**CLI Failure Detection**: All CLI wrapper functions (agent tests, benchmarks, text simulations, voice simulations) use a two-layer approach:
 
-1. Non-zero return code (`process.returncode != 0`)
-2. Error tracebacks in stderr (`"Traceback (most recent call last):" in filtered stderr`)
+1. **Exit code**: Non-zero return code → immediate failure with stderr logged to Sentry
+2. **Output file validation**: Exit code 0 but expected structured output missing → failure with descriptive error
+   - Agent tests: `results.json` and `metrics.json` both absent
+   - Benchmarks: `_find_all_results_in_output()` returns empty (no per-model result folders)
+   - Simulations (text/voice): no `simulation_persona_*` directories with completed results
 
-Before checking for tracebacks, stderr is passed through `_strip_async_cleanup_noise()` which removes benign httpx `AsyncClient.aclose()` / "Event loop is closed" tracebacks. These occur when the calibrate CLI's Python process shuts down before httpx can cleanly close its async transport connections — they are harmless cleanup noise, not real errors. Without this filtering, benchmarks and tests that succeed (exit code 0) would be falsely marked as failed.
-
-If either condition is true, the job is marked as `FAILED` and logged to Sentry. This ensures errors are properly surfaced even when the CLI doesn't set an appropriate exit code.
+Stderr is logged for debugging but **never** used for failure detection. The calibrate CLI's subprocess may emit benign cleanup tracebacks (e.g., httpx `AsyncClient.aclose()` "Event loop is closed" errors) that are not real failures. Relying on exit code + structured output avoids false positives from noisy stderr.
 
 ### Incremental Job Processing Pattern (Simulations, Agent Tests, Benchmarks)
 
