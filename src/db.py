@@ -2406,14 +2406,26 @@ def update_job_visibility(
         return cursor.rowcount > 0
 
 
-def get_job_by_share_token(share_token: str) -> Optional[Dict[str, Any]]:
-    """Get a job by its share_token."""
+def get_job_by_share_token(
+    share_token: str, job_type: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Get a job by its share_token, optionally restricted to a specific job type.
+
+    Always filters to is_public = 1. Pass job_type (e.g. 'stt-eval', 'tts-eval')
+    to prevent tokens from one resource kind being accepted by a different endpoint.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM jobs WHERE share_token = ? AND is_public = 1",
-            (share_token,),
-        )
+        if job_type:
+            cursor.execute(
+                "SELECT * FROM jobs WHERE share_token = ? AND is_public = 1 AND type = ?",
+                (share_token, job_type),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM jobs WHERE share_token = ? AND is_public = 1",
+                (share_token,),
+            )
         row = cursor.fetchone()
         if row:
             return _parse_job_row(row)
@@ -2692,14 +2704,27 @@ def update_agent_test_job_visibility(
         return cursor.rowcount > 0
 
 
-def get_agent_test_job_by_share_token(share_token: str) -> Optional[Dict[str, Any]]:
-    """Get an agent test job by its share_token."""
+def get_agent_test_job_by_share_token(
+    share_token: str, job_type: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Get an agent test job by its share_token, optionally restricted to a specific type.
+
+    Always filters to is_public = 1. Pass job_type (e.g. 'llm-unit-test',
+    'llm-benchmark') to prevent test-run tokens from resolving on the benchmark
+    endpoint and vice versa.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM agent_test_jobs WHERE share_token = ? AND is_public = 1",
-            (share_token,),
-        )
+        if job_type:
+            cursor.execute(
+                "SELECT * FROM agent_test_jobs WHERE share_token = ? AND is_public = 1 AND type = ?",
+                (share_token, job_type),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM agent_test_jobs WHERE share_token = ? AND is_public = 1",
+                (share_token,),
+            )
         row = cursor.fetchone()
         if row:
             return _parse_agent_test_job_row(row)

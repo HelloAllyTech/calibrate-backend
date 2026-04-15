@@ -189,7 +189,7 @@ async def get_public_stt(share_token: str):
     No authentication required — accessible to anyone with the share_token.
     Returns 404 if the token is unknown or the run has been made private again.
     """
-    job = get_job_by_share_token(share_token)
+    job = get_job_by_share_token(share_token, job_type="stt-eval")
     if not job:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -224,7 +224,7 @@ async def get_public_tts(share_token: str):
     No authentication required — accessible to anyone with the share_token.
     Returns 404 if the token is unknown or the run has been made private again.
     """
-    job = get_job_by_share_token(share_token)
+    job = get_job_by_share_token(share_token, job_type="tts-eval")
     if not job:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -264,7 +264,7 @@ async def get_public_test_run(share_token: str):
     No authentication required — accessible to anyone with the share_token.
     Returns 404 if the token is unknown or the run has been made private again.
     """
-    job = get_agent_test_job_by_share_token(share_token)
+    job = get_agent_test_job_by_share_token(share_token, job_type="llm-unit-test")
     if not job:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -290,7 +290,7 @@ async def get_public_benchmark(share_token: str):
     No authentication required — accessible to anyone with the share_token.
     Returns 404 if the token is unknown or the run has been made private again.
     """
-    job = get_agent_test_job_by_share_token(share_token)
+    job = get_agent_test_job_by_share_token(share_token, job_type="llm-benchmark")
     if not job:
         raise HTTPException(status_code=404, detail="Not found")
 
