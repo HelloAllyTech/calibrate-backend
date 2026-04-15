@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from auth_utils import get_current_user_id
-from utils import generate_presigned_download_url
+from utils import presign_audio_path
 from db import (
     create_dataset,
     get_dataset,
@@ -90,24 +90,10 @@ def _validate_items_for_type(dataset_type: str, items: List[DatasetItemIn]) -> N
             )
 
 
-def _presign_audio_path(audio_path: Optional[str]) -> Optional[str]:
-    """Convert an s3://bucket/key path to a presigned download URL."""
-    if not audio_path:
-        return audio_path
-    if audio_path.startswith("s3://"):
-        parts = audio_path[5:].split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return generate_presigned_download_url(key, bucket=bucket) or audio_path
-    if audio_path.startswith("http"):
-        return audio_path
-    return generate_presigned_download_url(audio_path) or audio_path
-
-
 def _item_row_to_response(row: dict) -> DatasetItemResponse:
     return DatasetItemResponse(
         uuid=row["uuid"],
-        audio_path=_presign_audio_path(row.get("audio_path")),
+        audio_path=presign_audio_path(row.get("audio_path")),
         text=row["text"],
         order_index=row["order_index"],
         created_at=row["created_at"],

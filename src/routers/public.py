@@ -31,6 +31,7 @@ from utils import (
     generate_presigned_download_url,
     get_s3_output_config,
     normalize_metrics,
+    presign_audio_path,
 )
 # Re-use the audio URL helper from simulations (no circular import risk)
 from routers.simulations import _get_audio_urls_from_s3_key
@@ -204,6 +205,26 @@ async def get_public_stt(share_token: str):
     for pr in provider_results:
         if pr.get("metrics"):
             pr["metrics"] = normalize_metrics(pr["metrics"])
+
+    # Enrich result rows with presigned audio URLs from the dataset
+    audio_paths = details.get("audio_paths", [])
+    if audio_paths:
+        # Collect IDs actually present in results to avoid unnecessary presigning
+        needed_ids: set[str] = set()
+        for pr in provider_results:
+            for row in pr.get("results") or []:
+                if row.get("id"):
+                    needed_ids.add(row["id"])
+
+        audio_url_map = {}
+        for idx, path in enumerate(audio_paths):
+            audio_id = f"audio_{idx + 1}"
+            if audio_id in needed_ids:
+                audio_url_map[audio_id] = presign_audio_path(path)
+
+        for pr in provider_results:
+            for row in pr.get("results") or []:
+                row["audio_url"] = audio_url_map.get(row.get("id", ""))
 
     return PublicSTTResponse(
         task_id=task_id,

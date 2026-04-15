@@ -31,6 +31,7 @@ from utils import (
     capture_exception_to_sentry,
     normalize_metrics,
     read_leaderboard_xlsx,
+    presign_audio_path,
 )
 
 # Job types that share the same queue
@@ -722,6 +723,29 @@ async def get_evaluation_status(
     for provider_result in provider_results:
         if provider_result.get("metrics"):
             provider_result["metrics"] = normalize_metrics(provider_result["metrics"])
+
+    # Enrich each result row with a presigned audio URL from the dataset.
+    # Only presign IDs that actually appear in results to avoid unnecessary
+    # S3 calls during early polling when results are still empty.
+    audio_paths = details.get("audio_paths", [])
+    if audio_paths:
+        # Collect IDs actually present in results
+        needed_ids: set[str] = set()
+        for provider_result in provider_results:
+            for row in provider_result.get("results") or []:
+                if row.get("id"):
+                    needed_ids.add(row["id"])
+
+        if needed_ids:
+            audio_url_map = {}
+            for idx, path in enumerate(audio_paths):
+                audio_id = f"audio_{idx + 1}"
+                if audio_id in needed_ids:
+                    audio_url_map[audio_id] = presign_audio_path(path)
+
+            for provider_result in provider_results:
+                for row in provider_result.get("results") or []:
+                    row["audio_url"] = audio_url_map.get(row.get("id", ""))
 
     return TaskStatusResponse(
         task_id=task_id,
