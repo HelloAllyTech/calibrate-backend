@@ -767,11 +767,7 @@ def run_llm_test_task(
                 if stderr:
                     logger.info(f"LLM test stderr: {stderr}")
 
-                # Check for failure
-                has_error_in_stderr = "Traceback (most recent call last):" in stderr
-                is_failure = process.returncode != 0 or has_error_in_stderr
-
-                if is_failure:
+                if process.returncode != 0:
                     error_msg = (
                         f"LLM test failed with exit code {process.returncode}: {stderr}"
                     )
@@ -801,6 +797,16 @@ def run_llm_test_task(
                         elif file == "metrics.json" and metrics_data is None:
                             with open(file_path, "r", encoding="utf-8") as f:
                                 metrics_data = json.load(f)
+
+                if results_data is None and metrics_data is None:
+                    error_msg = (
+                        f"LLM test produced no output files (results.json/metrics.json not found in {output_dir})"
+                    )
+                    logger.error(error_msg)
+                    capture_exception_to_sentry(RuntimeError(error_msg))
+                    raise subprocess.CalledProcessError(
+                        0, run_cmd, stdout, stderr
+                    )
 
                 # Parse results
                 test_results = _parse_agent_test_results(results_data)
@@ -1299,11 +1305,7 @@ def run_benchmark_task(
                 if stderr:
                     logger.info(f"Benchmark stderr: {stderr}")
 
-                # Check for failure
-                has_error_in_stderr = "Traceback (most recent call last):" in stderr
-                is_failure = process.returncode != 0 or has_error_in_stderr
-
-                if is_failure:
+                if process.returncode != 0:
                     error_msg = f"Benchmark failed with exit code {process.returncode}: {stderr}"
                     logger.error(error_msg)
                     capture_exception_to_sentry(RuntimeError(error_msg))
@@ -1320,6 +1322,16 @@ def run_benchmark_task(
 
                 # Read results for each model from output directory
                 all_results = _find_all_results_in_output(output_dir)
+
+                if not all_results:
+                    error_msg = (
+                        f"Benchmark produced no output files (no results.json/metrics.json found in {output_dir})"
+                    )
+                    logger.error(error_msg)
+                    capture_exception_to_sentry(RuntimeError(error_msg))
+                    raise subprocess.CalledProcessError(
+                        0, run_cmd, stdout, stderr
+                    )
                 folder_names = list(all_results.keys())
                 logger.info(f"Found result folders: {folder_names}")
 

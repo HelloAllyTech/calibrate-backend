@@ -1340,18 +1340,16 @@ def _run_calibrate_text_simulation(
         logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
     error = None
-    # Check for failure: non-zero return code OR error traceback in stderr
-    has_error_in_stderr = "Traceback (most recent call last):" in stderr_content
-    is_failure = process.returncode != 0 or has_error_in_stderr
+    if process.returncode != 0:
+        is_failure = True
+        error = f"Command failed with exit code {process.returncode}: {stderr_content}"
+    elif not simulation_results:
+        is_failure = True
+        error = "Simulation produced no output (no simulation directories found)"
+    else:
+        is_failure = False
 
     if is_failure:
-        if process.returncode != 0:
-            error = (
-                f"Command failed with exit code {process.returncode}: {stderr_content}"
-            )
-        else:
-            error = f"Command failed with error in output: {stderr_content}"
-        # Log CLI failure to Sentry
         logger.error(error)
         capture_exception_to_sentry(RuntimeError(error))
 
@@ -1927,16 +1925,16 @@ def _run_calibrate_voice_simulation(
         logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
     error = None
-    # Check for failure: non-zero return code OR error traceback in stderr
-    has_error_in_stderr = "Traceback (most recent call last):" in stderr
-    is_failure = process.returncode != 0 or has_error_in_stderr
+    if process.returncode != 0:
+        is_failure = True
+        error = f"Command failed with exit code {process.returncode}: {stderr}"
+    elif not completed_results:
+        is_failure = True
+        error = "Simulation produced no output (no simulation directories found)"
+    else:
+        is_failure = False
 
     if is_failure:
-        if process.returncode != 0:
-            error = f"Command failed with exit code {process.returncode}: {stderr}"
-        else:
-            error = f"Command failed with error in output: {stderr}"
-        # Log CLI failure to Sentry
         logger.error(error)
         capture_exception_to_sentry(RuntimeError(error))
 
