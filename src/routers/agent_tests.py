@@ -1,6 +1,7 @@
 import csv
 import os
 import json
+import re
 import subprocess
 import tempfile
 import time
@@ -454,6 +455,22 @@ def _build_calibrate_config(
     }
 
 
+_ASYNC_CLEANUP_NOISE_RE = re.compile(
+    r"Task exception was never retrieved\n"
+    r"future: <Task[^>]*AsyncClient\.aclose\(\)[^>]*"
+    r"RuntimeError\('Event loop is closed'\)>\n"
+    r"Traceback \(most recent call last\):.*?"
+    r"RuntimeError: Event loop is closed\n?",
+    re.DOTALL,
+)
+
+
+def _strip_async_cleanup_noise(stderr: str) -> str:
+    """Remove benign httpx AsyncClient cleanup tracebacks that occur when the
+    event loop closes before the client's finalizer runs."""
+    return _ASYNC_CLEANUP_NOISE_RE.sub("", stderr).strip()
+
+
 def _read_agent_test_results_json(output_dir: Path) -> Optional[List[dict]]:
     """Read results.json from agent test output directory if it exists."""
     if not output_dir or not output_dir.exists():
@@ -767,8 +784,9 @@ def run_llm_test_task(
                 if stderr:
                     logger.info(f"LLM test stderr: {stderr}")
 
-                # Check for failure
-                has_error_in_stderr = "Traceback (most recent call last):" in stderr
+                # Check for failure — strip benign httpx async cleanup noise first
+                filtered_stderr = _strip_async_cleanup_noise(stderr)
+                has_error_in_stderr = "Traceback (most recent call last):" in filtered_stderr
                 is_failure = process.returncode != 0 or has_error_in_stderr
 
                 if is_failure:
@@ -1299,8 +1317,9 @@ def run_benchmark_task(
                 if stderr:
                     logger.info(f"Benchmark stderr: {stderr}")
 
-                # Check for failure
-                has_error_in_stderr = "Traceback (most recent call last):" in stderr
+                # Check for failure — strip benign httpx async cleanup noise first
+                filtered_stderr = _strip_async_cleanup_noise(stderr)
+                has_error_in_stderr = "Traceback (most recent call last):" in filtered_stderr
                 is_failure = process.returncode != 0 or has_error_in_stderr
 
                 if is_failure:

@@ -1371,7 +1371,9 @@ This applies to:
 **CLI Failure Detection**: The calibrate CLI may catch exceptions internally and exit with code 0 even when errors occur. To handle this, CLI wrapper functions check for BOTH:
 
 1. Non-zero return code (`process.returncode != 0`)
-2. Error tracebacks in stderr (`"Traceback (most recent call last):" in stderr`)
+2. Error tracebacks in stderr (`"Traceback (most recent call last):" in filtered stderr`)
+
+Before checking for tracebacks, stderr is passed through `_strip_async_cleanup_noise()` which removes benign httpx `AsyncClient.aclose()` / "Event loop is closed" tracebacks. These occur when the calibrate CLI's Python process shuts down before httpx can cleanly close its async transport connections — they are harmless cleanup noise, not real errors. Without this filtering, benchmarks and tests that succeed (exit code 0) would be falsely marked as failed.
 
 If either condition is true, the job is marked as `FAILED` and logged to Sentry. This ensures errors are properly surfaced even when the CLI doesn't set an appropriate exit code.
 
