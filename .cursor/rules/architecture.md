@@ -60,7 +60,8 @@ calibrate-backend/
 │       ├── stt.py           # STT provider evaluation
 │       ├── tts.py           # TTS provider evaluation
 │       ├── datasets.py      # Dataset CRUD and item management
-│       └── jobs.py          # Job listing API (STT/TTS eval jobs)
+│       ├── jobs.py          # Job listing API (STT/TTS eval jobs)
+│       └── user_limits.py   # Per-user limits CRUD and limit queries
 ├── db/
 │   └── calibrate.db         # SQLite database file
 ├── pyproject.toml           # Python project configuration
@@ -84,7 +85,8 @@ users
   ├── metrics (user_id FK)
   ├── simulations (user_id FK)
   ├── datasets (user_id FK)
-  └── jobs (user_id FK)
+  ├── jobs (user_id FK)
+  └── user_limits (user_id FK, UNIQUE)
 
 datasets
   └── dataset_items (dataset_id FK → datasets.uuid)
@@ -119,6 +121,7 @@ simulations
 | `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                                                         |
 | `agent_test_jobs` | LLM unit test and benchmark jobs                                                                              |
 | `simulation_jobs` | Chat/voice simulation jobs                                                                                    |
+| `user_limits`     | Per-user limits/quotas as a JSON blob (one row per user, `user_id` UNIQUE). No soft delete — hard delete only. The `limits` JSON keys are validated at the API layer via `ALLOWED_LIMIT_KEYS` in `user_limits.py`; currently only `max_rows_per_eval` is permitted |
 
 ### Users Table Schema
 
@@ -187,6 +190,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 - `/simulations` - Simulation configurations
 - `/datasets` - Dataset CRUD, item management (add/update/delete items), `eval_count` per dataset (number of linked STT/TTS eval jobs via `json_extract` on jobs `details`)
 - `/users` - User management (read-only)
+- `/user-limits` - Per-user limits CRUD + `/me/max-rows-per-eval` query endpoint
 
 #### Relationship Management
 
@@ -783,6 +787,9 @@ DB_ROOT_DIR=/appdata/db          # Directory containing calibrate.db
 # Job Queue
 MAX_CONCURRENT_JOBS=2            # Max concurrent jobs per queue type (docker-compose default: 1)
 MAX_CONCURRENT_JOBS_PER_USER=1   # Max concurrent jobs per user per queue type (default: 1, 0 to disable)
+
+# User Limits
+DEFAULT_MAX_ROWS_PER_EVAL=500    # Default max rows per eval run; overridden per-user via user_limits table
 
 # CORS
 CORS_ALLOWED_ORIGINS=*           # Comma-separated origins (e.g., "http://localhost:3000,https://app.example.com")

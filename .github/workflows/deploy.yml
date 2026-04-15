@@ -97,6 +97,7 @@ jobs:
             export LANGFUSE_SECRET_KEY="${{ secrets.LANGFUSE_SECRET_KEY }}"
             export MAX_CONCURRENT_JOBS="${{ secrets.MAX_CONCURRENT_JOBS }}"
             export MAX_CONCURRENT_JOBS_PER_USER="${{ secrets.MAX_CONCURRENT_JOBS_PER_USER }}"
+            export DEFAULT_MAX_ROWS_PER_EVAL="${{ vars.DEFAULT_MAX_ROWS_PER_EVAL }}"
 
             # Navigate to directory with docker-compose.yml
             cd /tmp/pense-production
