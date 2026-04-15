@@ -40,7 +40,7 @@ The backend wraps the `calibrate` CLI tool and orchestrates evaluation jobs whil
 calibrate-backend/
 ├── src/
 │   ├── main.py              # FastAPI app entry point, lifespan management
-│   ├── db.py                # SQLite database layer (~3070 lines)
+│   ├── db.py                # SQLite database layer (~3200 lines)
 │   ├── utils.py             # Shared utilities (S3 client, tool config building)
 │   ├── dataset_utils.py     # Dataset resolution helpers for STT/TTS evaluations
 │   ├── job_recovery.py      # Restart in-progress jobs on app startup
@@ -60,7 +60,8 @@ calibrate-backend/
 │       ├── stt.py           # STT provider evaluation
 │       ├── tts.py           # TTS provider evaluation
 │       ├── datasets.py      # Dataset CRUD and item management
-│       └── jobs.py          # Job listing API (STT/TTS eval jobs)
+│       ├── jobs.py          # Job listing API (STT/TTS eval jobs)
+│       └── user_limits.py   # Per-user limits CRUD and limit queries
 ├── db/
 │   └── calibrate.db         # SQLite database file
 ├── pyproject.toml           # Python project configuration
@@ -84,7 +85,8 @@ users
   ├── metrics (user_id FK)
   ├── simulations (user_id FK)
   ├── datasets (user_id FK)
-  └── jobs (user_id FK)
+  ├── jobs (user_id FK)
+  └── user_limits (user_id FK, UNIQUE)
 
 datasets
   └── dataset_items (dataset_id FK → datasets.uuid)
@@ -119,6 +121,7 @@ simulations
 | `jobs`            | Generic STT/TTS evaluation jobs (user_id FK to users)                                                         |
 | `agent_test_jobs` | LLM unit test and benchmark jobs                                                                              |
 | `simulation_jobs` | Chat/voice simulation jobs                                                                                    |
+| `user_limits`     | Per-user limits/quotas as a JSON blob (one row per user, `user_id` UNIQUE). No soft delete — hard delete only. The `limits` JSON is validated at the API layer via the `UserLimits` Pydantic model in `user_limits.py` (with `Field(gt=0, le=10000)` constraints); currently only `max_rows_per_eval` is permitted. The `create_user_limits` endpoint validates user existence explicitly via `get_user()` (returns 404) because SQLite FK constraints are not enforced (`PRAGMA foreign_keys` is off), and handles race conditions via `sqlite3.IntegrityError` catch (returns 409). `update_user_limits()` in `db.py` returns the updated row directly (update + select in one connection) to avoid extra round-trips. DB functions accept `UserLimits` type (imported via `TYPE_CHECKING` to avoid circular imports) |
 
 ### Users Table Schema
 
@@ -187,6 +190,7 @@ The JWT token contains the user's UUID and is validated on every protected endpo
 - `/simulations` - Simulation configurations
 - `/datasets` - Dataset CRUD, item management (add/update/delete items), `eval_count` per dataset (number of linked STT/TTS eval jobs via `json_extract` on jobs `details`)
 - `/users` - User management (read-only)
+- `/user-limits` - Per-user limits CRUD + `/me/max-rows-per-eval` query endpoint. Mutating endpoints (`POST`, `PUT`, `DELETE`) require superadmin (`require_superadmin` dependency composes `get_current_user_id` for token validation, then checks JWT email against `SUPERADMIN_EMAIL` env var); read endpoints (`GET`) require only standard JWT auth
 
 #### Relationship Management
 
@@ -783,6 +787,10 @@ DB_ROOT_DIR=/appdata/db          # Directory containing calibrate.db
 # Job Queue
 MAX_CONCURRENT_JOBS=2            # Max concurrent jobs per queue type (docker-compose default: 1)
 MAX_CONCURRENT_JOBS_PER_USER=1   # Max concurrent jobs per user per queue type (default: 1, 0 to disable)
+
+# User Limits
+DEFAULT_MAX_ROWS_PER_EVAL=500    # Default max rows per eval run; overridden per-user via user_limits table
+SUPERADMIN_EMAIL=admin@example.com  # Email for superadmin access (required for mutating /user-limits endpoints)
 
 # CORS
 CORS_ALLOWED_ORIGINS=*           # Comma-separated origins (e.g., "http://localhost:3000,https://app.example.com")

@@ -106,6 +106,31 @@ async def get_current_user_id(
     return user_id
 
 
+SUPERADMIN_EMAIL = os.getenv("SUPERADMIN_EMAIL", "")
+
+
+async def require_superadmin(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> str:
+    """
+    FastAPI dependency that requires the caller to be a superadmin.
+
+    Extracts the email from the JWT and checks it against SUPERADMIN_EMAIL.
+    Returns the user UUID if authorized.
+
+    Raises:
+        HTTPException: 401 if token invalid, 403 if not superadmin
+    """
+    user_id = await get_current_user_id(credentials)
+
+    payload = decode_token(credentials.credentials)
+    email = payload.get("email", "")
+    if not SUPERADMIN_EMAIL or email != SUPERADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Superadmin access required")
+
+    return user_id
+
+
 # Optional dependency that doesn't require authentication
 # Useful for endpoints that work with or without auth
 async def get_optional_user_id(

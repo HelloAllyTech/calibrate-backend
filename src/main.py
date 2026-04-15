@@ -48,6 +48,7 @@ from routers.metrics import router as metrics_router
 from routers.simulations import router as simulations_router
 from routers.jobs import router as jobs_router
 from routers.datasets import router as datasets_router
+from routers.user_limits import router as user_limits_router
 from utils import (
     generate_presigned_upload_url,
     get_s3_output_config,
@@ -127,6 +128,7 @@ app.include_router(metrics_router)
 app.include_router(simulations_router)
 app.include_router(jobs_router)
 app.include_router(datasets_router)
+app.include_router(user_limits_router)
 
 # Configure CORS allowed origins from environment variable
 # CORS_ALLOWED_ORIGINS can be comma-separated list (e.g., "http://localhost:3000,https://app.example.com")

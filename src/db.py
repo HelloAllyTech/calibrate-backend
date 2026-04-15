@@ -5,8 +5,11 @@ import uuid
 from os.path import join
 import os
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from contextlib import contextmanager
+
+if TYPE_CHECKING:
+    from routers.user_limits import UserLimits
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +328,20 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 deleted_at TIMESTAMP DEFAULT NULL,
                 FOREIGN KEY (dataset_id) REFERENCES datasets(uuid)
+            )
+        """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                user_id TEXT NOT NULL UNIQUE,
+                limits TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(uuid)
             )
         """
         )
@@ -1041,14 +1058,14 @@ def bulk_create_tests(
         )
         existing = {row["name"] for row in cursor.fetchall()}
         if existing:
-            raise ValueError(
-                f"Test names already exist: {', '.join(sorted(existing))}"
-            )
+            raise ValueError(f"Test names already exist: {', '.join(sorted(existing))}")
 
         uuids: List[str] = []
         for t in tests:
             test_uuid = str(uuid.uuid4())
-            config_json = json.dumps(t["config"]) if t.get("config") is not None else None
+            config_json = (
+                json.dumps(t["config"]) if t.get("config") is not None else None
+            )
             cursor.execute(
                 """
                 INSERT INTO tests (uuid, name, type, config, user_id)
@@ -2084,7 +2101,9 @@ def bulk_remove_tests_from_agent(agent_id: str, test_ids: List[str]) -> int:
         deleted_count = cursor.rowcount
 
         if deleted_count > 0:
-            logger.info(f"Bulk soft deleted {deleted_count} test links from agent {agent_id}")
+            logger.info(
+                f"Bulk soft deleted {deleted_count} test links from agent {agent_id}"
+            )
 
         return deleted_count
 
@@ -3121,3 +3140,74 @@ def delete_dataset_item(item_uuid: str, dataset_id: str) -> bool:
             logger.info(f"Soft deleted dataset item {item_uuid}")
         conn.commit()
         return deleted
+
+
+# ============ User Limits Functions ============
+
+
+def create_user_limits(user_id: str, limits: "UserLimits") -> str:
+    """Create a user limits row. Returns the UUID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        row_uuid = str(uuid.uuid4())
+        cursor.execute(
+            """
+            INSERT INTO user_limits (uuid, user_id, limits)
+            VALUES (?, ?, ?)
+            """,
+            (row_uuid, user_id, limits.model_dump_json()),
+        )
+        conn.commit()
+        logger.info(f"Created user_limits for user {user_id} with UUID: {row_uuid}")
+        return row_uuid
+
+
+def get_user_limits(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get user limits by user_id."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM user_limits WHERE user_id = ?",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            result = dict(row)
+            result["limits"] = json.loads(result["limits"])
+            return result
+        return None
+
+
+def update_user_limits(user_id: str, limits: "UserLimits") -> Optional[Dict[str, Any]]:
+    """Update limits JSON for a user. Returns the updated row, or None if not found."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE user_limits SET limits = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+            (limits.model_dump_json(), user_id),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        cursor.execute(
+            "SELECT * FROM user_limits WHERE user_id = ?",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            result = dict(row)
+            result["limits"] = json.loads(result["limits"])
+            return result
+        return None
+
+
+def delete_user_limits(user_id: str) -> bool:
+    """Delete user limits row. Returns True if deleted."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM user_limits WHERE user_id = ?",
+            (user_id,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
