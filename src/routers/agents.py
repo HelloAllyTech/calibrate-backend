@@ -195,7 +195,7 @@ class VerifyConnectionRequest(BaseModel):
     agent_url: Optional[str] = None
     agent_headers: Optional[Dict[str, str]] = None
     model: Optional[str] = None
-    sample_input: Optional[List[Dict[str, str]]] = None
+    messages: Optional[List[Dict[str, str]]] = None
 
 
 class VerifyConnectionResponse(BaseModel):
@@ -220,7 +220,7 @@ async def verify_agent_connection_presave(
         agent_url=request.agent_url,
         agent_headers=request.agent_headers,
         model=request.model,
-        messages=request.sample_input,
+        messages=request.messages,
     )
     return VerifyConnectionResponse(**result)
 
@@ -266,31 +266,32 @@ async def verify_agent_connection(
         agent_url=agent_url,
         agent_headers=agent_headers,
         model=verify_model,
-        messages=request.sample_input,
+        messages=request.messages,
     )
 
-    # Persist verification result into agent config.
+    # Only persist successful verification results into agent config.
     # Re-read the agent to get the latest config, avoiding a race condition
     # where two concurrent verify calls (different models) would each snapshot
     # the config before the await, then the second write would overwrite the first.
-    now = datetime.now(timezone.utc).isoformat()
-    fresh_agent = get_agent(agent_uuid)
-    new_config = copy.deepcopy(fresh_agent.get("config") or {})
+    if result["success"]:
+        now = datetime.now(timezone.utc).isoformat()
+        fresh_agent = get_agent(agent_uuid)
+        new_config = copy.deepcopy(fresh_agent.get("config") or {})
 
-    if model:
-        benchmark_verified = new_config.get("benchmark_models_verified") or {}
-        benchmark_verified[model] = {
-            "verified": result["success"],
-            "verified_at": now,
-            "error": result["error"],
-        }
-        new_config["benchmark_models_verified"] = benchmark_verified
-    else:
-        new_config["connection_verified"] = result["success"]
-        new_config["connection_verified_at"] = now
-        new_config["connection_verified_error"] = result["error"]
+        if model:
+            benchmark_verified = new_config.get("benchmark_models_verified") or {}
+            benchmark_verified[model] = {
+                "verified": True,
+                "verified_at": now,
+                "error": None,
+            }
+            new_config["benchmark_models_verified"] = benchmark_verified
+        else:
+            new_config["connection_verified"] = True
+            new_config["connection_verified_at"] = now
+            new_config["connection_verified_error"] = None
 
-    update_agent(agent_uuid=agent_uuid, config=new_config)
+        update_agent(agent_uuid=agent_uuid, config=new_config)
 
     return VerifyConnectionResponse(**result)
 
@@ -356,7 +357,10 @@ async def update_agent_endpoint(
             agent.config["benchmark_models_verified"] = {}
 
     # Merge top-level verification fields into config
-    if agent.connection_verified is not None or agent.benchmark_models_verified is not None:
+    if (
+        agent.connection_verified is not None
+        or agent.benchmark_models_verified is not None
+    ):
         if agent.config is None:
             agent.config = copy.deepcopy(existing_agent.get("config") or {})
         if agent.connection_verified is not None:
