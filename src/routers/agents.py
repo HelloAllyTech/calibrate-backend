@@ -112,6 +112,7 @@ async def _verify_agent_connection(
     agent_url: str,
     agent_headers: Optional[Dict[str, str]] = None,
     model: Optional[str] = None,
+    messages: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Verify agent connection using calibrate's TextAgentConnection."""
     _validate_agent_url(agent_url)
@@ -122,6 +123,8 @@ async def _verify_agent_connection(
         kwargs = {}
         if model:
             kwargs["model"] = model
+        if messages:
+            kwargs["messages"] = messages
         result = await agent.verify(**kwargs)
     except Exception as e:
         logger.exception(
@@ -192,6 +195,7 @@ class VerifyConnectionRequest(BaseModel):
     agent_url: Optional[str] = None
     agent_headers: Optional[Dict[str, str]] = None
     model: Optional[str] = None
+    sample_input: Optional[List[Dict[str, str]]] = None
 
 
 class VerifyConnectionResponse(BaseModel):
@@ -216,6 +220,7 @@ async def verify_agent_connection_presave(
         agent_url=request.agent_url,
         agent_headers=request.agent_headers,
         model=request.model,
+        messages=request.sample_input,
     )
     return VerifyConnectionResponse(**result)
 
@@ -261,6 +266,7 @@ async def verify_agent_connection(
         agent_url=agent_url,
         agent_headers=agent_headers,
         model=verify_model,
+        messages=request.sample_input,
     )
 
     # Persist verification result into agent config.
