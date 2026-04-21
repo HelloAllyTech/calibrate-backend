@@ -633,21 +633,22 @@ def _find_all_results_in_output(output_dir: Path) -> Dict[str, tuple]:
 
 
 def _match_model_to_folder(model: str, folder_names: List[str]) -> Optional[str]:
-    """Find folder name that matches the model."""
-    # Normalize model name for matching
-    model_normalized = model.replace("/", "_").replace(":", "_").lower()
-    model_alt = model.replace("/", "-").replace(":", "-").lower()
-    # Also try double underscore (some calibrate versions use this)
-    model_double = model.replace("/", "__").replace(":", "__").lower()
+    """Find folder name that matches the model.
+
+    Uses exact matching across known calibrate separator conventions (single
+    underscore, double underscore, dash) rather than substring matching.
+    Substring matching caused false matches when one model name was a prefix of
+    another (e.g. `gpt-5.4` matching the `gpt-5.4-mini` folder).
+    """
+    candidates = {
+        model.replace("/", "_").replace(":", "_").lower(),
+        model.replace("/", "-").replace(":", "-").lower(),
+        model.replace("/", "__").replace(":", "__").lower(),
+        model.lower(),
+    }
 
     for folder in folder_names:
-        folder_lower = folder.lower()
-        if (
-            model_normalized in folder_lower
-            or model_alt in folder_lower
-            or model_double in folder_lower
-            or model.lower() in folder_lower
-        ):
+        if folder.lower() in candidates:
             return folder
     return None
 
