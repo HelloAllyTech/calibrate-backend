@@ -631,10 +631,13 @@ Benchmark jobs (`llm-benchmark`) run a single `calibrate llm` command with all m
 - **Internal parallelization**: The calibrate CLI handles concurrent model execution internally
 - **Automatic leaderboard**: The CLI generates the leaderboard in `output/leaderboard/` as part of the same command
 - **Output discovery**: After command completes, uses `os.walk()` on the output directory to find all `results.json` and `metrics.json` files
-- **Model name matching**: `_match_model_to_folder()` handles various calibrate naming conventions:
+- **Model name matching**: `_match_model_to_folder()` maps CLI model names to the output folders calibrate creates. It uses **exact matching** (not substring matching) across known calibrate naming conventions:
   - `openai/gpt-4` → `openai_gpt-4` (single underscore)
   - `openai/gpt-4` → `openai__gpt-4` (double underscore)
   - `openai/gpt-4` → `openai-gpt-4` (dash)
+  - `openai/gpt-4` → `openai/gpt-4` (literal)
+
+  **Gotcha**: Exact matching is required because substring matching caused silent cross-model contamination when one model name was a prefix of another (e.g. benchmarking `gpt-5.4` alongside `gpt-5.4-mini`, or `openai/gpt-4.1` alongside `openai/gpt-4.1-mini`). With substring matching, iterating folders in filesystem order could match `gpt-5.4`'s name as a substring of the `gpt-5.4-mini` folder, causing the backend to store the wrong model's `results.json`/`metrics.json` under `gpt-5.4`. The leaderboard CSV path was not affected (it's read directly from `leaderboard/llm_leaderboard.csv`). If the calibrate CLI ever introduces a new folder-name convention, it must be added to the candidate set in `_match_model_to_folder` explicitly.
 - **Polling interval**: Every 2 seconds while the subprocess is running
 - **During execution**: The backend scans output directory for per-model results and updates incrementally
 - **Job completion**: Final results and `leaderboard_summary` populated after command completes
