@@ -769,6 +769,8 @@ Required environment variables:
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (optional, falls back to IAM role)
 - `AWS_REGION` - Default: `ap-south-1`
 
+**Uploading files to S3**: All routers use the `upload_file_to_s3()` helper in `utils.py` (never call `s3.upload_file(...)` directly). The helper wraps `boto3`'s `upload_file` and guesses the object's `Content-Type` from the file extension via `mimetypes.guess_type` (e.g. `.json` → `application/json`, `.wav` → `audio/wav`, `.mp3` → `audio/mpeg`). Without this, boto3 defaults to `binary/octet-stream` and browsers force-download the object instead of rendering JSON/audio inline. If the extension is unknown, no `ContentType` is set (S3 falls back to its default). Existing objects uploaded before this helper was introduced still have `binary/octet-stream` and must be fixed via `aws s3 cp ... --metadata-directive REPLACE --content-type ...` if inline rendering is needed.
+
 ### Supported Providers
 
 **STT Providers**: deepgram, openai, sarvam, google, etc.
@@ -1159,12 +1161,13 @@ The `bulk_remove_tests_from_agent()` function in `db.py` performs a single SQL `
 
 **Helper Functions** (in `utils.py`):
 
-| Function                            | Purpose                                             |
-| ----------------------------------- | --------------------------------------------------- |
-| `generate_presigned_download_url()` | Generate presigned URL for `get_object` (downloads) |
-| `generate_presigned_upload_url()`   | Generate presigned URL for `put_object` (uploads)   |
+| Function                            | Purpose                                                                           |
+| ----------------------------------- | --------------------------------------------------------------------------------- |
+| `generate_presigned_download_url()` | Generate presigned URL for `get_object` (downloads)                               |
+| `generate_presigned_upload_url()`   | Generate presigned URL for `put_object` (uploads)                                 |
+| `upload_file_to_s3()`               | Upload a local file to S3 with `Content-Type` auto-detected from file extension  |
 
-Both functions return `None` on failure, allowing callers to handle errors (skip, fallback to S3 path, raise error).
+Presigned URL helpers return `None` on failure, allowing callers to handle errors (skip, fallback to S3 path, raise error).
 
 **Example Pattern (TTS/STT evaluation results):**
 

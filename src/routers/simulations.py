@@ -54,6 +54,7 @@ from utils import (
     build_tool_configs,
     PRESIGNED_URL_EXPIRY_SECONDS,
     PRESIGNED_URL_REFRESH_BUFFER_SECONDS,
+    upload_file_to_s3,
 )
 from auth_utils import get_current_user_id
 from datetime import datetime
@@ -1374,12 +1375,12 @@ def _run_calibrate_text_simulation(
             local_file_path = Path(root) / file
             relative_path = local_file_path.relative_to(output_dir)
             s3_key = f"{s3_prefix}/{relative_path}"
-            s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+            upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
 
     # Upload the config file to S3
     if config_file.exists():
         config_s3_key = f"{s3_prefix}/simulation_config.json"
-        s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+        upload_file_to_s3(s3, config_file, s3_bucket, config_s3_key)
         logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
     error = None
@@ -1565,7 +1566,7 @@ def _upload_audio_and_generate_urls(
             if str(audio_file) not in uploaded_audio_files:
                 relative_audio_path = audio_file.relative_to(output_dir)
                 audio_s3_key = f"{s3_prefix}/{relative_audio_path}"
-                s3.upload_file(str(audio_file), s3_bucket, audio_s3_key)
+                upload_file_to_s3(s3, audio_file, s3_bucket, audio_s3_key)
                 uploaded_audio_files.add(str(audio_file))
                 logger.info(
                     f"Uploaded audio file {audio_file.name} to S3: {audio_s3_key}"
@@ -1588,8 +1589,8 @@ def _upload_audio_and_generate_urls(
     if conversation_wav_file.exists() and conversation_wav_file.is_file():
         conversation_wav_s3_key = f"{s3_prefix}/{sim_name}/conversation.wav"
         if str(conversation_wav_file) not in uploaded_audio_files:
-            s3.upload_file(
-                str(conversation_wav_file), s3_bucket, conversation_wav_s3_key
+            upload_file_to_s3(
+                s3, conversation_wav_file, s3_bucket, conversation_wav_s3_key
             )
             uploaded_audio_files.add(str(conversation_wav_file))
             logger.info(
@@ -1959,12 +1960,12 @@ def _run_calibrate_voice_simulation(
                 continue
             relative_path = local_file_path.relative_to(output_dir)
             s3_key = f"{s3_prefix}/{relative_path}"
-            s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+            upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
 
     # Upload the config file to S3
     if config_file.exists():
         config_s3_key = f"{s3_prefix}/simulation_config.json"
-        s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+        upload_file_to_s3(s3, config_file, s3_bucket, config_s3_key)
         logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
     error = None

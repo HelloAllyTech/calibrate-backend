@@ -32,6 +32,7 @@ from utils import (
     normalize_metrics,
     read_leaderboard_xlsx,
     presign_audio_path,
+    upload_file_to_s3,
 )
 
 # Job types that share the same queue
@@ -320,7 +321,7 @@ def run_evaluation_task(
                                     provider_output_dir
                                 )
                                 s3_key = f"{results_prefix}/{relative_path}"
-                                s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                                upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
 
                         provider_results.append(
                             ProviderResult(
@@ -358,7 +359,7 @@ def run_evaluation_task(
                             local_file_path = Path(root) / file
                             relative_path = local_file_path.relative_to(leaderboard_dir)
                             s3_key = f"{leaderboard_prefix}/{relative_path}"
-                            s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                            upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
                 else:
                     logger.warning(
                         f"Leaderboard directory does not exist: {leaderboard_dir}"
@@ -374,7 +375,7 @@ def run_evaluation_task(
                 with open(config_file, "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=2)
                 config_s3_key = f"stt/evals/{task_id}/config.json"
-                s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+                upload_file_to_s3(s3, config_file, s3_bucket, config_s3_key)
                 logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
                 # Check if all providers succeeded

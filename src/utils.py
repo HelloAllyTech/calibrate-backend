@@ -1,3 +1,4 @@
+import mimetypes
 import os
 import signal
 import logging
@@ -246,6 +247,25 @@ def get_s3_output_config():
         raise ValueError("S3_OUTPUT_BUCKET environment variable is required")
 
     return bucket
+
+
+def upload_file_to_s3(
+    s3_client,
+    local_path: Union[str, Path],
+    bucket: str,
+    s3_key: str,
+) -> None:
+    """Upload a local file to S3 with a guessed Content-Type.
+
+    Setting Content-Type ensures browsers render supported files (JSON, audio,
+    text) inline instead of forcing a download (which happens when S3 defaults
+    to binary/octet-stream).
+    """
+    content_type, _ = mimetypes.guess_type(str(local_path))
+    extra_args = {"ContentType": content_type} if content_type else None
+    s3_client.upload_file(
+        str(local_path), bucket, s3_key, ExtraArgs=extra_args
+    )
 
 
 def generate_presigned_download_url(

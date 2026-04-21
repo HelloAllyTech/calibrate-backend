@@ -45,6 +45,7 @@ from utils import (
     is_job_timed_out,
     capture_exception_to_sentry,
     build_tool_configs,
+    upload_file_to_s3,
 )
 
 # Job types that share the same queue
@@ -929,11 +930,11 @@ def run_llm_test_task(
                         local_file_path = Path(root) / file
                         relative_path = local_file_path.relative_to(output_dir)
                         s3_key = f"{results_prefix}/{relative_path}"
-                        s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                        upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
 
                 # Upload the config file to S3
                 config_s3_key = f"{results_prefix}/test_config.json"
-                s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+                upload_file_to_s3(s3, config_file, s3_bucket, config_s3_key)
                 logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
                 # Update job with results
@@ -1537,7 +1538,7 @@ def run_benchmark_task(
                             local_file_path = Path(root) / file
                             relative_path = local_file_path.relative_to(leaderboard_dir)
                             s3_key = f"{results_prefix}/leaderboard/{relative_path}"
-                            s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                            upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
                 else:
                     logger.warning(
                         f"Leaderboard directory does not exist: {leaderboard_dir}"
@@ -1551,7 +1552,7 @@ def run_benchmark_task(
                         local_file_path = Path(root) / file
                         relative_path = local_file_path.relative_to(output_dir)
                         s3_key = f"{results_prefix}/outputs/{relative_path}"
-                        s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                        upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
 
                 logger.info(
                     f"Uploaded benchmark outputs to s3://{s3_bucket}/{results_prefix}/outputs/"
@@ -1565,7 +1566,7 @@ def run_benchmark_task(
                 config_s3_key = f"{results_prefix}/benchmark_config.json"
                 with open(config_file, "w", encoding="utf-8") as f:
                     json.dump(benchmark_config, f, indent=2)
-                s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+                upload_file_to_s3(s3, config_file, s3_bucket, config_s3_key)
                 logger.info(f"Uploaded benchmark config file to S3: {config_s3_key}")
 
                 # Check if all models succeeded

@@ -32,6 +32,7 @@ from utils import (
     capture_exception_to_sentry,
     normalize_metrics,
     read_leaderboard_xlsx,
+    upload_file_to_s3,
 )
 
 # Job types that share the same queue
@@ -98,7 +99,7 @@ def _collect_tts_intermediate_results(
                     relative_path = local_file_path.relative_to(provider_output_dir)
                     s3_key = f"{results_prefix}/{relative_path}"
                     try:
-                        s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                        upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
                         if file.endswith((".wav", ".mp3", ".ogg")):
                             audio_path_to_s3_key[str(local_file_path)] = s3_key
                     except Exception:
@@ -313,7 +314,7 @@ def run_tts_evaluation_task(
                                     provider_output_dir
                                 )
                                 s3_key = f"{results_prefix}/{relative_path}"
-                                s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                                upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
 
                                 # Track audio files for path mapping
                                 if file.endswith((".wav", ".mp3", ".ogg")):
@@ -384,7 +385,7 @@ def run_tts_evaluation_task(
                             local_file_path = Path(root) / file
                             relative_path = local_file_path.relative_to(leaderboard_dir)
                             s3_key = f"{leaderboard_prefix}/{relative_path}"
-                            s3.upload_file(str(local_file_path), s3_bucket, s3_key)
+                            upload_file_to_s3(s3, local_file_path, s3_bucket, s3_key)
                 else:
                     logger.warning(
                         f"Leaderboard directory does not exist: {leaderboard_dir}"
@@ -400,7 +401,7 @@ def run_tts_evaluation_task(
                 with open(config_file, "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=2)
                 config_s3_key = f"tts/evals/{task_id}/config.json"
-                s3.upload_file(str(config_file), s3_bucket, config_s3_key)
+                upload_file_to_s3(s3, config_file, s3_bucket, config_s3_key)
                 logger.info(f"Uploaded config file to S3: {config_s3_key}")
 
                 # Check if all providers succeeded
@@ -717,7 +718,7 @@ async def get_tts_evaluation_status(
                                         provider_output_dir
                                     )
                                     s3_key = f"{results_prefix}/{relative_path}"
-                                    s3.upload_file(str(local_path), s3_bucket, s3_key)
+                                    upload_file_to_s3(s3, local_path, s3_bucket, s3_key)
                                     presigned_url = generate_presigned_download_url(
                                         s3_key
                                     )
