@@ -227,6 +227,7 @@ def get_s3_client():
     aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
     aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
     aws_region = os.getenv("AWS_REGION", "ap-south-1")
+    endpoint_url = os.getenv("AWS_ENDPOINT_URL")  # None = AWS S3, set = MinIO
 
     if aws_access_key_id and aws_secret_access_key:
         return boto3.client(
@@ -234,9 +235,10 @@ def get_s3_client():
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             region_name=aws_region,
+            endpoint_url=endpoint_url,
         )
 
-    return boto3.client("s3", region_name=aws_region)
+    return boto3.client("s3", region_name=aws_region, endpoint_url=endpoint_url)
 
 
 def get_s3_output_config():

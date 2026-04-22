@@ -17,3 +17,6 @@ dependencies = [
     "calibrate-agent",
     "bcrypt>=4.0.0",
 ]
+
+[tool.uv.sources]
+calibrate-agent = { path = "../calibrate", editable = true }
