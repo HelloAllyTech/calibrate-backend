@@ -20,3 +20,8 @@ dependencies = [
 
 [tool.uv.sources]
 calibrate-agent = { path = "../calibrate", editable = true }
+
+[tool.uv]
+override-dependencies = [
+    "pyarrow<16.0.0",
+]
