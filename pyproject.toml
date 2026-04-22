@@ -23,5 +23,5 @@ calibrate-agent = { path = "../calibrate", editable = true }
 
 [tool.uv]
 override-dependencies = [
-    "pyarrow<16.0.0",
+    "datasets>=2.17.0,<3.0.0",
 ]
