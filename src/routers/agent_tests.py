@@ -793,21 +793,22 @@ def run_llm_test_task(
                     # Calibrate agent mode: use model + provider from agent config
                     model = calibrate_config["params"]["model"]
                     llm_config = agent_config.get("llm", {})
-                    # Derive provider from model ID prefix (e.g. "openai/gpt-4" → "openai")
-                    # Frontend stores models in OpenRouter format (provider/model).
-                    # Prefer the explicit provider from config; otherwise derive from model prefix.
+                    # Derive provider from model ID prefix.
+                    # Frontend stores models in OpenRouter format (e.g. "openai/gpt-4",
+                    # "google/gemini-pro"). The calibrate CLI only supports two providers:
+                    # "openai" and "openrouter". Use openai directly only when the model
+                    # prefix is "openai" (avoids needing OpenRouter credits for GPT models).
+                    # All other providers (google, anthropic, meta-llama, etc.) must go
+                    # through openrouter since the CLI has no native support for them.
                     if "provider" in llm_config:
                         provider = llm_config["provider"]
-                    elif "/" in model:
-                        provider = model.split("/", 1)[0]
-                        # Only use derived provider if it's a supported calibrate provider
-                        if provider not in ("openai", "openrouter"):
-                            provider = "openai"
-                    else:
+                    elif model.startswith("openai/"):
                         provider = "openai"
-                    # Strip provider prefix from model when not using openrouter
-                    if provider != "openrouter" and "/" in model:
-                        model = model.split("/", 1)[1]
+                    else:
+                        provider = "openrouter"
+                    # Strip "openai/" prefix when calling OpenAI directly
+                    if provider == "openai" and model.startswith("openai/"):
+                        model = model[len("openai/"):]
                     run_cmd = [
                         "calibrate",
                         "llm",
@@ -1406,17 +1407,17 @@ def run_benchmark_task(
                 else:
                     # Calibrate agent mode: -m {models} -p {provider}
                     llm_config = agent_config.get("llm", {})
-                    # Derive provider from first model's prefix if not explicitly set
+                    # Derive provider from model prefix. Use openai directly only for
+                    # "openai/*" models; everything else goes through openrouter.
                     if "provider" in llm_config:
                         provider = llm_config["provider"]
-                    elif models and "/" in models[0]:
-                        derived = models[0].split("/", 1)[0]
-                        provider = derived if derived in ("openai", "openrouter") else "openai"
-                    else:
+                    elif models and all(m.startswith("openai/") for m in models):
                         provider = "openai"
-                    # Strip provider prefix when not using openrouter
-                    if provider != "openrouter":
-                        cli_models = [m.split("/", 1)[1] if "/" in m else m for m in models]
+                    else:
+                        provider = "openrouter"
+                    # Strip "openai/" prefix when calling OpenAI directly
+                    if provider == "openai":
+                        cli_models = [m[len("openai/"):] if m.startswith("openai/") else m for m in models]
                     else:
                         cli_models = models
                     run_cmd = (
