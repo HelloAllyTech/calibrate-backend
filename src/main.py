@@ -27,6 +27,7 @@ if sentry_dsn:
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
@@ -52,6 +53,7 @@ from routers.user_limits import router as user_limits_router
 from routers.public import router as public_router
 from utils import (
     generate_presigned_upload_url,
+    get_s3_client,
     get_s3_output_config,
     PRESIGNED_URL_EXPIRY_SECONDS,
 )
@@ -296,6 +298,29 @@ async def get_provider_status():
         )
 
     return {"success": True}
+
+
+@app.get("/proxy/{s3_key:path}")
+async def proxy_s3_file(s3_key: str):
+    """Stream a file from MinIO/S3 to the browser.
+
+    Used when AWS_ENDPOINT_URL is set (MinIO mode) so the browser can fetch
+    audio/files that live on an internal MinIO instance not reachable from
+    the public internet.
+    """
+    try:
+        s3 = get_s3_client()
+        bucket = get_s3_output_config()
+        obj = s3.get_object(Bucket=bucket, Key=s3_key)
+        content_type = obj.get("ContentType", "application/octet-stream")
+
+        def iter_content():
+            for chunk in obj["Body"].iter_chunks(chunk_size=65536):
+                yield chunk
+
+        return StreamingResponse(iter_content(), media_type=content_type)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"File not found: {e}")
 
 
 @app.get("/sentry-debug")

@@ -277,6 +277,10 @@ def generate_presigned_download_url(
 ) -> Optional[str]:
     """Generate a presigned URL for downloading (get_object) from S3.
 
+    When running with MinIO (AWS_ENDPOINT_URL is set), returns a backend proxy
+    URL instead of a MinIO presigned URL, because MinIO's internal hostname
+    (e.g. http://minio:9000) is not reachable from the browser.
+
     Args:
         s3_key: The S3 object key
         bucket: S3 bucket name (defaults to S3_OUTPUT_BUCKET env var)
@@ -285,6 +289,12 @@ def generate_presigned_download_url(
     Returns:
         Presigned URL string, or None if generation fails
     """
+    # When using MinIO, return a backend proxy URL that the browser can reach
+    if os.getenv("AWS_ENDPOINT_URL"):
+        public_api_url = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
+        if public_api_url:
+            return f"{public_api_url}/proxy/{s3_key}"
+
     try:
         s3 = get_s3_client()
         s3_bucket = bucket or get_s3_output_config()
