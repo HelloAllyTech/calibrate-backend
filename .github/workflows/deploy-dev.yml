@@ -1,0 +1,30 @@
+name: Deploy Backend to Dev
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: Dev
+
+    steps:
+      - name: Deploy to calibrate-dev
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.CALIBRATE_DEV_HOST }}
+          username: ally
+          key: ${{ secrets.CALIBRATE_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ secrets.METAL05_HOST }}
+          proxy_username: ally
+          proxy_key: ${{ secrets.CALIBRATE_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/calibrate
+            git -C calibrate pull origin main
+            git -C calibrate-backend pull origin main
+            docker compose -f calibrate-backend/docker-compose.yml up -d --build app
+            docker image prune -f
+            echo "✅ Backend deployed to dev successfully"

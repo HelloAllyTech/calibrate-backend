@@ -1,0 +1,28 @@
+name: Deploy Backend to Prod
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: Prod
+
+    steps:
+      - name: Deploy to calibrate-prod
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.CALIBRATE_PROD_HOST }}
+          username: ally
+          key: ${{ secrets.CALIBRATE_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ secrets.METAL05_HOST }}
+          proxy_username: ally
+          proxy_key: ${{ secrets.CALIBRATE_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/calibrate
+            git -C calibrate pull origin main
+            git -C calibrate-backend pull origin main
+            docker compose -f calibrate-backend/docker-compose.yml up -d --build app
+            docker image prune -f
+            echo "✅ Backend deployed to prod successfully"
