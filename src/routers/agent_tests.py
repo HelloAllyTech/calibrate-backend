@@ -809,6 +809,17 @@ def run_llm_test_task(
 
                 logger.info(f"Running LLM test command: {' '.join(run_cmd)}")
 
+                # Build subprocess environment with API keys explicitly set
+                # (ensures keys are available even if env inheritance has edge cases)
+                subprocess_env = os.environ.copy()
+                for key in ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"]:
+                    val = os.getenv(key)
+                    if val:
+                        subprocess_env[key] = val
+                        logger.info(f"Subprocess env: {key} is set (len={len(val)})")
+                    else:
+                        logger.warning(f"Subprocess env: {key} is NOT set")
+
                 # Create temp files for stdout/stderr
                 stdout_path = output_dir / "stdout.log"
                 stderr_path = output_dir / "stderr.log"
@@ -824,6 +835,7 @@ def run_llm_test_task(
                         text=True,
                         start_new_session=True,
                         cwd=str(temp_path),
+                        env=subprocess_env,
                     )
 
                     # Poll for process completion while updating intermediate results
@@ -1390,6 +1402,16 @@ def run_benchmark_task(
 
                 logger.info(f"Running benchmark command: {' '.join(run_cmd)}")
 
+                # Build subprocess environment with API keys explicitly set
+                subprocess_env = os.environ.copy()
+                for key in ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"]:
+                    val = os.getenv(key)
+                    if val:
+                        subprocess_env[key] = val
+                        logger.info(f"Subprocess env: {key} is set (len={len(val)})")
+                    else:
+                        logger.warning(f"Subprocess env: {key} is NOT set")
+
                 # Create temp files for stdout/stderr
                 stdout_path = output_dir / "stdout.log"
                 stderr_path = output_dir / "stderr.log"
@@ -1405,6 +1427,7 @@ def run_benchmark_task(
                         text=True,
                         start_new_session=True,
                         cwd=str(temp_path),
+                        env=subprocess_env,
                     )
 
                     # Poll for process completion while updating intermediate results
