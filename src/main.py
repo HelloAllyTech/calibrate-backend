@@ -26,8 +26,8 @@ if sentry_dsn:
 
 import secrets
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
@@ -321,6 +321,24 @@ async def proxy_s3_file(s3_key: str):
         return StreamingResponse(iter_content(), media_type=content_type)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"File not found: {e}")
+
+
+@app.put("/proxy-upload/{s3_key:path}")
+async def proxy_upload_to_s3(s3_key: str, request: Request):
+    """Accept a raw file PUT from the browser and store it in MinIO/S3.
+
+    Used when AWS_ENDPOINT_URL is set (MinIO mode) so the browser can upload
+    files without needing direct access to the internal MinIO instance.
+    """
+    try:
+        content_type = request.headers.get("content-type", "application/octet-stream")
+        body = await request.body()
+        s3 = get_s3_client()
+        bucket = get_s3_output_config()
+        s3.put_object(Bucket=bucket, Key=s3_key, Body=body, ContentType=content_type)
+        return Response(status_code=200)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
 
 
 @app.get("/sentry-debug")
