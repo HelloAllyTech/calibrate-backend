@@ -793,7 +793,21 @@ def run_llm_test_task(
                     # Calibrate agent mode: use model + provider from agent config
                     model = calibrate_config["params"]["model"]
                     llm_config = agent_config.get("llm", {})
-                    provider = llm_config.get("provider", "openrouter")
+                    # Derive provider from model ID prefix (e.g. "openai/gpt-4" → "openai")
+                    # Frontend stores models in OpenRouter format (provider/model).
+                    # Prefer the explicit provider from config; otherwise derive from model prefix.
+                    if "provider" in llm_config:
+                        provider = llm_config["provider"]
+                    elif "/" in model:
+                        provider = model.split("/", 1)[0]
+                        # Only use derived provider if it's a supported calibrate provider
+                        if provider not in ("openai", "openrouter"):
+                            provider = "openai"
+                    else:
+                        provider = "openai"
+                    # Strip provider prefix from model when not using openrouter
+                    if provider != "openrouter" and "/" in model:
+                        model = model.split("/", 1)[1]
                     run_cmd = [
                         "calibrate",
                         "llm",
@@ -1392,8 +1406,19 @@ def run_benchmark_task(
                 else:
                     # Calibrate agent mode: -m {models} -p {provider}
                     llm_config = agent_config.get("llm", {})
-                    provider = llm_config.get("provider", "openrouter")
-                    cli_models = models
+                    # Derive provider from first model's prefix if not explicitly set
+                    if "provider" in llm_config:
+                        provider = llm_config["provider"]
+                    elif models and "/" in models[0]:
+                        derived = models[0].split("/", 1)[0]
+                        provider = derived if derived in ("openai", "openrouter") else "openai"
+                    else:
+                        provider = "openai"
+                    # Strip provider prefix when not using openrouter
+                    if provider != "openrouter":
+                        cli_models = [m.split("/", 1)[1] if "/" in m else m for m in models]
+                    else:
+                        cli_models = models
                     run_cmd = (
                         ["calibrate", "llm", "-c", str(config_file), "-m"]
                         + cli_models
