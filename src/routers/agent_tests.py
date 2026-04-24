@@ -793,7 +793,7 @@ def run_llm_test_task(
                     # Calibrate agent mode: use model + provider from agent config
                     model = calibrate_config["params"]["model"]
                     llm_config = agent_config.get("llm", {})
-                    provider = llm_config.get("provider", os.getenv("DEFAULT_LLM_PROVIDER", "openrouter"))
+                    provider = llm_config.get("provider", "openrouter")
                     run_cmd = [
                         "calibrate",
                         "llm",
@@ -1380,7 +1380,7 @@ def run_benchmark_task(
                 else:
                     # Calibrate agent mode: -m {models} -p {provider}
                     llm_config = agent_config.get("llm", {})
-                    provider = llm_config.get("provider", os.getenv("DEFAULT_LLM_PROVIDER", "openrouter"))
+                    provider = llm_config.get("provider", "openrouter")
                     cli_models = models
                     run_cmd = (
                         ["calibrate", "llm", "-c", str(config_file), "-m"]
